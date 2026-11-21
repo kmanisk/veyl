@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod file_access;
+mod http;
 mod protocol;
 mod transport;
 
@@ -18,7 +19,11 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let mut args = std::env::args_os().skip(1);
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "http") {
+        return http::run(args.into_iter().skip(1).collect());
+    }
+    let mut args = args.into_iter();
     let root = match (args.next(), args.next(), args.next()) {
         (Some(option), Some(root), None) if option == "--root" => PathBuf::from(root),
         _ => return Err("usage: mcp-gateway --root <existing-directory>".to_string()),

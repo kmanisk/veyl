@@ -46,3 +46,22 @@ inspect existing jobs, Git status, and resource pressure before major work.
 - Keep file resolution code separate from protocol dispatch; do not assume a
   symlink-safe canonicalization check defeats concurrent symlink swap attacks.
   Race-free OS-level containment is a later security milestone.
+
+## Pass 1 addendum (supersedes Milestone 1-only restrictions above)
+
+The `milestone2/service-contract` branch now includes an **uncommitted**, tested
+foreground Rust HTTP implementation. Preserve the already accepted stdio
+behavior and independent black-box tests. Pass 1 explicitly permits the pinned
+minimal Hyper/Tokio transport and cryptography dependencies in `Cargo.toml` and
+`Cargo.lock` along with `src/http/**` and `src/security/**`; the earlier
+`serde_json`-only rule applies only to the M1 historical baseline.
+
+Both M1 suites, the M2 STANDARD-policy suite, and the two separate M2 HTTP
+suites are mandatory before further code is accepted. They are owned by the
+trusted external harness at `~/Projects/rust-mcp-gateway-lab/acceptance_*/`
+and must never be modified by the coding agent. Inspect the pinned SHA-256
+values in `harness/acceptance.py` and run the trusted network-disabled verifier.
+
+Do not silently claim support for MCP 2026-07-28, OAuth, public ingress, root
+execution, durable audit, permanent YOLO, Windows, managed services or
+race-free filesystem access. These still require separate acceptance gates.
