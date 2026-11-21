@@ -1,9 +1,47 @@
 # Pass 2 — Scoped Tools and Durable Jobs (Proposed Test Contract)
 
-**Status:** specification and external red tests only. No new write tool,
-process-execution capability, privileged service, YOLO or production change
-is authorized until the separately reviewed Pass 1 HTTP implementation is
-accepted.
+**Status:** independently accepted Pass 1 baseline `b04989af04ce3b162edb386ea67cff7978b52605`;
+Pass 2 specification and externally locked red tests only. No write tool,
+process-execution capability, privileged service or YOLO is enabled yet.
+
+## Gate 2A: audit sink first (the only current implementation target)
+
+Implement a standalone safe Rust module, exported at
+`mcp_gateway::security::audit`, without integrating it into live tools yet.
+
+Required public API for the independent Rust test:
+
+- `AuditSink::open(path: &Path) -> Result<AuditSink, ...>`: accept a private
+  absolute path in an existing `0700` directory. Create a private `0600`
+  log if missing; reopen an existing private regular file for append. Reject
+  symlinks and files accessible to group/others, broad parent directories,
+  missing parents and malformed paths. The opening implementation must be
+  validated for symlink races before use by any host mutation tool.
+- Public enums `AuditAction::{WriteFile, ApplyPatch, JobStart, JobCancel}` and
+  `AuditPhase::{Intent, Success, Failure}`.
+- `AuditSink::record(&mut self, principal: &str, action: AuditAction,
+  phase: AuditPhase, at_unix_seconds: u64) -> Result<(), ...>`: validate a
+  short, nonempty, control-free principal, then append exactly one bounded
+  JSON line with `principal`, `tool`, `phase`, `unix_seconds`. Return success
+  only after flushing and syncing the entry to disk. Never log tokens,
+  secrets, commands, paths or file contents. Never truncate an existing log.
+
+No MCP client-facing capabilities may be enabled by Gate 2A. A standalone
+audit component is *necessary but not sufficient* for safely enabling writes
+or jobs; subsequent gates must verify fail-closed integration atomically.
+
+Independent oracle:
+`~/Projects/rust-mcp-gateway-lab/acceptance_pass2_audit/locked_audit_contract.rs`,
+SHA-256 `88f268f3cb60c684c037381a4a729a5b995944db15bf252a43b81fe90f8801c2`,
+**6** cases. The baseline fails due to an unresolved Rust audit module.
+
+The later, separately locked end-to-end suites are:
+`acceptance_pass2_files/locked_file_mutation.py`, SHA-256
+`8b26c330e203b5417357dd72ee90badfb8dceb4c13c90ef70c24550a9ce6ca2e`
+(9 cases), and `acceptance_pass2_jobs/locked_durable_jobs.py`, SHA-256
+`6f9cd819a1fc6d8f7907beea51fa27cb80a16658a8db20195909d2981e7da338`
+(9 cases). Both establish red baselines because the gateway does not yet
+support write/job grants. Do **not** claim these suites are green after 2A.
 
 ## Core requirements
 
@@ -14,6 +52,22 @@ the single Rust binary modular: `tools/registry`, `tools/filesystem`,
 43 existing independent locked cases and pin each new suite before coding.
 
 ### File tools
+
+**Audit-first invariant:** Before activating any mutating tool or job, require
+an operator-configured, private append-only local JSONL audit sink and write
+an intent record *durably before* execution, plus a bounded outcome record
+afterward. If the intent cannot be recorded, deny execution **without making
+changes**. Keep token/verifier, file contents, argv secrets and environment
+values out of the log. An unavailable sink must fail closed for all mutating
+operations. This is a minimal local write-ahead audit gate; the tamper-evident
+chain, retention and operator modes remain Pass 3 work.
+
+For independent fixtures, extend the existing protected `clients.json` with
+`"audit_log": "/absolute/path/to/audit/events.jsonl"`. Audit directory
+mode `0700`, file mode `0600`; no auto-creation outside the explicitly
+configured owned directory. Without this sink, `write_file`, `apply_patch`,
+`job_start` and `job_cancel` **cannot execute**, even when a client is granted
+the tool name. Only local trusted configuration can enable a capability.
 
 - `read_file`: retain exactly the M1 behavior and the 65,536-byte limit.
 - `write_file` schema: `{path: string, content: string, overwrite?: boolean}`.
@@ -55,6 +109,16 @@ the single Rust binary modular: `tools/registry`, `tools/filesystem`,
   replay of non-idempotent jobs, no deletion of unrelated processes.
 - Provide strict global/per-client concurrent job ceilings, timeouts,
   output caps and clean detached foreground-worker semantics.
+
+The independent fixture config adds `"job_state_dir": "/absolute/private/jobs"`
+and `"job_profiles": {"noop": {"executable": "/usr/bin/true", "args": [],
+"timeout_seconds": 2}, "short_sleep": {"executable": "/usr/bin/sleep",
+"args": ["5"], "timeout_seconds": 3}}`. Operator-defined profiles alone
+are executable; untrusted MCP arguments may name only an existing profile.
+Expose `job_start`, `job_status`, `job_cancel` via `tools/call`, taking exactly
+the `profile` or `job_id` parameter. Return a single text-content element
+containing a bounded JSON object with `job_id`, `state`, and when final,
+`exit_code`. Keep status/cancel private to the owning authenticated client.
 
 ## Acceptance gates
 
