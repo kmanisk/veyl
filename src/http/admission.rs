@@ -10,6 +10,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
+#[cfg(target_os = "linux")]
+use crate::tools::MutationRoot;
+use crate::tools::registry::Tool;
 use mcp_gateway::security::policy::Action;
 
 pub struct Client {
@@ -18,9 +21,16 @@ pub struct Client {
     pub expires_at: u64,
     pub root: PathBuf,
     pub actions: Vec<Action>,
+    #[cfg(target_os = "linux")]
+    pub mutation_root: Option<MutationRoot>,
 }
 
-pub fn load_clients(path: &Path) -> Result<Vec<Client>, String> {
+pub struct Configuration {
+    pub clients: Vec<Client>,
+    pub audit_log: Option<PathBuf>,
+}
+
+pub fn load_clients(path: &Path) -> Result<Configuration, String> {
     if !path.is_absolute() {
         return Err("credential config requires an absolute path".into());
     }
@@ -45,6 +55,16 @@ pub fn load_clients(path: &Path) -> Result<Vec<Client>, String> {
     }
     let document: Value = serde_json::from_slice(&bytes)
         .map_err(|_| "invalid credential configuration".to_string())?;
+    let audit_log = document
+        .get("audit_log")
+        .map(|value| {
+            value
+                .as_str()
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .ok_or("audit_log must be an absolute path")
+        })
+        .transpose()?;
     let entries = document
         .get("clients")
         .and_then(Value::as_array)
@@ -74,7 +94,8 @@ pub fn load_clients(path: &Path) -> Result<Vec<Client>, String> {
         if !root.is_absolute() {
             return Err("client root must be absolute".into());
         }
-        let root = root
+        let configured_root = root;
+        let root = configured_root
             .canonicalize()
             .map_err(|_| "client root is unavailable".to_string())?;
         if !root.is_dir() {
@@ -84,26 +105,41 @@ pub fn load_clients(path: &Path) -> Result<Vec<Client>, String> {
             .get("tools")
             .and_then(Value::as_array)
             .ok_or("client tools must be an array")?;
-        if allowed.len() > 1 {
-            return Err("duplicate or unsupported tool grant".into());
-        }
         let mut actions = Vec::new();
         for tool in allowed {
-            if tool.as_str() != Some("read_file") {
-                return Err("unsupported tool grant".into());
+            let tool = tool
+                .as_str()
+                .and_then(Tool::parse)
+                .ok_or("unsupported tool grant")?;
+            if actions.contains(&tool.action()) {
+                return Err("duplicate or unsupported tool grant".into());
             }
-            actions.push(Action::ReadFile);
+            actions.push(tool.action());
+        }
+        if !actions.is_empty() {
             actions.push(Action::ListTools);
         }
+        #[cfg(target_os = "linux")]
+        let mutation_root =
+            if actions.contains(&Action::WriteFile) || actions.contains(&Action::ApplyPatch) {
+                Some(
+                    MutationRoot::open(&configured_root)
+                        .map_err(|_| "mutation root must be an existing symlink-free directory")?,
+                )
+            } else {
+                None
+            };
         clients.push(Client {
             id: id.to_string(),
             digest,
             expires_at,
             root,
             actions,
+            #[cfg(target_os = "linux")]
+            mutation_root,
         });
     }
-    Ok(clients)
+    Ok(Configuration { clients, audit_log })
 }
 
 fn decode_sha256(value: &str) -> Result<[u8; 32], String> {

@@ -6,6 +6,7 @@
 use serde_json::{Map, Value, json};
 
 use crate::file_access::FileAccess;
+use crate::tools::registry::{Tool, read_file};
 
 const MCP_VERSION: &str = "2025-11-25";
 
@@ -42,6 +43,19 @@ impl Protocol {
     }
 
     pub fn dispatch(&mut self, message: Value) -> Option<Value> {
+        self.dispatch_with_tools(
+            message,
+            || vec![Tool::ReadFile.schema()],
+            |files, name, args| (name == "read_file").then(|| read_file(files, args)),
+        )
+    }
+
+    pub fn dispatch_with_tools(
+        &mut self,
+        message: Value,
+        list: impl FnOnce() -> Vec<Value>,
+        call: impl FnOnce(&FileAccess, &str, Option<&Value>) -> Option<Value>,
+    ) -> Option<Value> {
         let Value::Object(mut message) = message else {
             return Some(error(Value::Null, -32600, "Invalid JSON-RPC request"));
         };
@@ -99,10 +113,10 @@ impl Protocol {
                 {
                     error(id, -32602, "tools/list cursor must be a string")
                 } else {
-                    result(id, json!({"tools": [read_file_tool()]}))
+                    result(id, json!({"tools": list()}))
                 }
             }
-            "tools/call" => self.call_tool(id, params),
+            "tools/call" => self.call_tool(id, params, call),
             _ => error(id, -32601, "Method not found"),
         })
     }
@@ -151,52 +165,24 @@ impl Protocol {
         )
     }
 
-    fn call_tool(&self, id: Value, params: Option<&Map<String, Value>>) -> Value {
+    fn call_tool(
+        &self,
+        id: Value,
+        params: Option<&Map<String, Value>>,
+        call: impl FnOnce(&FileAccess, &str, Option<&Value>) -> Option<Value>,
+    ) -> Value {
         let Some(params) = params else {
             return error(id, -32602, "Expected tools/call parameters");
         };
-        if params.get("name").and_then(Value::as_str) != Some("read_file") {
-            return error(id, -32602, "Unknown tool name");
-        }
-
-        let Some(args) = params.get("arguments").and_then(Value::as_object) else {
-            return result(id, tool_text(true, "Expected read_file arguments"));
-        };
-        let Some(path) = args.get("path").and_then(Value::as_str) else {
-            return result(id, tool_text(true, "Missing string argument: path"));
-        };
-        if args.len() != 1 {
-            return result(id, tool_text(true, "Unexpected read_file argument"));
-        }
-
-        match self.files.read_file(path) {
-            Ok(text) => result(id, tool_text(false, &text)),
-            Err(problem) => result(id, tool_text(true, problem)),
+        let reply = params
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(|name| call(&self.files, name, params.get("arguments")));
+        match reply {
+            Some(body) => result(id, body),
+            None => error(id, -32602, "Unknown tool name"),
         }
     }
-}
-
-fn read_file_tool() -> Value {
-    json!({
-        "name": "read_file",
-        "description": "Read a UTF-8 text file relative to the configured allowed root (max 65536 bytes)",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Relative file path inside the configured root"
-                }
-            },
-            "required": ["path"],
-            "additionalProperties": false
-        },
-        "annotations": { "readOnlyHint": true, "destructiveHint": false }
-    })
-}
-
-fn tool_text(is_error: bool, text: &str) -> Value {
-    json!({ "content": [{"type": "text", "text": text}], "isError": is_error })
 }
 
 fn result(id: Value, body: Value) -> Value {

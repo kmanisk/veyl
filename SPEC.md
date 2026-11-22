@@ -117,3 +117,30 @@ inspect the entire patch, and stop at `READY_FOR_USER_REVIEW` without merging.
 Deferred: durable authorization, sessions, write/patch tools, audit ledger,
 Windows adapters, Tailscale Funnel, HTTPS/HTTP transport, full modern MCP
 2026-07-28 support, race-free filesystem resolution, and dashboard/CLI polish.
+
+## Current Pass 2 authenticated HTTP extension (2026-11-22)
+
+The scope and exclusions above describe **Milestone 1 only**, not the current
+Linux HTTP implementation. The accepted Pass 1 HTTP baseline is `b04989a`.
+The Pass 2 review branch adds explicitly granted `write_file` and
+`apply_patch` tools for authenticated HTTP clients. Stdio retains its original
+`read_file` behavior.
+
+- `write_file`: `{path, content, overwrite?: boolean}`; maximum **65,536
+  UTF-8 encoded bytes**. Existing files require `overwrite: true`; new files
+  are created with mode `0600`.
+- `apply_patch`: `{path, expected_sha256, old, new}`; original SHA-256 must
+  match and `old` must occur **exactly once**, with the final size bounded.
+- Both require a per-client grant and a private, synced write-ahead audit
+  intent **before** file modification. The outcome is synced before success;
+  a failed post-mutation outcome is reported as uncertain, not successful.
+- Linux-only handle-relative `openat2` containment, private same-directory
+  staging, atomic rename and directory fsync; owner and ordinary mode bits
+  are preserved on normal replacement, and outside-root symlinks are rejected.
+- Unrelated hostile same-user writers, path moves, torn audit records and
+  power loss remain open risks; a crash before rename can leave a staging file.
+- No jobs, arbitrary command execution, YOLO, elevated OS access, remote
+  ingress, installed Linux service or Windows adapter are present.
+
+See `PASS2_TOOLS_JOBS_SPEC.md`, `PASS2_WRITE_PATCH_REVIEW.md` and `HANDOFF.md`
+for independent test gates, details and remaining limits.

@@ -20,7 +20,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Semaphore};
 
@@ -28,6 +28,8 @@ use mcp_gateway::security::policy::{self, Action, ExecutionMode, Grant, PolicyIn
 
 use crate::file_access::FileAccess;
 use crate::protocol::Protocol;
+use crate::tools::mutation::MutationAudit;
+use crate::tools::registry::{Tool, read_file, tool_text};
 
 use admission::{Client, authenticate, load_clients};
 
@@ -54,6 +56,7 @@ struct Failure {
 struct State {
     addr: SocketAddr,
     clients: Vec<Client>,
+    mutations: MutationAudit,
     sessions: Mutex<HashMap<String, Session>>,
     failures: Mutex<HashMap<IpAddr, Failure>>,
 }
@@ -81,7 +84,15 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         return Err("HTTP service may only listen on 127.0.0.1".into());
     }
     let path = PathBuf::from(config.ok_or("missing --config")?);
-    let clients = load_clients(&path)?;
+    let config = load_clients(&path)?;
+    let has_mutation_grants = config.clients.iter().any(|client| {
+        client.actions.contains(&Action::WriteFile) || client.actions.contains(&Action::ApplyPatch)
+    });
+    let audit_log = config.audit_log.as_deref().filter(|_| has_mutation_grants);
+    let mutations = MutationAudit::open(&path, audit_log);
+    if has_mutation_grants && !mutations.available() {
+        return Err("Mutation grants require a private, available audit log".into());
+    }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -96,7 +107,8 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             .map_err(|_| "cannot inspect bound listener")?;
         let state = Arc::new(State {
             addr: actual,
-            clients,
+            clients: config.clients,
+            mutations,
             sessions: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
         });
@@ -283,52 +295,73 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     }
     session.last_used = Instant::now();
 
-    let action = match method {
-        Some("tools/list") => Some(Action::ListTools),
-        Some("tools/call") => Some(Action::ReadFile),
-        _ => None,
-    };
-    let permitted = action.is_none_or(|action| {
-        let grant = Grant {
-            principal: &client.id,
-            root: &client.root,
-            actions: &client.actions,
-            expires_at_unix_seconds: client.expires_at,
-        };
-        policy::authorize(&PolicyInput {
-            principal: Some(&client.id),
-            action,
-            requested_root: &client.root,
-            grant: Some(&grant),
-            mode: ExecutionMode::Standard,
-            audit_available: audit("policy.checked"),
-            now_unix_seconds: now,
-        })
-        .is_ok()
-    });
-
-    // Let the protocol enforce lifecycle before filtering tools or results.
-    let response = if action == Some(Action::ReadFile) && !permitted {
-        Some(json!({
-            "jsonrpc":"2.0", "id":payload.get("id").cloned().unwrap_or(Value::Null),
-            "result":{"content":[{"type":"text","text":"Not authorized"}],"isError":true}
-        }))
-    } else {
-        session.protocol.dispatch(payload)
-    };
-    drop(sessions);
+    let response = session.protocol.dispatch_with_tools(
+        payload,
+        || {
+            let audited = audit("policy.checked");
+            if !authorized(client, Action::ListTools, audited, unix_seconds()) {
+                return Vec::new();
+            }
+            Tool::ALL
+                .into_iter()
+                .filter(|tool| {
+                    authorized(client, tool.action(), audited, unix_seconds())
+                        && (*tool == Tool::ReadFile || mutation_available(client, &state.mutations))
+                })
+                .map(Tool::schema)
+                .collect()
+        },
+        |files, name, args| {
+            let tool = Tool::parse(name)?;
+            let now = unix_seconds();
+            if !authorized(client, tool.action(), audit("policy.checked"), now) {
+                return Some(tool_text(true, "Not authorized"));
+            }
+            if tool == Tool::ReadFile {
+                return Some(read_file(files, args));
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(root) = client.mutation_root.as_ref() {
+                return Some(state.mutations.call(tool, args, root, &client.id, now));
+            }
+            Some(tool_text(true, "Mutation unavailable"))
+        },
+    );
 
     match response {
         None => simple(StatusCode::ACCEPTED, ""),
-        Some(mut response) => {
-            if action == Some(Action::ListTools)
-                && !permitted
-                && let Some(tools) = response.pointer_mut("/result/tools")
-            {
-                *tools = json!([]);
-            }
-            json_response(StatusCode::OK, response, None)
-        }
+        Some(response) => json_response(StatusCode::OK, response, None),
+    }
+}
+
+fn authorized(client: &Client, action: Action, audit_available: bool, now: u64) -> bool {
+    let grant = Grant {
+        principal: &client.id,
+        root: &client.root,
+        actions: &client.actions,
+        expires_at_unix_seconds: client.expires_at,
+    };
+    policy::authorize(&PolicyInput {
+        principal: Some(&client.id),
+        action,
+        requested_root: &client.root,
+        grant: Some(&grant),
+        mode: ExecutionMode::Standard,
+        audit_available,
+        now_unix_seconds: now,
+    })
+    .is_ok()
+}
+
+fn mutation_available(client: &Client, mutations: &MutationAudit) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        client.mutation_root.is_some() && mutations.available()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (client, mutations);
+        false
     }
 }
 

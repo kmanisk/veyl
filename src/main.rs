@@ -3,6 +3,7 @@
 mod file_access;
 mod http;
 mod protocol;
+mod tools;
 mod transport;
 
 use std::io;

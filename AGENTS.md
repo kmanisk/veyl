@@ -83,3 +83,21 @@ All 43 established gateway tests remain mandatory. Do not access or modify
 any independent acceptance suite. The file-write and durable-jobs suites
 are locked externally but currently **expected red**; they must not be
 silently marked passing or bypassed. Stop for manual review after audit passes.
+
+## Pass 2 write/patch acceptance (supersedes historical Gate 2A instructions)
+
+The audit-only Gate 2A instructions above describe an earlier state. The
+scoped Linux HTTP `write_file` and `apply_patch` increment now exists on
+`milestone2/tools-jobs`, under explicit per-client grants and fail-closed,
+durable intent/outcome auditing. Preserve the modular Rust implementation.
+
+The Pass 2 acceptance suite set comprises 43 previous MCP cases, 6 audit
+cases, 9 scoped write/patch cases, 8 fail-closed HTTP audit cases and 2
+parent-symlink containment cases (68 total). Exact SHA-256 hashes and paths
+are recorded in `PASS2_WRITE_PATCH_REVIEW.md` and the trusted harness.
+Locked oracles must never be edited, moved into agent-writable trees or
+weakened. New jobs work must first have independent locked red tests.
+
+No jobs, arbitrary execution, YOLO, privilege broker, Windows service,
+Tailscale Funnel, systemd service or public listener is authorized by Pass 2.
+Do not automatically merge, publish, deploy or modify unrelated host state.

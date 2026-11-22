@@ -13,6 +13,8 @@ use std::path::{Component, Path};
 pub enum Action {
     ListTools,
     ReadFile,
+    WriteFile,
+    ApplyPatch,
     RunCommand,
     PrivilegedCommand,
     ServiceControl,
@@ -59,8 +61,8 @@ pub struct PolicyInput<'a> {
     pub now_unix_seconds: u64,
 }
 
-/// Evaluates only grants for harmless read/list capabilities; dangerous
-/// capabilities are denied until genuine signed lease validation exists.
+/// Evaluates scoped grants for file tools. Mutations additionally require a
+/// durable audit intent and handle-relative filesystem checks at execution.
 /// No filesystem reads, syscalls or allocations are performed here.
 pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
     // All security-relevant actions must have a functioning audit boundary.
@@ -94,7 +96,7 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
     }
 
     match input.action {
-        Action::ReadFile | Action::ListTools => Ok(()),
+        Action::ReadFile | Action::ListTools | Action::WriteFile | Action::ApplyPatch => Ok(()),
         Action::RunCommand | Action::PrivilegedCommand | Action::ServiceControl => {
             // No trust decision can be upgraded merely because the caller
             // requested YOLO. A signed local operator lease is not yet wired.
