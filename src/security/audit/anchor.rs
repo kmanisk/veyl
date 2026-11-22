@@ -2,14 +2,13 @@
 
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::Path;
 
-use rustix::fd::AsFd;
-use rustix::fs::{self, AtFlags, Mode, OFlags, RenameFlags};
+use rustix::fs::{self, Mode, OFlags};
 use serde::{Deserialize, Serialize};
 
-use crate::security::linux_fs::{open_operator_dir, reopen_regular};
+use crate::security::linux_fs::{open_operator_dir, publish_new, reopen_regular};
 
 const MAX_ANCHOR_BYTES: u64 = 1024;
 
@@ -83,35 +82,6 @@ pub(super) fn random_hex() -> io::Result<String> {
         write!(hex, "{byte:02x}").map_err(io::Error::other)?;
     }
     Ok(hex)
-}
-
-pub(super) fn publish_new(parent: impl AsFd, name: &OsStr, bytes: &[u8]) -> io::Result<()> {
-    let temporary = format!(".mcp-anchor-{}", random_hex()?);
-    let private = Mode::RUSR | Mode::WUSR;
-    let mut file = File::from(fs::openat(
-        &parent,
-        temporary.as_str(),
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        private,
-    )?);
-    let result = (|| {
-        fs::fchmod(&file, private)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        fs::renameat_with(
-            &parent,
-            temporary.as_str(),
-            &parent,
-            name,
-            RenameFlags::NOREPLACE,
-        )?;
-        fs::fsync(&parent)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::unlinkat(&parent, temporary.as_str(), AtFlags::empty());
-    }
-    result
 }
 
 fn invalid() -> io::Error {

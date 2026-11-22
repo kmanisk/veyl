@@ -1,10 +1,12 @@
 //! Linux directory handles anchored with openat2.
 
-use std::io;
+use std::ffi::OsStr;
+use std::fs::File;
+use std::io::{self, Write};
 use std::path::{Component, Path};
 
 use rustix::fd::{AsFd, AsRawFd, OwnedFd};
-use rustix::fs::{self, FileType, Mode, OFlags, ResolveFlags};
+use rustix::fs::{self, AtFlags, FileType, Mode, OFlags, RenameFlags, ResolveFlags};
 use rustix::io::Errno;
 
 const DIRECTORY: OFlags = OFlags::RDONLY
@@ -110,4 +112,36 @@ pub fn reopen_regular(handle: impl AsFd, flags: OFlags) -> io::Result<OwnedFd> {
         ));
     }
     Ok(file)
+}
+
+/// Publish a private regular file durably without replacing an existing name.
+pub fn publish_new(parent: impl AsFd, name: &OsStr, bytes: &[u8]) -> io::Result<()> {
+    let mut nonce = [0; 16];
+    getrandom::fill(&mut nonce).map_err(|_| io::Error::other("secure randomness unavailable"))?;
+    let temporary = format!(".mcp-publish-{:032x}", u128::from_le_bytes(nonce));
+    let private = Mode::RUSR | Mode::WUSR;
+    let mut file = File::from(fs::openat(
+        &parent,
+        temporary.as_str(),
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        private,
+    )?);
+    let result = (|| {
+        fs::fchmod(&file, private)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::renameat_with(
+            &parent,
+            temporary.as_str(),
+            &parent,
+            name,
+            RenameFlags::NOREPLACE,
+        )?;
+        fs::fsync(&parent)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::unlinkat(&parent, temporary.as_str(), AtFlags::empty());
+    }
+    result
 }

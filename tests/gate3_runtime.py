@@ -10,6 +10,7 @@ import select
 import subprocess
 import sys
 import tempfile
+import time
 
 token = "a" * 64
 binary = Path(sys.argv[1]).resolve()
@@ -38,12 +39,14 @@ with tempfile.TemporaryDirectory(prefix="mcp-gate3-full-") as tmp:
     subprocess.run([binary, "yolo", "set", "--mode", "full", "--confirm-full",
                     "--client", "fixture", "--config", config],
                    env=child_env, capture_output=True, check=True, timeout=5)
+    start = time.monotonic_ns()
     server = subprocess.Popen([binary, "http", "--listen", "127.0.0.1:0",
                                "--config", config], env=child_env, stderr=subprocess.PIPE)
     try:
         assert select.select([server.stderr], [], [], 5)[0], "listener unavailable"
         line = server.stderr.readline().decode().strip()
         port = int(line.removeprefix("MCP_HTTP_LISTEN=127.0.0.1:"))
+        startup = (time.monotonic_ns() - start) / 1e6
         session = None
 
         def rpc(method, params=None, notify=False):
@@ -86,5 +89,8 @@ with tempfile.TemporaryDirectory(prefix="mcp-gate3-full-") as tmp:
         }
         print(f"FULL supervised id run exited 0 as uid {uid}, receipt isolated=false")
     finally:
+        stop = time.monotonic_ns()
         server.terminate()
         server.communicate(timeout=5)
+    assert server.returncode == 0, server.returncode
+    print(f"Loopback startup {startup:.3f} ms, SIGTERM shutdown {(time.monotonic_ns() - stop) / 1e6:.3f} ms")

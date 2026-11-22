@@ -136,3 +136,21 @@ and existing output. The audit-chain suite passed 13/13 and Clippy passed.
 Session 78620 completed. Local evidence is awaiting independent acceptance.
 The retained anchor must be outside FULL's write authority for independent
 whole-log rewrite detection. Next task is Linux service preparation.
+
+## Linux service preparation locally verified
+
+Unit generation and dry-run passed local checks, including escaped
+systemd values, fixed loopback binding, and `systemd-analyze --user verify`
+in a temporary directory. Dry-run wrote no unit. Confirmed installation
+is file-only, atomic and non-replacing. It leaves activation to the
+operator. This run did not execute installation or activation.
+
+Unix SIGTERM and SIGINT stop accepting connections and drain in-flight
+HTTP work within a bound. Detached jobs retain their runner leases.
+The unit uses `KillMode=process` to preserve that behavior, and sets
+restart, memory and task limits. The existing Tokio dependency enables
+its signal feature, which adds locked signal-hook-registry 1.4.8
+(MIT OR Apache-2.0). Local checks passed 25 unit and 11 integration
+tests, Clippy, the supervised FULL probe and unit validation.
+Sessions 13057 and 58092 completed. Service work awaits independent
+acceptance.

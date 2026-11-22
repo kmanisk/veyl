@@ -7,6 +7,8 @@ mod http;
 #[cfg(target_os = "linux")]
 mod jobs;
 mod protocol;
+#[cfg(target_os = "linux")]
+mod service_cli;
 mod tools;
 mod transport;
 #[cfg(target_os = "linux")]
@@ -38,6 +40,24 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() == 1 {
+        if args[0] == "--version" {
+            println!("mcp-gateway {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        if args[0] == "--help" {
+            println!(
+                "mcp-gateway --root DIR | http --listen 127.0.0.1:PORT --config PATH
+\
+                      mcp-gateway yolo --help | audit --help | service --help"
+            );
+            return Ok(());
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "service") {
+        return service_cli::run(&args[1..]);
+    }
     #[cfg(target_os = "linux")]
     if args.len() == 1 && args[0] == "--job-runner" {
         return jobs::run_worker().map_err(|_| "job runner unavailable".into());

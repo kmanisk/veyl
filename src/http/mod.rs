@@ -10,10 +10,12 @@ pub(crate) mod scope;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::ffi::OsString;
+use std::future::{Future, poll_fn};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
@@ -26,7 +28,8 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde_json::Value;
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, Semaphore, watch};
+use tokio::task::JoinSet;
 
 use mcp_gateway::security::policy::{self, Action, ExecutionMode, Grant, PolicyInput};
 
@@ -151,7 +154,14 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         .enable_all()
         .build()
         .map_err(|_| "cannot initialize HTTP runtime")?;
-    runtime.block_on(async move {
+    let result = runtime.block_on(async move {
+        #[cfg(unix)]
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .map_err(|_| "cannot register SIGTERM handler")?;
+        #[cfg(unix)]
+        let mut interrupt =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .map_err(|_| "cannot register SIGINT handler")?;
         let listener = TcpListener::bind(addr)
             .await
             .map_err(|_| "cannot bind requested loopback address")?;
@@ -173,17 +183,27 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         // No token, hash, root, request content, or auth configuration is logged.
         eprintln!("MCP_HTTP_LISTEN={actual}");
         let permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+        let (shutdown, _) = watch::channel(false);
+        let mut connections = JoinSet::new();
         loop {
-            let (stream, peer) = listener
-                .accept()
-                .await
-                .map_err(|_| "loopback accept failed")?;
+            let event = poll_fn(|cx| {
+                #[cfg(unix)]
+                if term.poll_recv(cx).is_ready() || interrupt.poll_recv(cx).is_ready() {
+                    return Poll::Ready(None);
+                }
+                listener.poll_accept(cx).map(Some)
+            })
+            .await;
+            let Some(event) = event else { break };
+            let (stream, peer) = event.map_err(|_| "loopback accept failed")?;
+            while connections.try_join_next().is_some() {}
             let Ok(permit) = permits.clone().try_acquire_owned() else {
                 drop(stream);
                 continue;
             };
             let state = state.clone();
-            tokio::spawn(async move {
+            let mut stopping = shutdown.subscribe();
+            connections.spawn(async move {
                 let service = service_fn(move |request| {
                     let state = state.clone();
                     async move {
@@ -195,15 +215,37 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
                         }))
                     }
                 });
-                let _ = http1::Builder::new()
-                    .serve_connection(TokioIo::new(stream), service)
-                    .await;
+                let builder = http1::Builder::new();
+                let mut connection =
+                    std::pin::pin!(builder.serve_connection(TokioIo::new(stream), service));
+                let mut changed = std::pin::pin!(stopping.changed());
+                let completed = poll_fn(|cx| {
+                    if connection.as_mut().poll(cx).is_ready() {
+                        return Poll::Ready(true);
+                    }
+                    changed.as_mut().poll(cx).map(|_| false)
+                })
+                .await;
+                if !completed {
+                    connection.as_mut().graceful_shutdown();
+                    let _ = connection.await;
+                }
                 drop(permit);
             });
         }
-        #[allow(unreachable_code)]
+        drop(listener);
+        let _ = shutdown.send(true);
+        tokio::time::timeout(Duration::from_secs(7), async {
+            while connections.join_next().await.is_some() {}
+        })
+        .await
+        .map_err(|_| "Timed out draining HTTP connections")?;
         Ok(())
-    })
+    });
+    // Detached job runners own their leases. Reaping waiters must not keep
+    // the gateway alive after its listener and in-flight HTTP work drain.
+    runtime.shutdown_timeout(Duration::from_secs(1));
+    result
 }
 
 async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> Reply {

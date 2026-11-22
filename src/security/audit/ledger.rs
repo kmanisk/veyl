@@ -18,7 +18,7 @@ use super::{
     AuditLimits, StageProof, check_directory, check_file, check_file_mode, invalid_audit,
     same_inode,
 };
-use crate::security::linux_fs::{open_operator_dir, reopen_regular};
+use crate::security::linux_fs::{open_operator_dir, publish_new, reopen_regular};
 
 const PRIVATE_FILE: Mode = Mode::RUSR.union(Mode::WUSR);
 const NEW_FILE: OFlags = OFlags::CREATE
@@ -212,7 +212,7 @@ impl Ledger {
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
                 let id = anchor::random_hex()?;
-                anchor::publish_new(&self.directory, &name, id.as_bytes())?;
+                publish_new(&self.directory, &name, id.as_bytes())?;
                 Ok(id)
             }
             Err(error) => Err(error),
