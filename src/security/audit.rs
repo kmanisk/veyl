@@ -6,10 +6,10 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use rustix::fd::{AsFd, OwnedFd};
-use rustix::fs::{self, AtFlags, FileType, Mode, OFlags, Stat, fstat};
+use rustix::fs::{self, AtFlags, FileType, FlockOperation, Mode, OFlags, Stat, fstat};
 use rustix::io::Errno;
 
-use super::linux_fs::{open_absolute_dir, reopen_regular};
+use super::linux_fs::{open_operator_dir, reopen_regular};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuditAction {
@@ -25,6 +25,19 @@ pub enum AuditPhase {
     Success,
     Failure,
     Uncertain,
+}
+
+/// Typed, bounded job metadata. Raw command arguments, environment values,
+/// stdout, stderr and bearer credentials never enter the audit ledger.
+pub struct JobAuditInfo<'a> {
+    pub job_id: &'a str,
+    pub argv_sha256: &'a str,
+    pub cwd: &'a Path,
+    pub timeout_seconds: u64,
+    pub max_output_bytes: usize,
+    pub state: &'a str,
+    pub stdout_bytes: usize,
+    pub stderr_bytes: usize,
 }
 
 #[derive(Debug)]
@@ -53,7 +66,7 @@ impl AuditSink {
 
         let parent = path.parent().ok_or_else(invalid_audit)?.to_path_buf();
         let name = path.file_name().ok_or_else(invalid_audit)?.to_os_string();
-        let directory = open_absolute_dir(&parent)?;
+        let directory = open_operator_dir(&parent)?;
         check_directory(&directory)?;
 
         let flags =
@@ -99,7 +112,7 @@ impl AuditSink {
 
     /// Verify the configured name still designates the same owned log and directory.
     pub fn check_binding(&self) -> io::Result<()> {
-        let current_dir = open_absolute_dir(&self.parent)?;
+        let current_dir = open_operator_dir(&self.parent)?;
         check_directory(&current_dir)?;
         if !same_inode(&fstat(&self.directory)?, &fstat(&current_dir)?) {
             return Err(invalid_audit());
@@ -121,6 +134,58 @@ impl AuditSink {
         phase: AuditPhase,
         unix_seconds: u64,
     ) -> io::Result<()> {
+        self.record_event(principal, action, phase, unix_seconds, None)
+    }
+
+    pub fn identity(&self) -> io::Result<[u64; 4]> {
+        self.check_binding()?;
+        let directory = fstat(&self.directory)?;
+        let file = fstat(&self.file)?;
+        Ok([
+            directory.st_dev as u64,
+            directory.st_ino as u64,
+            file.st_dev as u64,
+            file.st_ino as u64,
+        ])
+    }
+
+    pub fn record_job(
+        &mut self,
+        principal: &str,
+        action: AuditAction,
+        phase: AuditPhase,
+        unix_seconds: u64,
+        details: JobAuditInfo<'_>,
+    ) -> io::Result<()> {
+        if details.job_id.len() != 32
+            || !details
+                .job_id
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            || details.argv_sha256.len() != 64
+            || !details.argv_sha256.bytes().all(|b| b.is_ascii_hexdigit())
+            || !details.cwd.is_absolute()
+            || details.cwd.as_os_str().as_encoded_bytes().len() > 4096
+            || details.max_output_bytes > 65_536
+            || details.stdout_bytes > details.max_output_bytes
+            || details.stderr_bytes > details.max_output_bytes
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid audit job metadata",
+            ));
+        }
+        self.record_event(principal, action, phase, unix_seconds, Some(details))
+    }
+
+    fn record_event(
+        &mut self,
+        principal: &str,
+        action: AuditAction,
+        phase: AuditPhase,
+        unix_seconds: u64,
+        details: Option<JobAuditInfo<'_>>,
+    ) -> io::Result<()> {
         if principal.is_empty() || principal.len() > 128 || principal.chars().any(char::is_control)
         {
             return Err(io::Error::new(
@@ -141,15 +206,33 @@ impl AuditSink {
             AuditPhase::Failure => "failure",
             AuditPhase::Uncertain => "uncertain",
         };
-        let mut line = serde_json::to_vec(&serde_json::json!({
+        let mut event = serde_json::json!({
             "principal": principal,
             "tool": tool,
             "phase": phase,
             "unix_seconds": unix_seconds,
-        }))?;
+        });
+        if let Some(details) = details {
+            event["job_id"] = details.job_id.into();
+            event["argv_sha256"] = details.argv_sha256.into();
+            event["cwd"] = details.cwd.to_string_lossy().into_owned().into();
+            event["timeout_seconds"] = details.timeout_seconds.into();
+            event["max_output_bytes"] = details.max_output_bytes.into();
+            event["state"] = details.state.into();
+            event["stdout_bytes"] = details.stdout_bytes.into();
+            event["stderr_bytes"] = details.stderr_bytes.into();
+        }
+        let mut line = serde_json::to_vec(&event)?;
         line.push(b'\n');
+        fs::flock(&self.file, FlockOperation::LockExclusive)?;
+        let written = self.append(&line);
+        let unlocked = fs::flock(&self.file, FlockOperation::Unlock);
+        written.and(unlocked.map_err(io::Error::from))
+    }
+
+    fn append(&mut self, line: &[u8]) -> io::Result<()> {
         self.check_binding()?;
-        self.file.write_all(&line)?;
+        self.file.write_all(line)?;
         self.file.flush()?;
         self.file.sync_data()?;
         self.check_binding()

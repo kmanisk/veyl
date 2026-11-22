@@ -16,8 +16,28 @@ pub enum Action {
     WriteFile,
     ApplyPatch,
     RunCommand,
+    RunShortJob,
+    StartJob,
+    JobStatus,
+    JobLogs,
+    CancelJob,
+    ListJobs,
     PrivilegedCommand,
     ServiceControl,
+}
+
+impl Action {
+    pub fn is_job(self) -> bool {
+        matches!(
+            self,
+            Self::RunShortJob
+                | Self::StartJob
+                | Self::JobStatus
+                | Self::JobLogs
+                | Self::CancelJob
+                | Self::ListJobs
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -96,11 +116,11 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
     }
 
     match input.action {
+        action if action.is_job() && input.mode == ExecutionMode::Standard => Ok(()),
         Action::ReadFile | Action::ListTools | Action::WriteFile | Action::ApplyPatch => Ok(()),
-        Action::RunCommand | Action::PrivilegedCommand | Action::ServiceControl => {
+        _ => {
             // No trust decision can be upgraded merely because the caller
             // requested YOLO. A signed local operator lease is not yet wired.
-            let _ = input.mode;
             Err(Denial::VerifiedLeaseRequired)
         }
     }

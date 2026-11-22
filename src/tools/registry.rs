@@ -6,21 +6,49 @@ use mcp_gateway::security::policy::Action;
 
 use crate::file_access::FileAccess;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub(crate) enum Tool {
     ReadFile,
     WriteFile,
     ApplyPatch,
+    RunCommand,
+    StartJob,
+    JobStart,
+    JobStatus,
+    JobLogs,
+    CancelJob,
+    JobCancel,
+    ListJobs,
 }
 
 impl Tool {
-    pub(crate) const ALL: [Self; 3] = [Self::ReadFile, Self::WriteFile, Self::ApplyPatch];
+    pub(crate) const ALL: [Self; 11] = [
+        Self::ReadFile,
+        Self::WriteFile,
+        Self::ApplyPatch,
+        Self::RunCommand,
+        Self::StartJob,
+        Self::JobStart,
+        Self::JobStatus,
+        Self::JobLogs,
+        Self::CancelJob,
+        Self::JobCancel,
+        Self::ListJobs,
+    ];
 
     pub(crate) fn parse(name: &str) -> Option<Self> {
         match name {
             "read_file" => Some(Self::ReadFile),
             "write_file" => Some(Self::WriteFile),
             "apply_patch" => Some(Self::ApplyPatch),
+            "run_command" => Some(Self::RunCommand),
+            "start_job" => Some(Self::StartJob),
+            "job_start" => Some(Self::JobStart),
+            "job_status" => Some(Self::JobStatus),
+            "job_logs" => Some(Self::JobLogs),
+            "cancel_job" => Some(Self::CancelJob),
+            "job_cancel" => Some(Self::JobCancel),
+            "list_jobs" => Some(Self::ListJobs),
             _ => None,
         }
     }
@@ -30,6 +58,12 @@ impl Tool {
             Self::ReadFile => Action::ReadFile,
             Self::WriteFile => Action::WriteFile,
             Self::ApplyPatch => Action::ApplyPatch,
+            Self::RunCommand => Action::RunShortJob,
+            Self::StartJob | Self::JobStart => Action::StartJob,
+            Self::JobStatus => Action::JobStatus,
+            Self::JobLogs => Action::JobLogs,
+            Self::CancelJob | Self::JobCancel => Action::CancelJob,
+            Self::ListJobs => Action::ListJobs,
         }
     }
 
@@ -82,7 +116,74 @@ impl Tool {
                 },
                 "annotations": { "readOnlyHint": false, "destructiveHint": true }
             }),
+            _ => self.job_schema(),
         }
+    }
+
+    fn job_schema(self) -> Value {
+        let id = json!({"type":"string","pattern":"^[0-9a-f]{32}$"});
+        let profile = json!({"type":"string"});
+        let (name, description, properties, required, read_only) = match self {
+            Self::StartJob | Self::JobStart => (
+                if self == Self::StartJob {
+                    "start_job"
+                } else {
+                    "job_start"
+                },
+                "Start a configured job profile in the client's root",
+                json!({"profile": profile}),
+                json!(["profile"]),
+                false,
+            ),
+            Self::RunCommand => (
+                "run_command",
+                "Run a configured command for up to two seconds and return its outcome",
+                json!({"profile":profile,"argv":{"type":"array","minItems":1,"maxItems":33,"items":{"type":"string","maxLength":1024}}}),
+                json!([]),
+                false,
+            ),
+            Self::JobStatus => (
+                "job_status",
+                "Get the current receipt for an owned job",
+                json!({"job_id":id}),
+                json!(["job_id"]),
+                true,
+            ),
+            Self::JobLogs => (
+                "job_logs",
+                "Read bounded excerpts from an owned job",
+                json!({"job_id":id}),
+                json!(["job_id"]),
+                true,
+            ),
+            Self::CancelJob | Self::JobCancel => (
+                if self == Self::CancelJob {
+                    "cancel_job"
+                } else {
+                    "job_cancel"
+                },
+                "Request cancellation of an owned job",
+                json!({"job_id":id}),
+                json!(["job_id"]),
+                false,
+            ),
+            Self::ListJobs => (
+                "list_jobs",
+                "List owned jobs with an optional continuation cursor",
+                json!({"cursor":id}),
+                json!([]),
+                true,
+            ),
+            _ => unreachable!("only job tools use the job schema"),
+        };
+        let mut schema = json!({
+            "type":"object", "properties":properties, "required":required, "additionalProperties":false
+        });
+        if self == Self::RunCommand {
+            schema["oneOf"] = json!([{"required":["profile"]},{"required":["argv"]}]);
+        }
+        json!({"name":name,"description":description,"inputSchema":schema,
+            "annotations":{"readOnlyHint":read_only,"destructiveHint":!read_only}})
     }
 }
 

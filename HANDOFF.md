@@ -227,3 +227,169 @@ installed only under the lab's `tools/cargo-audit/` directory; the JSON
 receipt is `~/Projects/rust-mcp-gateway-lab/review_reports/pass2_cargo_audit_20261122.json`.
 The next increment is separate supervised jobs, beginning with locked tests,
 not a production service or YOLO.
+
+## Phase A attempt 1 on `milestone2/jobs-supervisor`
+
+Implemented grant-scoped durable job start, cancel, status, logs, list and
+short synchronous execution in the isolated worktree. The runner is a
+one-job process in the same binary. It uses an atomic signed receipt, a
+private per-job lease, bounded stream logs and verified process-group
+cleanup. The gateway can restart while the runner continues. An unfinished
+job whose runner is lost receives an uncertain outcome with no replay.
+The verified cgroup path uses transient user scopes. The unscoped path
+reports CPU and memory ceilings as unavailable.
+
+An offline build, formatting, Clippy, Git whitespace checks and both new
+Rust unit tests passed. Local loopback lifecycle, process-tree, output,
+audit and ownership probes passed in scoped and unscoped modes.
+Project-local RustSec found zero vulnerabilities or warnings. The 11
+locked suite hashes were unchanged. The trusted verifier stopped at its
+Bubblewrap bind setup, before the 78 external cases could run. Five
+existing mutation tests failed here and on the unchanged baseline.
+See [the Phase A gate](PASS2_JOBS_GATE.md) for evidence, RSS and remaining
+checks. The change remains on this worktree for review.
+
+## Phase A trusted operator verification (supersedes restricted-job results)
+
+After Codex attempt 1 completed, the trusted operator ran the unchanged
+68-case Pass 2 acceptance baseline plus the nine-case durable-jobs suite and
+one-case output-cap suite in an actual **network-disabled Bubblewrap
+environment**. Results: inherited **68/68**, jobs **8/9**, output **1/1**:
+**77/78 overall**. This is **not accepted**. All 11 pinned file hashes
+matched before and after. Host-side offline build, Clippy, format and
+`cargo test` passed (23 unit and 4 mutation integration tests), as did
+`git diff --check`. The earlier verifier and mutation test failures inside
+Codex were caused by the transient job's NoNewPrivileges environment.
+
+Remaining locked failure: case 08 of
+`acceptance_pass2_jobs/locked_durable_jobs.py` (lines 254–260) incorrectly
+fails when the canceled grandchild PID has **already disappeared**; its
+`while Path(...).exists() ... else: fail` condition treats correct reaping
+as failure unless the process remains a zombie. The operator reproduced
+this under Bubblewrap with a diagnostic-only callback and saw `GONE`
+for the child PID exactly when the locked method raised the failure.
+The code must **not** intentionally retain zombies to satisfy that test.
+Request independent oracle correction and SHA-256 re-locking; no acceptance
+runner or locked test was changed.
+
+Source corrections, outside the Codex attempt, provide a safe 4096-byte
+per-stream output default, expected `completed`/`canceled` API states,
+conservative `uncertain` reporting for a preexisting live detached runner,
+and `lost` for proven vanished runner+child without final receipt. Audit
+records now include ID, principal, argv hash, cwd, limits, state and output
+byte counts while excluding tokens/argv/output. A real signed-credential
+fixture verified those fields and secret absence.
+
+Actual `cargo-audit 0.23.0 --no-fetch --deny warnings`: exit 0, no
+vulnerabilities or warnings among 49 lockfile dependencies. One new direct
+crate (`serde =1.0.229`, default features off) and one added feature on
+the existing `rustix` crate; no production packages or services installed.
+The full receipt, one-agent-call model usage, resource measurements and
+remaining limitations are in `PASS2_JOBS_GATE.md`. Keep this branch
+**uncommitted** until all immutable acceptance gates pass. Part B is skipped
+because the independent audit-chain test and recorded hash do not exist.
+
+
+## Milestone 3 — Independent Acceptance Gate
+
+**Date:** 2026-11-22
+**Role:** AGY (Independent Security and Acceptance-Test Engineer)
+**Status:** **BLOCKED — DO NOT START CODEX** (Prerequisite Gate 0: Milestone 2 implementation uncommitted)
+
+### Repository state
+- **Current branch:** `milestone2/jobs-supervisor`
+- **Current worktree:** `/home/onyx/Projects/rust-mcp-gateway-lab/worktrees/m2-jobs-supervisor`
+- **Base commit:** `ec2d4e75b01e73e35e8ffdea748581a88b19c1f5` (on top of `46e4f94155aab1cfc2c5cac1fd3a59928a270904`)
+- **Working tree state:** **DIRTY / UNCOMMITTED**
+  - Modified tracked files: `Cargo.lock`, `Cargo.toml`, `HANDOFF.md`, `SPEC.md`, `src/file_access.rs`, `src/http/admission.rs`, `src/http/mod.rs`, `src/main.rs`, `src/protocol.rs`, `src/security/audit.rs`, `src/security/linux_fs.rs`, `src/security/policy.rs`, `src/tools/mutation.rs`, `src/tools/registry.rs`
+  - Untracked files: `src/jobs/` (all 11 modules: `api.rs`, `config.rs`, `launch.rs`, `logs.rs`, `mod.rs`, `process.rs`, `receipt.rs`, `recovery.rs`, `resources.rs`, `runner.rs`, `store.rs`), `PASS2_JOBS_GATE.md`, `PHASE_A_EXECUTION_BRIEF.md`
+- **Prerequisite Gate 0 Blocker:** The Milestone 2 jobs supervisor implementation must be committed by the operator before branching `milestone3/yolo-service`. AGY owns tests only and must not create Rust implementation commits.
+
+### Jobs gate (Milestone 2 Verification)
+- **Corrected case 08 result:** **PASS** (3.56s). All 9 jobs cases pass.
+- **Root cause of false negative:** In `acceptance_pass2_jobs/locked_durable_jobs.py`, lines 254–260 originally used `while Path(f"/proc/{pid}").exists() and time.monotonic() < deadline: ... else: self.fail("child process survived...")`. In Python, a `while...else` construct executes `else:` when the loop condition evaluates to False without a `break`. Because the gateway runner implements subreaper cleanup (`clean_adopted_children`) and successfully reaped the canceled grandchild process, `/proc/{pid}` disappeared immediately, causing the loop condition to evaluate to False and triggering `self.fail`.
+- **Exact test correction:**
+  1. Establishes that the grandchild actually exists, is running `/usr/bin/sleep 20`, and records its `start_ticks` and `pgid` before issuing cancellation.
+  2. Bounded wait checks termination: passes when `/proc/{pid}` disappears, when `start_ticks` changes (PID reuse), or when state is `Z` (zombie). Fails only if the original process survives.
+  3. Verifies process group termination via `os.killpg(pgid, 0)` raising `ProcessLookupError`.
+  4. Also verifies child process tree termination on timeout.
+- **Proof of mutation failure (Mutation 1):** Tested in an isolated disposable copy where process-group termination was omitted (`process::kill_process` instead of `process::kill_process_group` and disabled `clean_adopted_children`). The corrected test failed as expected with `AssertionError: child process survived canceled owned job`.
+- **Jobs suite case count:** 9 cases.
+- **Previous SHA-256:** `6f9cd819a1fc6d8f7907beea51fa27cb80a16658a8db20195909d2981e7da338`
+- **Corrected SHA-256:** `ec71c4966f2639e34c6bbe7357d78a4b7adca8f38f84dd08ce43ae59dc04ee55`
+- **Output-limits suite:** 1 case PASS (`acceptance_pass2_jobs_limits/locked_output_caps.py`, SHA-256 `597bb1e3c5b936941dfee5d1b31271b9607e52c1f29594d561feca1abbe1be70`).
+- **Milestone 2 total:** **78/78 cases passing** (68 inherited + 9 jobs + 1 output limits).
+
+### Audit-chain suite (Milestone 3 New)
+- **Full path:** `/home/onyx/Projects/rust-mcp-gateway-lab/acceptance_pass3_auditchain/locked_audit_chain.py`
+- **Actual case count:** 13 cases (`test_01` to `test_13`).
+- **SHA-256:** `04d996e011dd834268d5b69413ff1027db15f86659a97543d9ef625c5298b6f8`
+- **Red-baseline result on M2 codebase:** **1 PASS / 12 FAIL** (Expected red baseline).
+  - Passing: `test_13_sensitive_data_exclusion` (existing M2 audit excludes secrets).
+  - Failing: `test_01`–`test_12` (missing `prev_hash` cryptographic link, missing `audit verify` CLI, missing torn-tail recovery, missing multi-segment rotation, missing audit size cap enforcement, missing `.mcp-stage-*` cleanup).
+- **Known test limitations:** Tests verify contract through CLI `mcp-gateway audit verify [--config <path> | --log <path>]` and handle-relative file structures.
+
+### YOLO/CLI suite (Milestone 3 New)
+- **Full path:** `/home/onyx/Projects/rust-mcp-gateway-lab/acceptance_pass3_yolo/locked_yolo_service.py`
+- **Actual case count:** 10 cases (`test_01` to `test_10`).
+- **SHA-256:** `fcede8a93c933dbcb0e570c86aca392f80d972890a911a1c78b2986ff716ce78`
+- **Red-baseline result on M2 codebase:** **3 PASS / 7 FAIL** (Expected red baseline).
+  - Passing: `test_02_local_cli_operator_ownership_and_mcp_denial` (MCP tools and spoofed headers denied), `test_08_secret_redaction_in_operator_cli` (secrets not printed), `test_10_os_security_boundaries_service_user_permissions` (mode 0000 access denied by OS).
+  - Failing: `test_01`, `test_03`, `test_04`, `test_05`, `test_06`, `test_07`, `test_09` (missing `yolo enable/disable/status` CLI, root bypass denied by STANDARD policy, missing immediate dynamic reload, missing `yolo: true` audit flag, missing config/audit directory containment check).
+- **Known test limitations:** Tests operate against local CLI `mcp-gateway yolo enable/disable/status [--client <id>] [--config <path>]` and HTTP `/mcp` listener.
+
+### Harness integration
+- **Trusted manifest location:** `/home/onyx/Projects/rust-mcp-gateway-lab/harness/acceptance.py`
+- **Branch registration:** Target branch `milestone3/yolo-service` and descendant branches registered to require all 13 suites (101 total cases).
+- **Protected test locations:** Mode `0444` files in mode `0555` directories outside agent writable worktrees:
+  - `acceptance_m1/` (8 cases)
+  - `acceptance_m1_edge/` (7 cases)
+  - `acceptance_m2_policy/` (10 cases)
+  - `acceptance_m2_http/` (12 cases)
+  - `acceptance_m2_http_edge/` (6 cases)
+  - `acceptance_pass2_audit/` (6 cases)
+  - `acceptance_pass2_files/` (9 cases)
+  - `acceptance_pass2_failclosed/` (8 cases)
+  - `acceptance_pass2_containment/` (2 cases)
+  - `acceptance_pass2_jobs/` (9 cases, corrected)
+  - `acceptance_pass2_jobs_limits/` (1 case)
+  - `acceptance_pass3_auditchain/` (13 cases, new)
+  - `acceptance_pass3_yolo/` (10 cases, new)
+- **Hash verification:** All 13 suite hashes verified matching manifest.
+- **Codex write protection:** Codex sandbox runs with `--clearenv` and unprivileged Bubblewrap; lab acceptance test directories are mounted strictly read-only and cannot be altered or substituted by the coding agent.
+
+### Codex implementation gate
+Codex may begin Phase 3 ONLY after the following prerequisites are met:
+1. **[BLOCKED]** Milestone 2 jobs implementation is committed to `milestone2/jobs-supervisor` by the human operator.
+2. **[PASSED]** Corrected jobs suite passes (9/9).
+3. **[PASSED]** Output-limit suite passes (1/1).
+4. **[PASSED]** Audit-chain suite exists, is locked (`04d996e0...`), and red baseline recorded (1 pass, 12 fail).
+5. **[PASSED]** YOLO/CLI suite exists, is locked (`fcede8a9...`), and red baseline recorded (3 pass, 7 fail).
+6. **[PASSED]** All 13 suite hashes registered in `harness/acceptance.py`.
+7. **[PASSED]** Inherited 68 cases pass without modification.
+8. **[PASSED]** Mutation 1 verified in disposable copy; test infrastructure is clean and deterministic.
+
+**Action Required from User/Operator:**
+Commit the dirty working tree on `milestone2/jobs-supervisor`, then create worktree/branch `milestone3/yolo-service` from that verified commit before starting Codex.
+
+## Milestone 2 jobs baseline verification
+
+The preceding uncommitted-state note describes AGY's earlier review. Under
+explicit operator authorization, Codex reviewed the jobs implementation and
+ran the trusted network-isolated harness on `milestone2/jobs-supervisor`.
+All 78 locked cases passed (68 inherited, nine corrected jobs, one output
+cap). All 13 existing suite hashes matched before and after the run. The
+audit-chain and YOLO suites were checked for hash integrity only during
+this run. Their implementation remains gated.
+
+Formatting, offline locked build, Clippy with warnings denied, Cargo tests
+(23 unit and four integration), and Git whitespace checks passed.
+Project-local `cargo-audit --no-fetch --deny warnings` exited zero for the
+49 lockfile dependencies. [The earlier Phase A execution brief](PHASE_A_EXECUTION_BRIEF.md)
+records the original task and its historical limits.
+
+The jobs profile is restricted to operator-configured executables and
+arguments and runs under the gateway UID. It does not provide a separate
+sandbox or authorize arbitrary YOLO execution. AGY independently owns all
+locked tests, including the dashboard and service/network gates required
+before Phase 3 implementation.

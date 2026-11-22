@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 const MAX_FILE_BYTES: u64 = 65_536;
 
+#[derive(Clone)]
 pub struct FileAccess {
     root: PathBuf,
 }

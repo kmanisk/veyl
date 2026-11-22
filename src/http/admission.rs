@@ -2,6 +2,7 @@
 //! No raw bearer tokens are stored or displayed by the HTTP service.
 
 use std::collections::HashSet;
+#[cfg(not(target_os = "linux"))]
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
+#[cfg(target_os = "linux")]
+use crate::jobs::{JobRoot, Profiles};
 #[cfg(target_os = "linux")]
 use crate::tools::MutationRoot;
 use crate::tools::registry::Tool;
@@ -23,36 +26,22 @@ pub struct Client {
     pub actions: Vec<Action>,
     #[cfg(target_os = "linux")]
     pub mutation_root: Option<MutationRoot>,
+    #[cfg(target_os = "linux")]
+    pub job_root: Option<JobRoot>,
 }
 
 pub struct Configuration {
     pub clients: Vec<Client>,
     pub audit_log: Option<PathBuf>,
+    #[cfg(target_os = "linux")]
+    pub jobs: Option<(PathBuf, Profiles)>,
 }
 
 pub fn load_clients(path: &Path) -> Result<Configuration, String> {
     if !path.is_absolute() {
         return Err("credential config requires an absolute path".into());
     }
-    let metadata =
-        fs::symlink_metadata(path).map_err(|_| "credential config is unavailable".to_string())?;
-    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-        return Err("credential config must be an ordinary file, not a symlink".into());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err("credential config is accessible to group or others".into());
-        }
-    }
-    if metadata.len() > 65_536 {
-        return Err("credential config exceeds size limit".into());
-    }
-    let bytes = fs::read(path).map_err(|_| "credential config cannot be read".to_string())?;
-    if bytes.len() > 65_536 {
-        return Err("credential config exceeds size limit".into());
-    }
+    let bytes = read_config(path)?;
     let document: Value = serde_json::from_slice(&bytes)
         .map_err(|_| "invalid credential configuration".to_string())?;
     let audit_log = document
@@ -65,6 +54,28 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
                 .ok_or("audit_log must be an absolute path")
         })
         .transpose()?;
+    let has_job_settings =
+        document.get("job_state_dir").is_some() || document.get("job_profiles").is_some();
+    #[cfg(target_os = "linux")]
+    let jobs = if has_job_settings {
+        let (state, profiles) = crate::jobs::parse_settings(&bytes)?;
+        let audit = audit_log
+            .as_ref()
+            .ok_or("Job configuration requires audit_log")?;
+        let credentials = path
+            .canonicalize()
+            .map_err(|_| "Credential path unavailable")?;
+        if state == *audit || audit.starts_with(&state) || credentials.starts_with(&state) {
+            return Err("Job state must be separate from credentials and audit log".into());
+        }
+        Some((state, profiles))
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    if has_job_settings {
+        return Err("Job configuration is supported only on Linux".into());
+    }
     let entries = document
         .get("clients")
         .and_then(Value::as_array)
@@ -90,11 +101,10 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
             .get("expires_at_unix_seconds")
             .and_then(Value::as_u64)
             .ok_or("missing credential expiry")?;
-        let root = PathBuf::from(field("root").ok_or("missing client root")?);
-        if !root.is_absolute() {
+        let configured_root = PathBuf::from(field("root").ok_or("missing client root")?);
+        if !configured_root.is_absolute() {
             return Err("client root must be absolute".into());
         }
-        let configured_root = root;
         let root = configured_root
             .canonicalize()
             .map_err(|_| "client root is unavailable".to_string())?;
@@ -106,18 +116,25 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
             .and_then(Value::as_array)
             .ok_or("client tools must be an array")?;
         let mut actions = Vec::new();
+        let mut names = HashSet::new();
         for tool in allowed {
             let tool = tool
                 .as_str()
                 .and_then(Tool::parse)
                 .ok_or("unsupported tool grant")?;
-            if actions.contains(&tool.action()) {
-                return Err("duplicate or unsupported tool grant".into());
+            if !names.insert(tool) {
+                return Err("duplicate tool grant".into());
             }
-            actions.push(tool.action());
+            if !actions.contains(&tool.action()) {
+                actions.push(tool.action());
+            }
         }
         if !actions.is_empty() {
             actions.push(Action::ListTools);
+        }
+        let has_job_grant = actions.iter().any(|action| action.is_job());
+        if has_job_grant && (!has_job_settings || !cfg!(target_os = "linux")) {
+            return Err("Job grants require private Linux job configuration".into());
         }
         #[cfg(target_os = "linux")]
         let mutation_root =
@@ -129,6 +146,25 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
             } else {
                 None
             };
+        #[cfg(target_os = "linux")]
+        if let Some((state, profiles)) = &jobs {
+            let credentials = path
+                .canonicalize()
+                .map_err(|_| "Credential path unavailable")?;
+            let audit = audit_log.as_ref().expect("job settings require audit log");
+            if state.starts_with(&root)
+                || root.starts_with(state)
+                || credentials.starts_with(&root)
+                || audit.starts_with(&root)
+            {
+                return Err(
+                    "Job state, credentials and audit log must be outside client roots".into(),
+                );
+            }
+            if mutation_root.is_some() {
+                profiles.reject_mutable_executables(&root)?;
+            }
+        }
         clients.push(Client {
             id: id.to_string(),
             digest,
@@ -137,9 +173,84 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
             actions,
             #[cfg(target_os = "linux")]
             mutation_root,
+            #[cfg(target_os = "linux")]
+            job_root: if has_job_grant {
+                Some(JobRoot::open(&configured_root)?)
+            } else {
+                None
+            },
         });
     }
-    Ok(Configuration { clients, audit_log })
+    Ok(Configuration {
+        clients,
+        audit_log,
+        #[cfg(target_os = "linux")]
+        jobs,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn read_config(path: &Path) -> Result<Vec<u8>, String> {
+    use std::fs::File;
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+
+    use mcp_gateway::security::linux_fs::{open_operator_dir, reopen_regular};
+    use rustix::fs::{self, Mode, OFlags};
+
+    let parent = open_operator_dir(path.parent().ok_or("invalid credential path")?)
+        .map_err(|_| "credential directory unavailable")?;
+    let handle = fs::openat(
+        &parent,
+        path.file_name().ok_or("invalid credential path")?,
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|_| "credential config unavailable")?;
+    let file = File::from(
+        reopen_regular(handle, OFlags::RDONLY).map_err(|_| "credential config cannot be read")?,
+    );
+    let meta = file
+        .metadata()
+        .map_err(|_| "credential config unavailable")?;
+    if meta.mode() & 0o7177 != 0
+        || meta.uid() != rustix::process::geteuid().as_raw()
+        || meta.nlink() != 1
+    {
+        return Err("credential config must be private and owned by the gateway user".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "credential config cannot be read")?;
+    if bytes.len() > 65_536 {
+        return Err("credential config exceeds size limit".into());
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_config(path: &Path) -> Result<Vec<u8>, String> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| "credential config is unavailable".to_string())?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("credential config must be an ordinary file, not a symlink".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("credential config is accessible to group or others".into());
+        }
+    }
+    if metadata.len() > 65_536 {
+        return Err("credential config exceeds size limit".into());
+    }
+    let bytes = fs::read(path).map_err(|_| "credential config cannot be read".to_string())?;
+    if bytes.len() > 65_536 {
+        return Err("credential config exceeds size limit".into());
+    }
+    Ok(bytes)
 }
 
 fn decode_sha256(value: &str) -> Result<[u8; 32], String> {

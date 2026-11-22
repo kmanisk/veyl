@@ -27,6 +27,8 @@ use tokio::sync::{Mutex, Semaphore};
 use mcp_gateway::security::policy::{self, Action, ExecutionMode, Grant, PolicyInput};
 
 use crate::file_access::FileAccess;
+#[cfg(target_os = "linux")]
+use crate::jobs::Jobs;
 use crate::protocol::Protocol;
 use crate::tools::mutation::MutationAudit;
 use crate::tools::registry::{Tool, read_file, tool_text};
@@ -57,6 +59,8 @@ struct State {
     addr: SocketAddr,
     clients: Vec<Client>,
     mutations: MutationAudit,
+    #[cfg(target_os = "linux")]
+    jobs: Option<Jobs>,
     sessions: Mutex<HashMap<String, Session>>,
     failures: Mutex<HashMap<IpAddr, Failure>>,
 }
@@ -93,6 +97,17 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
     if has_mutation_grants && !mutations.available() {
         return Err("Mutation grants require a private, available audit log".into());
     }
+    #[cfg(target_os = "linux")]
+    let jobs = config
+        .jobs
+        .map(|(state, profiles)| {
+            Jobs::open(
+                &state,
+                profiles,
+                config.audit_log.as_deref().ok_or("Missing job audit log")?,
+            )
+        })
+        .transpose()?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -109,6 +124,8 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             addr: actual,
             clients: config.clients,
             mutations,
+            #[cfg(target_os = "linux")]
+            jobs,
             sessions: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
         });
@@ -295,7 +312,34 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     }
     session.last_used = Instant::now();
 
-    let response = session.protocol.dispatch_with_tools(
+    #[cfg(target_os = "linux")]
+    if state.jobs.is_some() && matches!(method, Some("tools/list" | "tools/call")) {
+        // Tool requests leave protocol phase unchanged. Release session state
+        // before waiting on durable storage or a short command.
+        let mut protocol = session.protocol.clone();
+        drop(sessions);
+        return match tokio::task::spawn_blocking(move || {
+            dispatch_tools(&mut protocol, payload, &state, &state.clients[client_index])
+        })
+        .await
+        {
+            Ok(reply) => reply,
+            Err(_) => simple(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Tool operation unavailable",
+            ),
+        };
+    }
+    dispatch_tools(&mut session.protocol, payload, &state, client)
+}
+
+fn dispatch_tools(
+    protocol: &mut Protocol,
+    payload: Value,
+    state: &State,
+    client: &Client,
+) -> Reply {
+    let response = protocol.dispatch_with_tools(
         payload,
         || {
             let audited = audit("policy.checked");
@@ -306,7 +350,7 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
                 .into_iter()
                 .filter(|tool| {
                     authorized(client, tool.action(), audited, unix_seconds())
-                        && (*tool == Tool::ReadFile || mutation_available(client, &state.mutations))
+                        && tool_available(*tool, client, state)
                 })
                 .map(Tool::schema)
                 .collect()
@@ -320,6 +364,13 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
             if tool == Tool::ReadFile {
                 return Some(read_file(files, args));
             }
+            if tool.action().is_job() {
+                #[cfg(target_os = "linux")]
+                if let (Some(jobs), Some(root)) = (state.jobs.as_ref(), client.job_root.as_ref()) {
+                    return Some(jobs.call(tool, args, &client.id, root));
+                }
+                return Some(tool_text(true, "Jobs unavailable"));
+            }
             #[cfg(target_os = "linux")]
             if let Some(root) = client.mutation_root.as_ref() {
                 return Some(state.mutations.call(tool, args, root, &client.id, now));
@@ -332,6 +383,21 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
         None => simple(StatusCode::ACCEPTED, ""),
         Some(response) => json_response(StatusCode::OK, response, None),
     }
+}
+
+fn tool_available(tool: Tool, client: &Client, state: &State) -> bool {
+    if tool == Tool::ReadFile {
+        return true;
+    }
+    if tool.action().is_job() {
+        #[cfg(target_os = "linux")]
+        {
+            return client.job_root.is_some() && state.jobs.as_ref().is_some_and(Jobs::available);
+        }
+        #[cfg(not(target_os = "linux"))]
+        return false;
+    }
+    mutation_available(client, &state.mutations)
 }
 
 fn authorized(client: &Client, action: Action, audit_available: bool, now: u64) -> bool {

@@ -94,7 +94,7 @@ impl MutationAudit {
         let action = match tool {
             Tool::WriteFile => AuditAction::WriteFile,
             Tool::ApplyPatch => AuditAction::ApplyPatch,
-            Tool::ReadFile => return tool_text(true, "Invalid mutation tool"),
+            _ => return tool_text(true, "Invalid mutation tool"),
         };
         let field = |name: &str| args.get(name).and_then(Value::as_str);
         let mut healthy = true;

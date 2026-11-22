@@ -5,6 +5,7 @@ use std::path::{Component, Path};
 
 use rustix::fd::{AsFd, AsRawFd, OwnedFd};
 use rustix::fs::{self, FileType, Mode, OFlags, ResolveFlags};
+use rustix::io::Errno;
 
 const DIRECTORY: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
@@ -39,6 +40,29 @@ pub fn open_absolute_dir(path: &Path) -> io::Result<OwnedFd> {
         Mode::empty(),
         SCOPED,
     )?)
+}
+
+/// Open a trusted absolute configuration path. On kernels without openat2,
+/// walk one directory component per openat, with O_NOFOLLOW on each step.
+/// User-selected mutation paths still require the stricter openat2 resolver.
+pub fn open_operator_dir(path: &Path) -> io::Result<OwnedFd> {
+    match open_absolute_dir(path) {
+        Err(error) if error.raw_os_error() == Some(Errno::NOSYS.raw_os_error()) => {
+            let mut directory = fs::open("/", DIRECTORY, Mode::empty())?;
+            for component in path.components() {
+                if let Component::Normal(name) = component {
+                    directory = fs::openat(
+                        &directory,
+                        name,
+                        DIRECTORY | OFlags::NOFOLLOW,
+                        Mode::empty(),
+                    )?;
+                }
+            }
+            Ok(directory)
+        }
+        result => result,
+    }
 }
 
 /// Open a directory inside a previously validated root without crossing mounts.

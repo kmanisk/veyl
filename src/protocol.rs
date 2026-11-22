@@ -17,6 +17,7 @@ enum Phase {
     Ready,
 }
 
+#[derive(Clone)]
 pub struct Protocol {
     files: FileAccess,
     phase: Phase,

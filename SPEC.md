@@ -139,8 +139,97 @@ The Pass 2 review branch adds explicitly granted `write_file` and
   are preserved on normal replacement, and outside-root symlinks are rejected.
 - Unrelated hostile same-user writers, path moves, torn audit records and
   power loss remain open risks; a crash before rename can leave a staging file.
-- No jobs, arbitrary command execution, YOLO, elevated OS access, remote
-  ingress, installed Linux service or Windows adapter are present.
+- This increment excludes YOLO, elevated OS access, remote ingress,
+  installed Linux services and Windows adapters. The separate Linux jobs
+  increment is described below.
 
 See `PASS2_TOOLS_JOBS_SPEC.md`, `PASS2_WRITE_PATCH_REVIEW.md` and `HANDOFF.md`
 for independent test gates, details and remaining limits.
+
+## Phase A durable supervised jobs on Linux
+
+The foreground loopback HTTP gateway authorizes jobs using operator grants
+for the authenticated client. The original stdio tool set remains
+`read_file`. Listed and callable job tools require the relevant grant.
+The start and cancel aliases share their respective grants.
+
+| Tool | Accepted arguments | Result |
+| --- | --- | --- |
+| `start_job`, `job_start` | Exactly `{"profile":"name"}` | Opaque job ID and starting status |
+| `run_command` | Exactly `{"profile":"name"}` or `{"argv":[...]}` matching a configured executable and arguments | Status and bounded log excerpts after a run limited to two seconds |
+| `job_status` | Exactly `{"job_id":"id"}` | Owner-only status, exit code or signal, log paths and truncation flags |
+| `job_logs` | Exactly `{"job_id":"id"}` | Owner-only stdout and stderr excerpts, up to 4,096 input bytes per stream |
+| `cancel_job`, `job_cancel` | Exactly `{"job_id":"id"}` | Owner-only cancellation status, which may still be pending |
+| `list_jobs` | Empty object or `{"cursor":"id"}` | Up to 40 owner-only statuses and a continuation cursor |
+
+Job-enabled credential configuration is a private, single-link file owned
+by the unprivileged gateway user. It adds `audit_log`, `job_state_dir` and
+`job_profiles` alongside `clients`. The audit record is mode `0600` in a
+mode `0700` directory. The gateway can create the mode `0700` state directory
+under an existing parent. Keep the credentials, audit log and
+state directory outside every served root. Profile executables must also
+be outside every HTTP mutation root. Trusted operators supply absolute
+executable paths, fixed argument vectors and limits.
+
+```json
+{
+  "noop": {
+    "executable": "/usr/bin/true",
+    "args": [],
+    "timeout_seconds": 2,
+    "max_output_bytes": 4096
+  }
+}
+```
+
+The example is the value of `job_profiles`. Profiles accept 1–300 seconds
+and 1–65,536 bytes retained per stream. If `max_output_bytes` is omitted,
+the secure default is **4096 bytes per stream**. A state store allows up to eight
+active or uncertain jobs globally and five per client. It retains at most
+1,024 job directories. Before reaching the retention limit, the operator
+can archive completed directories while the gateway is stopped. Unknown
+outcomes retain their reservations pending operator reconciliation.
+
+The gateway syncs an audit intent and a signed `starting` receipt before
+launching a detached runner. The runner holds a kernel lease for the job,
+sets its working directory by a verified root handle and uses a fixed
+`PATH` and `LC_ALL`. Profile execution uses direct argv and disables Linux
+privilege gains on exec. The runner owns a separate session and gives its
+child a distinct process group. The runner holds the leader's PID until it
+has sent TERM and any needed KILL, then reaps children, including adopted
+descendants. Each job directory contains separate private `stdout.log` and
+`stderr.log` files. Pipes continue to drain after their retention caps.
+
+When an available user systemd manager provides cgroup v2 quotas, the
+runner verifies a transient scope with a 100% CPU quota and a 256 MiB memory
+ceiling. The scope also has a runtime backstop. A gateway launched without
+the standard user runtime directory or without verified quotas exposes CPU
+and memory ceilings as unavailable.
+
+Receipts include the client, argv hash, root and working directory, limits,
+runner and child identities, exit information, and truncation status.
+Updates fsync the stage, rename it, then fsync the directory. The runner
+syncs its final audit outcome before publishing a terminal receipt. The
+gateway verifies receipts with a store-local HMAC key and reconciles
+unfinished receipts using the lease and process identity. It never
+replays jobs. The runner continues across a gateway exit. On a new HTTP
+instance a previously active detached job is conservatively presented as
+`uncertain` until its independently signed final receipt arrives, without
+interrupting its actual runner or changing the persisted running state.
+If the lease is free and both runner and child are verifiably absent without
+final completion, the receipt becomes `lost`; if process existence cannot
+be determined, it remains `uncertain`. Recovery never signals numeric
+PIDs from stored records.
+
+Job audit entries carry client principal, job ID, argv SHA-256, cwd, timeout
+and retained-output limits, state transitions, and retained stdout/stderr
+byte counts. Raw argv, token material, environment and command output are
+excluded from the audit. The audit JSONL chain/rotation and torn-record
+reconciliation remain separate gated work.
+
+Profiles execute with the gateway user's OS access. A working-directory
+handle does not restrict the executable's later filesystem or network
+operations. The receipt key and private state rely on that UID and the
+operator-controlled paths. Audit chaining and independently verified
+power-loss behavior remain separate gates. See [the Phase A gate](PASS2_JOBS_GATE.md)
+for validation and open acceptance checks.
