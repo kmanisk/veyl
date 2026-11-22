@@ -2,6 +2,10 @@
 //! No persistent unit, public listener, or privileged operation is created.
 
 pub(crate) mod admission;
+#[cfg(target_os = "linux")]
+pub(crate) mod operator;
+#[cfg(target_os = "linux")]
+pub(crate) mod scope;
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -28,12 +32,18 @@ use mcp_gateway::security::policy::{self, Action, ExecutionMode, Grant, PolicyIn
 
 use crate::file_access::FileAccess;
 #[cfg(target_os = "linux")]
-use crate::jobs::Jobs;
+use crate::jobs::{JobPolicy, Jobs};
 use crate::protocol::Protocol;
 use crate::tools::mutation::MutationAudit;
-use crate::tools::registry::{Tool, read_file, tool_text};
+#[cfg(not(target_os = "linux"))]
+use crate::tools::registry::read_file;
+use crate::tools::registry::{Tool, tool_text};
 
-use admission::{Client, authenticate, load_clients};
+#[cfg(not(target_os = "linux"))]
+use admission::load_clients;
+use admission::{Client, authenticate};
+#[cfg(target_os = "linux")]
+use mcp_gateway::security::audit::AuditPhase;
 
 const MAX_BODY: usize = 1_048_576;
 const MAX_SESSIONS: usize = 128;
@@ -45,7 +55,7 @@ const MCP_VERSION: &str = "2025-11-25";
 type Reply = Response<Full<Bytes>>;
 
 struct Session {
-    owner: usize,
+    owner: String,
     protocol: Protocol,
     last_used: Instant,
 }
@@ -57,7 +67,10 @@ struct Failure {
 
 struct State {
     addr: SocketAddr,
+    #[cfg(not(target_os = "linux"))]
     clients: Vec<Client>,
+    #[cfg(target_os = "linux")]
+    policy: operator::PolicyCache,
     mutations: MutationAudit,
     #[cfg(target_os = "linux")]
     jobs: Option<Jobs>,
@@ -88,7 +101,10 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         return Err("HTTP service may only listen on 127.0.0.1".into());
     }
     let path = PathBuf::from(config.ok_or("missing --config")?);
+    #[cfg(not(target_os = "linux"))]
     let config = load_clients(&path)?;
+    #[cfg(target_os = "linux")]
+    let (policy, config) = operator::PolicyCache::open(&path)?;
     let has_mutation_grants = config.clients.iter().any(|client| {
         client.actions.contains(&Action::WriteFile) || client.actions.contains(&Action::ApplyPatch)
     });
@@ -99,23 +115,37 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         #[cfg(target_os = "linux")]
         config.audit_limits,
     )?;
-    if has_mutation_grants && !mutations.available() {
+    #[cfg(target_os = "linux")]
+    let degraded = mutations.read_only();
+    #[cfg(not(target_os = "linux"))]
+    let degraded = false;
+    if has_mutation_grants && !mutations.available() && !degraded {
         return Err("Mutation grants require a private, available audit log".into());
     }
     #[cfg(target_os = "linux")]
-    mutations.recover(&config.clients)?;
+    {
+        operator::verify_approvals(&config)?;
+        mutations.recover(&config.clients)?;
+    }
     #[cfg(target_os = "linux")]
     let jobs = config
         .jobs
+        .as_ref()
+        .filter(|_| !degraded)
         .map(|(state, profiles)| {
             Jobs::open(
-                &state,
-                profiles,
+                state,
+                profiles.clone(),
                 config.audit_log.as_deref().ok_or("Missing job audit log")?,
                 config.audit_limits,
             )
         })
         .transpose()?;
+
+    #[cfg(target_os = "linux")]
+    if config.managed {
+        operator::require_completed_legacy_jobs(&config)?;
+    }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -130,7 +160,10 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             .map_err(|_| "cannot inspect bound listener")?;
         let state = Arc::new(State {
             addr: actual,
+            #[cfg(not(target_os = "linux"))]
             clients: config.clients,
+            #[cfg(target_os = "linux")]
+            policy,
             mutations,
             #[cfg(target_os = "linux")]
             jobs,
@@ -212,11 +245,29 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
             return simple(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
         }
     }
-    let client_index = authenticate(
-        &state.clients,
-        request.headers().get(header::AUTHORIZATION),
-        now,
-    );
+    #[cfg(target_os = "linux")]
+    let settings = {
+        let snapshot_state = state.clone();
+        match tokio::task::spawn_blocking(move || {
+            snapshot_state.policy.read().map(|(_, settings)| settings)
+        })
+        .await
+        {
+            Ok(Ok(settings)) => settings,
+            _ => {
+                return simple(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Authorization state unavailable or restart required",
+                );
+            }
+        }
+    };
+    #[cfg(target_os = "linux")]
+    let clients = &settings.clients;
+    #[cfg(not(target_os = "linux"))]
+    let clients = &state.clients;
+
+    let client_index = authenticate(clients, request.headers().get(header::AUTHORIZATION), now);
     let Some(client_index) = client_index else {
         let mut locks = state.failures.lock().await;
         let failure = locks.entry(peer).or_insert(Failure {
@@ -238,7 +289,7 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
             "Unauthorized",
         );
     };
-    let client = &state.clients[client_index];
+    let client = &clients[client_index];
     let accepted = audit("auth.accepted");
     if !accepted {
         return simple(StatusCode::SERVICE_UNAVAILABLE, "Audit unavailable");
@@ -256,6 +307,8 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
         return simple(StatusCode::UNSUPPORTED_MEDIA_TYPE, "JSON required");
     }
 
+    #[cfg(target_os = "linux")]
+    let bearer = request.headers().get(header::AUTHORIZATION).cloned();
     let session_header = request
         .headers()
         .get("Mcp-Session-Id")
@@ -296,7 +349,7 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
         sessions.insert(
             id.clone(),
             Session {
-                owner: client_index,
+                owner: client.id.clone(),
                 protocol,
                 last_used: Instant::now(),
             },
@@ -311,7 +364,7 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     let Some(session) = sessions.get_mut(&session_id) else {
         return simple(StatusCode::NOT_FOUND, "Unknown MCP session");
     };
-    if session.owner != client_index {
+    if session.owner != client.id {
         return simple(StatusCode::FORBIDDEN, "Session access denied");
     }
     if session.last_used.elapsed() >= SESSION_IDLE {
@@ -321,15 +374,32 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     session.last_used = Instant::now();
 
     #[cfg(target_os = "linux")]
-    if (state.jobs.is_some() || cfg!(feature = "test-hooks"))
-        && matches!(method, Some("tools/list" | "tools/call"))
-    {
+    if matches!(method, Some("tools/list" | "tools/call")) {
         // Tool requests leave protocol phase unchanged. Release session state
         // before waiting on storage, a short command, or crash instrumentation.
         let mut protocol = session.protocol.clone();
         drop(sessions);
         return match tokio::task::spawn_blocking(move || {
-            dispatch_tools(&mut protocol, payload, &state, &state.clients[client_index])
+            let Ok((_admission, current)) = state.policy.read() else {
+                return simple(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Authorization state unavailable or restart required",
+                );
+            };
+            let Some(index) = authenticate(&current.clients, bearer.as_ref(), unix_seconds())
+            else {
+                return simple(StatusCode::UNAUTHORIZED, "Unauthorized");
+            };
+            if current.clients[index].id != settings.clients[client_index].id {
+                return simple(StatusCode::FORBIDDEN, "Session access denied");
+            }
+            dispatch_tools(
+                &mut protocol,
+                payload,
+                &state,
+                &current.clients[index],
+                current.managed,
+            )
         })
         .await
         {
@@ -340,7 +410,7 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
             ),
         };
     }
-    dispatch_tools(&mut session.protocol, payload, &state, client)
+    dispatch_tools(&mut session.protocol, payload, &state, client, false)
 }
 
 fn dispatch_tools(
@@ -348,42 +418,103 @@ fn dispatch_tools(
     payload: Value,
     state: &State,
     client: &Client,
+    managed: bool,
 ) -> Reply {
+    #[cfg(not(target_os = "linux"))]
+    let _ = managed;
     let response = protocol.dispatch_with_tools(
         payload,
         || {
             let audited = audit("policy.checked");
-            if !authorized(client, Action::ListTools, audited, unix_seconds()) {
+            if !authorized(client, Action::ListTools, state, audited, unix_seconds()) {
+                return Vec::new();
+            }
+            #[cfg(target_os = "linux")]
+            if client.mode == ExecutionMode::PersistentYolo
+                && (!state
+                    .mutations
+                    .record_yolo(&client.id, "tools/list", AuditPhase::Intent)
+                    || !state
+                        .mutations
+                        .record_yolo(&client.id, "tools/list", AuditPhase::Success))
+            {
                 return Vec::new();
             }
             Tool::ALL
                 .into_iter()
                 .filter(|tool| {
-                    authorized(client, tool.action(), audited, unix_seconds())
+                    authorized(client, tool.action(), state, audited, unix_seconds())
                         && tool_available(*tool, client, state)
                 })
                 .map(Tool::schema)
                 .collect()
         },
-        |files, name, args| {
-            let tool = Tool::parse(name)?;
+        |_, name, args| {
+            let tool = Tool::parse(name);
             let now = unix_seconds();
-            if !authorized(client, tool.action(), audit("policy.checked"), now) {
-                return Some(tool_text(true, "Not authorized"));
+            let permitted = tool.is_some_and(|tool| {
+                authorized(client, tool.action(), state, audit("policy.checked"), now)
+            });
+            if !permitted {
+                #[cfg(target_os = "linux")]
+                if client.mode == ExecutionMode::PersistentYolo {
+                    // Known names come from the tool registry. Never journal
+                    // the caller's arbitrary text for an unknown tool.
+                    let name = if tool.is_some() { name } else { "unknown_tool" };
+                    if state
+                        .mutations
+                        .record_yolo(&client.id, name, AuditPhase::Intent)
+                    {
+                        let _ = state
+                            .mutations
+                            .record_yolo(&client.id, name, AuditPhase::Failure);
+                    }
+                }
+                return tool.map(|_| tool_text(true, "Not authorized or capability unavailable"));
             }
+            let tool = tool?;
+            #[cfg(target_os = "linux")]
+            if client.mode == ExecutionMode::PersistentYolo {
+                return Some(yolo_tool(state, client, tool, name, args, now));
+            }
+            #[cfg(target_os = "linux")]
             if tool == Tool::ReadFile {
-                return Some(read_file(files, args));
+                return Some(
+                    scoped_file_tool(state, client, tool, args, now)
+                        .unwrap_or_else(|| tool_text(true, "Operation outside an approved scope")),
+                );
+            }
+            #[cfg(not(target_os = "linux"))]
+            if tool == Tool::ReadFile {
+                let files = FileAccess::new(&client.root);
+                return Some(match files {
+                    Ok(files) => read_file(&files, args),
+                    Err(_) => tool_text(true, "Client root unavailable"),
+                });
             }
             if tool.action().is_job() {
                 #[cfg(target_os = "linux")]
                 if let (Some(jobs), Some(root)) = (state.jobs.as_ref(), client.job_root.as_ref()) {
-                    return Some(jobs.call(tool, args, &client.id, root));
+                    return Some(jobs.call(
+                        tool,
+                        args,
+                        &client.id,
+                        root,
+                        JobPolicy {
+                            yolo: false,
+                            workspace_mounts: managed.then_some(&[]),
+                        },
+                    ));
                 }
                 return Some(tool_text(true, "Jobs unavailable"));
             }
             #[cfg(target_os = "linux")]
             if let Some(root) = client.mutation_root.as_ref() {
-                return Some(state.mutations.call(tool, args, root, &client.id, now));
+                return Some(
+                    state
+                        .mutations
+                        .call(tool, args, root, &client.id, now, false),
+                );
             }
             Some(tool_text(true, "Mutation unavailable"))
         },
@@ -393,6 +524,119 @@ fn dispatch_tools(
         None => simple(StatusCode::ACCEPTED, ""),
         Some(response) => json_response(StatusCode::OK, response, None),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn yolo_tool(
+    state: &State,
+    client: &Client,
+    tool: Tool,
+    name: &str,
+    args: Option<&Value>,
+    now: u64,
+) -> Value {
+    if !state
+        .mutations
+        .record_yolo(&client.id, name, AuditPhase::Intent)
+    {
+        return tool_text(true, "Audit intent unavailable");
+    }
+    let result = if tool.action().is_job() {
+        match (state.jobs.as_ref(), client.job_root.as_ref()) {
+            (Some(jobs), Some(root)) => Some(jobs.call(
+                tool,
+                args,
+                &client.id,
+                root,
+                JobPolicy {
+                    yolo: true,
+                    workspace_mounts: Some(&client.job_extra_roots),
+                },
+            )),
+            _ => None,
+        }
+    } else {
+        scoped_file_tool(state, client, tool, args, now)
+    }
+    .unwrap_or_else(|| tool_text(true, "Operation unavailable or outside an approved scope"));
+
+    let phase = if result["isError"].as_bool() == Some(true) {
+        AuditPhase::Failure
+    } else {
+        AuditPhase::Success
+    };
+    if !state.mutations.record_yolo(&client.id, name, phase) {
+        return tool_text(
+            true,
+            "Audit outcome unavailable; operation status uncertain",
+        );
+    }
+    result
+}
+
+#[cfg(target_os = "linux")]
+fn scoped_file_tool(
+    state: &State,
+    client: &Client,
+    tool: Tool,
+    args: Option<&Value>,
+    now: u64,
+) -> Option<Value> {
+    use std::path::{Component, Path};
+
+    let args = args?.as_object()?;
+    let raw_path = args.get("path")?.as_str()?;
+    let path = Path::new(raw_path);
+    if raw_path.split('/').any(|part| part == ".." || part == ".") {
+        return None;
+    }
+    let yolo = client.mode == ExecutionMode::PersistentYolo;
+    let (root, relative) = if path.is_absolute() {
+        if !yolo {
+            return None;
+        }
+        client
+            .mutation_root
+            .iter()
+            .chain(&client.extra_roots)
+            .find_map(|root| {
+                path.strip_prefix(root.path())
+                    .ok()
+                    .map(|relative| (root, relative))
+            })?
+    } else {
+        (client.mutation_root.as_ref()?, path)
+    };
+    if relative.as_os_str().is_empty()
+        || !relative
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+    {
+        return None;
+    }
+    if operator::policy_path(state.policy.path(), &root.path().join(relative)) {
+        return None;
+    }
+    let relative = relative.to_str()?;
+    if tool == Tool::ReadFile {
+        if args.len() != 1 {
+            return None;
+        }
+        return Some(match root.read(relative) {
+            Ok(content) => tool_text(false, &content),
+            Err(message) => tool_text(true, message),
+        });
+    }
+    let mut args = args.clone();
+    args.insert("path".into(), relative.into());
+    Some(state.mutations.call(
+        tool,
+        Some(&Value::Object(args)),
+        root,
+        &client.id,
+        now,
+        true,
+    ))
 }
 
 fn tool_available(tool: Tool, client: &Client, state: &State) -> bool {
@@ -410,7 +654,15 @@ fn tool_available(tool: Tool, client: &Client, state: &State) -> bool {
     mutation_available(client, &state.mutations)
 }
 
-fn authorized(client: &Client, action: Action, audit_available: bool, now: u64) -> bool {
+fn authorized(
+    client: &Client,
+    action: Action,
+    state: &State,
+    audit_available: bool,
+    now: u64,
+) -> bool {
+    let audit_available = audit_available
+        && (client.mode != ExecutionMode::PersistentYolo || state.mutations.available());
     let grant = Grant {
         principal: &client.id,
         root: &client.root,
@@ -422,7 +674,7 @@ fn authorized(client: &Client, action: Action, audit_available: bool, now: u64) 
         action,
         requested_root: &client.root,
         grant: Some(&grant),
-        mode: ExecutionMode::Standard,
+        mode: client.mode,
         audit_available,
         now_unix_seconds: now,
     })

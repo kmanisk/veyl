@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::chain::{self, Tip};
-use super::{AuditLimits, StageProof, check_directory, check_file, invalid_audit, same_inode};
+use super::{
+    AuditLimits, StageProof, check_directory, check_file, check_file_mode, invalid_audit,
+    same_inode,
+};
 use crate::security::linux_fs::{open_operator_dir, reopen_regular};
 
 const PRIVATE_FILE: Mode = Mode::RUSR.union(Mode::WUSR);
@@ -33,6 +36,7 @@ pub(super) struct Ledger {
     lock: File,
     limits: AuditLimits,
     cache: Mutex<Option<Snapshot>>,
+    read_only_active: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -86,7 +90,8 @@ impl Ledger {
             if active.is_none() {
                 let archived = ledger.archives()?;
                 if head.is_some() || !archived.is_empty() {
-                    let (_, observed) = ledger.scan(&archived, head.as_ref(), false, false)?;
+                    let (_, observed) =
+                        ledger.scan(&archived, head.as_ref(), false, false, |_| {})?;
                     if !ledger.interrupted_rotation(&archived, head.as_ref(), &observed.head.tip) {
                         return Err(invalid_audit());
                     }
@@ -110,7 +115,8 @@ impl Ledger {
                 return Err(invalid_audit());
             }
             segments.push(active);
-            let (inspection, verified) = ledger.scan(&segments, head.as_ref(), true, false)?;
+            let (inspection, verified) =
+                ledger.scan(&segments, head.as_ref(), true, false, |_| {})?;
             if inspection.torn_bytes != 0 {
                 ledger.append_locked(
                     verified,
@@ -136,7 +142,26 @@ impl Ledger {
 
     pub(super) fn inspect_path(path: &Path, collect: bool) -> io::Result<Inspection> {
         let ledger = Self::bind(path, AuditLimits::default(), false)?;
-        ledger.transaction(|ledger| ledger.verify(collect))
+        ledger.transaction(|ledger| ledger.verify(collect, |_| {}))
+    }
+
+    pub(super) fn inspect_transitions(
+        path: &Path,
+        mut visit: impl FnMut(&Value),
+    ) -> io::Result<()> {
+        let mut ledger = Self::bind(path, AuditLimits::default(), false)?;
+        ledger
+            .transaction(|ledger| ledger.verify(false, &mut visit).map(|_| ()))
+            .or_else(|_| {
+                ledger.read_only_active = true;
+                ledger.transaction(|ledger| ledger.verify(false, visit).map(|_| ()))
+            })
+    }
+
+    pub(super) fn verify_read_only_active(path: &Path) -> io::Result<()> {
+        let mut ledger = Self::bind(path, AuditLimits::default(), false)?;
+        ledger.read_only_active = true;
+        ledger.transaction(|ledger| ledger.verify(false, |_| {}).map(|_| ()))
     }
 
     fn bind(path: &Path, limits: AuditLimits, create: bool) -> io::Result<Self> {
@@ -179,6 +204,7 @@ impl Ledger {
             lock,
             limits,
             cache: Mutex::new(None),
+            read_only_active: false,
         })
     }
 
@@ -329,7 +355,7 @@ impl Ledger {
         {
             return Ok(snapshot.clone());
         }
-        let (_, verified) = self.scan(&segments, Some(&head), false, false)?;
+        let (_, verified) = self.scan(&segments, Some(&head), false, false, |_| {})?;
         if verified.head != head {
             // A complete uncheckpointed append is recoverable on startup.
             // A running writer must stop after a persistence failure.
@@ -342,16 +368,16 @@ impl Ledger {
     }
 
     pub(super) fn inspection(&self, collect: bool) -> io::Result<Inspection> {
-        self.transaction(|ledger| ledger.verify(collect))
+        self.transaction(|ledger| ledger.verify(collect, |_| {}))
     }
 
-    fn verify(&self, collect: bool) -> io::Result<Inspection> {
+    fn verify(&self, collect: bool, visit: impl FnMut(&Value)) -> io::Result<Inspection> {
         let head = self.read_head()?.ok_or_else(invalid_audit)?;
         let segments = self.segments()?;
         if segments.last().map(Segment::identity) != Some(head.active) {
             return Err(invalid_audit());
         }
-        let (inspection, verified) = self.scan(&segments, Some(&head), false, collect)?;
+        let (inspection, verified) = self.scan(&segments, Some(&head), false, collect, visit)?;
         if verified.head != head {
             return Err(io::Error::other(
                 "audit checkpoint requires startup recovery",
@@ -376,6 +402,7 @@ impl Ledger {
         expected: Option<&Head>,
         recover: bool,
         collect: bool,
+        mut visit: impl FnMut(&Value),
     ) -> io::Result<(Inspection, Snapshot)> {
         let mut tip = Tip::default();
         let mut records = Vec::new();
@@ -428,6 +455,7 @@ impl Ledger {
                         return Err(chain::broken(tip.sequence));
                     }
                 }
+                visit(&record);
                 if collect {
                     collect_stage(&mut stages, &record)?;
                     record["hash"] = Value::from(tip.hash.clone());
@@ -520,7 +548,7 @@ impl Ledger {
     fn segment(&self, name: &OsStr) -> io::Result<Option<Segment>> {
         match fs::statat(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW) {
             Ok(stat) => {
-                check_file(&stat)?;
+                check_file_mode(&stat, self.segment_mode(name))?;
                 Ok(Some(Segment {
                     name: name.to_owned(),
                     info: info(&stat),
@@ -532,8 +560,21 @@ impl Ledger {
         }
     }
 
+    fn segment_mode(&self, name: &OsStr) -> u32 {
+        if self.read_only_active && name == self.name {
+            0o400
+        } else {
+            0o600
+        }
+    }
+
     fn open_segment(&self, segment: &Segment, flags: OFlags) -> io::Result<File> {
-        let file = open_file(&self.directory, &segment.name, flags)?;
+        let file = open_file_mode(
+            &self.directory,
+            &segment.name,
+            flags,
+            self.segment_mode(&segment.name),
+        )?;
         if info(&fs::fstat(&file)?) != segment.info {
             return Err(invalid_audit());
         }
@@ -645,14 +686,23 @@ fn create_file(directory: impl AsFd, name: &OsStr) -> io::Result<File> {
 }
 
 fn open_file(directory: impl AsFd, name: &OsStr, flags: OFlags) -> io::Result<File> {
+    open_file_mode(directory, name, flags, 0o600)
+}
+
+fn open_file_mode(
+    directory: impl AsFd,
+    name: &OsStr,
+    flags: OFlags,
+    mode: u32,
+) -> io::Result<File> {
     let handle = fs::openat(
         directory,
         name,
         OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )?;
-    check_file(&fs::fstat(&handle)?)?;
+    check_file_mode(&fs::fstat(&handle)?, mode)?;
     let file = reopen_regular(handle, flags | OFlags::NONBLOCK)?;
-    check_file(&fs::fstat(&file)?)?;
+    check_file_mode(&fs::fstat(&file)?, mode)?;
     Ok(file.into())
 }

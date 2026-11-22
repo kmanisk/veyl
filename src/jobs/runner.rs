@@ -33,9 +33,13 @@ pub(super) struct Launch {
     pub job_id: String,
     pub nonce: String,
     pub scoped: bool,
+    pub yolo: bool,
+    pub isolated: bool,
+    pub sandbox_roots: Vec<RootIdentity>,
 }
 
 pub(crate) fn run_worker() -> io::Result<()> {
+    super::sandbox::check_inherited_fds()?;
     process::prepare_worker()?;
     restrict_child_privileges()?;
     let mut input = Vec::new();
@@ -67,6 +71,9 @@ pub(crate) fn run_worker() -> io::Result<()> {
             || receipt.argv_sha256 != launch.profile.argv_hash()
             || receipt.timeout_seconds != launch.profile.timeout_seconds
             || receipt.max_output_bytes != launch.profile.max_output_bytes
+            || receipt.yolo != launch.yolo
+            || receipt.isolated != launch.isolated
+            || receipt.sandbox_roots != launch.sandbox_roots
         {
             return Err(invalid());
         }
@@ -89,11 +96,30 @@ pub(crate) fn run_worker() -> io::Result<()> {
         audit.check_binding()?;
 
         let start = Instant::now();
-        let mut child = match Command::new(&launch.profile.executable)
-            .args(&launch.profile.args)
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("LC_ALL", "C")
+        let mut sandbox;
+        let mut standard;
+        let command = if launch.isolated {
+            sandbox = match super::sandbox::Sandbox::for_job(
+                &launch.root,
+                &cwd,
+                &launch.sandbox_roots,
+                &launch.profile.executable,
+                &launch.profile.args,
+            ) {
+                Ok(sandbox) => sandbox,
+                Err(_) => return finish(&job, &mut audit, receipt, State::Failed),
+            };
+            &mut sandbox.command
+        } else {
+            standard = Command::new(&launch.profile.executable);
+            standard
+                .args(&launch.profile.args)
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("LC_ALL", "C");
+            &mut standard
+        };
+        let mut child = match command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

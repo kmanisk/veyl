@@ -12,7 +12,7 @@ use super::receipt::{Receipt, State};
 use super::resources::Scopes;
 use super::runner::{Launch, WIRE_LIMIT};
 use super::store::HISTORY_LIMIT;
-use super::{JobRoot, Jobs, invalid, logs, now, process, random_hex, record};
+use super::{JobPolicy, JobRoot, Jobs, invalid, logs, now, process, random_hex, record};
 
 const GLOBAL_JOBS: usize = 8;
 const CLIENT_JOBS: usize = 5;
@@ -24,7 +24,22 @@ impl Jobs {
         root: &JobRoot,
         name: String,
         profile: Profile,
+        policy: JobPolicy<'_>,
     ) -> io::Result<Receipt> {
+        super::sandbox::check_inherited_fds()?;
+        let sandbox_roots = policy
+            .workspace_mounts
+            .unwrap_or_default()
+            .iter()
+            .map(|root| root.identity().clone())
+            .collect::<Vec<_>>();
+        for root in &sandbox_roots {
+            root.handle()?;
+        }
+        if policy.workspace_mounts.is_some() {
+            super::sandbox::probe()?;
+            super::sandbox::validate_executable(&profile.executable)?;
+        }
         let root = root.identity();
         root.handle()?;
         let _transaction = self.store.lock(false)?;
@@ -69,6 +84,9 @@ impl Jobs {
             stdout_bytes: 0,
             stderr_bytes: 0,
             resource_ceilings_enforced: false,
+            yolo: policy.yolo,
+            isolated: policy.workspace_mounts.is_some(),
+            sandbox_roots: sandbox_roots.clone(),
         };
         let job = self.store.create(&receipt.job_id)?;
         let lease = job.init_files()?;
@@ -95,6 +113,9 @@ impl Jobs {
             job_id: receipt.job_id.clone(),
             nonce: receipt.launch_nonce.clone(),
             scoped: self.scopes.is_some(),
+            yolo: receipt.yolo,
+            isolated: receipt.isolated,
+            sandbox_roots,
         };
         if start_runner(launch, lease, self.scopes.as_ref()).is_err() {
             let mut failed = receipt;

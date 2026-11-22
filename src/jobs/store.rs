@@ -31,6 +31,40 @@ pub(super) struct Store {
     key: [u8; 32],
 }
 
+/// Used under the operator's exclusive policy lock before admitting the first
+/// managed request. Every job start in this binary holds the shared lock.
+pub(crate) fn has_unconfined_jobs(path: &Path) -> io::Result<bool> {
+    let directory = match open_operator_dir(path) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    private_dir(&directory)?;
+    let populated = Dir::read_from(&directory)?.any(|entry| {
+        entry.is_err()
+            || entry.is_ok_and(|entry| !matches!(entry.file_name().to_bytes(), b"." | b".."))
+    });
+    if !populated {
+        return Ok(false);
+    }
+    let store = Store::open(path, false)?;
+    let _lock = store.lock(false)?;
+    for id in store.jobs()? {
+        let job = store.job(&id)?;
+        let receipt = match job.read() {
+            Ok(receipt) => receipt,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if !receipt.isolated
+            && (receipt.state.active() || receipt.state == super::receipt::State::Uncertain)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 impl Store {
     pub fn open(path: &Path, create: bool) -> io::Result<Self> {
         let directory = match open_operator_dir(path) {

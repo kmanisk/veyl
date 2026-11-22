@@ -36,8 +36,34 @@ impl MutationRoot {
         })
     }
 
-    pub(super) fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn read(&self, path: &str) -> Result<String, &'static str> {
+        const UNAVAILABLE: &str = "File unavailable or outside an approved root";
+        let handle = fs::openat2(
+            &self.directory,
+            path,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::BENEATH
+                | ResolveFlags::NO_XDEV
+                | ResolveFlags::NO_SYMLINKS
+                | ResolveFlags::NO_MAGICLINKS,
+        )
+        .map_err(|_| UNAVAILABLE)?;
+        let stat = fs::fstat(&handle).map_err(|_| UNAVAILABLE)?;
+        if stat.st_nlink != 1 || FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+            return Err("Expected a singly-linked regular file");
+        }
+        let file = File::from(
+            reopen_regular(handle, OFlags::RDONLY | OFlags::NONBLOCK).map_err(|_| UNAVAILABLE)?,
+        );
+        read_text(&file, &stat).map_err(|error| match error {
+            Rejected(message) => message,
+            MutationError::Uncertain => UNAVAILABLE,
+        })
     }
 
     pub(super) fn recover_stage(

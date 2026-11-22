@@ -75,6 +75,7 @@ impl Profile {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Profiles(BTreeMap<String, Profile>);
 
 #[derive(Deserialize)]
@@ -84,6 +85,8 @@ struct JobDocument {
     _clients: Vec<JobClient>,
     #[serde(rename = "audit_log")]
     _audit_log: String,
+    #[serde(default, rename = "policy_version")]
+    _policy_version: Option<u64>,
     #[serde(default, rename = "max_audit_file_bytes")]
     _max_audit_file_bytes: Option<u64>,
     #[serde(default, rename = "max_audit_dir_bytes")]
@@ -106,6 +109,14 @@ struct JobClient {
     _root: String,
     #[serde(rename = "tools")]
     _tools: Vec<String>,
+    #[serde(default, rename = "mode")]
+    _mode: Option<String>,
+    #[serde(default, rename = "yolo_roots")]
+    _yolo_roots: Option<Vec<PathBuf>>,
+    #[serde(default, rename = "yolo_shared_roots")]
+    _yolo_shared_roots: Option<Vec<PathBuf>>,
+    #[serde(default, rename = "yolo_revision")]
+    _yolo_revision: Option<String>,
 }
 
 pub(crate) fn parse_settings(bytes: &[u8]) -> Result<(PathBuf, Profiles), String> {
@@ -207,7 +218,7 @@ pub(crate) struct JobRoot {
     _directory: File,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct RootIdentity {
     path: PathBuf,
     id: [u64; 2],

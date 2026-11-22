@@ -21,6 +21,8 @@ pub(crate) struct MutationAudit {
     #[cfg(target_os = "linux")]
     sink: Mutex<Option<AuditSink>>,
     #[cfg(target_os = "linux")]
+    read_only: bool,
+    #[cfg(target_os = "linux")]
     credentials: PathBuf,
     #[cfg(target_os = "linux")]
     directory: Option<PathBuf>,
@@ -34,12 +36,19 @@ impl MutationAudit {
     ) -> Result<Self, String> {
         #[cfg(target_os = "linux")]
         {
+            let (sink, read_only) = match path {
+                None => (None, false),
+                Some(path) => match AuditSink::open_with_limits(path, limits) {
+                    Ok(sink) => (Some(sink), false),
+                    Err(error) => {
+                        AuditSink::verify_read_only_active(path).map_err(|_| error.to_string())?;
+                        (None, true)
+                    }
+                },
+            };
             Ok(Self {
-                sink: Mutex::new(
-                    path.map(|p| AuditSink::open_with_limits(p, limits))
-                        .transpose()
-                        .map_err(|error| error.to_string())?,
-                ),
+                sink: Mutex::new(sink),
+                read_only,
                 credentials: config
                     .canonicalize()
                     .unwrap_or_else(|_| config.to_path_buf()),
@@ -63,13 +72,16 @@ impl MutationAudit {
             let Some(root) = clients
                 .iter()
                 .find(|client| client.id == principal)
-                .and_then(|client| client.mutation_root.as_ref())
+                .and_then(|client| {
+                    client
+                        .mutation_root
+                        .iter()
+                        .chain(&client.extra_roots)
+                        .find(|root| root.path() == proof.root)
+                })
             else {
                 continue;
             };
-            if root.path() != proof.root {
-                continue;
-            }
             root.recover_stage(&proof, |phase| {
                 sink.record_stage(
                     &principal,
@@ -98,6 +110,21 @@ impl MutationAudit {
     }
 
     #[cfg(target_os = "linux")]
+    pub(crate) fn read_only(&self) -> bool {
+        self.read_only
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn record_yolo(&self, principal: &str, tool: &str, phase: AuditPhase) -> bool {
+        self.sink.lock().is_ok_and(|guard| {
+            guard.as_ref().is_some_and(|sink| {
+                sink.record_yolo(principal, tool, phase, unix_seconds())
+                    .is_ok()
+            })
+        })
+    }
+
+    #[cfg(target_os = "linux")]
     pub(crate) fn call(
         &self,
         tool: Tool,
@@ -105,6 +132,7 @@ impl MutationAudit {
         root: &MutationRoot,
         principal: &str,
         unix_seconds: u64,
+        yolo: bool,
     ) -> Value {
         let Some(args) = args.and_then(Value::as_object) else {
             return tool_text(true, "Expected mutation arguments");
@@ -146,6 +174,7 @@ impl MutationAudit {
             principal,
             action,
             unix_seconds,
+            yolo,
             attempted: false,
             healthy: true,
             proof: None,
@@ -214,6 +243,7 @@ struct MutationJournal<'a> {
     principal: &'a str,
     action: AuditAction,
     unix_seconds: u64,
+    yolo: bool,
     attempted: bool,
     healthy: bool,
     proof: Option<StageProof>,
@@ -234,6 +264,12 @@ impl MutationJournal<'_> {
     }
 
     fn record(&self, phase: AuditPhase, proof: Option<&StageProof>) -> bool {
+        if self.yolo {
+            return self
+                .sink
+                .record_yolo_mutation(self.principal, self.action, phase, self.unix_seconds, proof)
+                .is_ok();
+        }
         match proof {
             Some(proof) => {
                 self.sink
@@ -294,6 +330,7 @@ mod tests {
                 principal: "client",
                 action: AuditAction::WriteFile,
                 unix_seconds: 1,
+                yolo: false,
                 attempted: false,
                 healthy: true,
                 proof: None,

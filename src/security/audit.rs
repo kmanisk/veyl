@@ -41,6 +41,7 @@ pub struct JobAuditInfo<'a> {
     pub state: &'a str,
     pub stdout_bytes: usize,
     pub stderr_bytes: usize,
+    pub yolo: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -106,6 +107,14 @@ pub struct StageProof {
     pub uid: u32,
 }
 
+enum EventDetails<'a> {
+    File {
+        proof: Option<&'a StageProof>,
+        yolo: bool,
+    },
+    Job(JobAuditInfo<'a>),
+}
+
 #[derive(Debug)]
 pub struct AuditSink(Ledger);
 
@@ -133,7 +142,16 @@ impl AuditSink {
         phase: AuditPhase,
         unix_seconds: u64,
     ) -> io::Result<()> {
-        self.record_event(principal, action, phase, unix_seconds, None, None)
+        self.record_event(
+            principal,
+            action,
+            phase,
+            unix_seconds,
+            EventDetails::File {
+                proof: None,
+                yolo: false,
+            },
+        )
     }
 
     pub fn record_stage(
@@ -144,7 +162,101 @@ impl AuditSink {
         unix_seconds: u64,
         proof: &StageProof,
     ) -> io::Result<()> {
-        self.record_event(principal, action, phase, unix_seconds, None, Some(proof))
+        self.record_event(
+            principal,
+            action,
+            phase,
+            unix_seconds,
+            EventDetails::File {
+                proof: Some(proof),
+                yolo: false,
+            },
+        )
+    }
+
+    pub fn record_yolo_mutation(
+        &self,
+        principal: &str,
+        action: AuditAction,
+        phase: AuditPhase,
+        unix_seconds: u64,
+        proof: Option<&StageProof>,
+    ) -> io::Result<()> {
+        self.record_event(
+            principal,
+            action,
+            phase,
+            unix_seconds,
+            EventDetails::File { proof, yolo: true },
+        )
+    }
+
+    pub fn verify_read_only_active(path: &Path) -> io::Result<()> {
+        Ledger::verify_read_only_active(path)
+    }
+
+    pub fn record_yolo(
+        &self,
+        principal: &str,
+        tool: &str,
+        phase: AuditPhase,
+        unix_seconds: u64,
+    ) -> io::Result<()> {
+        validate_principal(principal)?;
+        self.0.append(json!({
+            "principal": principal,
+            "tool": tool,
+            "phase": phase.label(),
+            "unix_seconds": unix_seconds,
+            "yolo": true,
+        }))
+    }
+
+    pub fn verify_mode_approvals(path: &Path, expected: &[(&str, &str)]) -> io::Result<()> {
+        let mut approvals: std::collections::HashMap<_, _> = expected
+            .iter()
+            .map(|&(principal, revision)| (principal, (revision, false)))
+            .collect();
+        Ledger::inspect_transitions(path, |record| {
+            if record["tool"] == "yolo_transition"
+                && record["phase"] == "success"
+                && let Some((revision, matched)) = record["principal"]
+                    .as_str()
+                    .and_then(|principal| approvals.get_mut(principal))
+            {
+                *matched = record["requested_mode"] == "yolo"
+                    && record["policy_revision"].as_str() == Some(*revision);
+            }
+        })?;
+        if approvals.values().any(|(_, matched)| !matched) {
+            return Err(io::Error::other(
+                "YOLO authorization has no successful audit transition",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn record_mode(
+        &self,
+        principal: &str,
+        previous: &str,
+        requested: &str,
+        revision: &str,
+        phase: AuditPhase,
+        unix_seconds: u64,
+    ) -> io::Result<()> {
+        validate_principal(principal)?;
+        self.0.append(json!({
+            "principal": principal,
+            "tool": "yolo_transition",
+            "phase": phase.label(),
+            "unix_seconds": unix_seconds,
+            "actor_uid": rustix::process::geteuid().as_raw(),
+            "previous_mode": previous,
+            "requested_mode": requested,
+            "policy_revision": revision,
+            "yolo": requested == "yolo",
+        }))
     }
 
     pub fn pending_stages(&self) -> io::Result<Vec<(String, StageProof)>> {
@@ -194,7 +306,13 @@ impl AuditSink {
                 "invalid audit job metadata",
             ));
         }
-        self.record_event(principal, action, phase, unix_seconds, Some(details), None)
+        self.record_event(
+            principal,
+            action,
+            phase,
+            unix_seconds,
+            EventDetails::Job(details),
+        )
     }
 
     fn record_event(
@@ -203,16 +321,9 @@ impl AuditSink {
         action: AuditAction,
         phase: AuditPhase,
         unix_seconds: u64,
-        details: Option<JobAuditInfo<'_>>,
-        stage: Option<&StageProof>,
+        details: EventDetails<'_>,
     ) -> io::Result<()> {
-        if principal.is_empty() || principal.len() > 128 || principal.chars().any(char::is_control)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid audit principal",
-            ));
-        }
+        validate_principal(principal)?;
 
         let tool = match action {
             AuditAction::WriteFile => "write_file",
@@ -221,33 +332,58 @@ impl AuditSink {
             AuditAction::JobCancel => "job_cancel",
             AuditAction::StageCleanup => "stage_cleanup",
         };
-        let phase = match phase {
-            AuditPhase::Intent => "intent",
-            AuditPhase::Success => "success",
-            AuditPhase::Failure => "failure",
-            AuditPhase::Uncertain => "uncertain",
-        };
         let mut event = serde_json::json!({
             "principal": principal,
             "tool": tool,
-            "phase": phase,
+            "phase": phase.label(),
             "unix_seconds": unix_seconds,
         });
-        if let Some(details) = details {
-            event["job_id"] = details.job_id.into();
-            event["argv_sha256"] = details.argv_sha256.into();
-            event["cwd"] = details.cwd.to_string_lossy().into_owned().into();
-            event["timeout_seconds"] = details.timeout_seconds.into();
-            event["max_output_bytes"] = details.max_output_bytes.into();
-            event["state"] = details.state.into();
-            event["stdout_bytes"] = details.stdout_bytes.into();
-            event["stderr_bytes"] = details.stderr_bytes.into();
-        }
-        if let Some(proof) = stage {
-            event["staging"] = serde_json::to_value(proof)?;
+        match details {
+            EventDetails::File { proof, yolo } => {
+                if yolo {
+                    event["yolo"] = true.into();
+                }
+                if let Some(proof) = proof {
+                    event["staging"] = serde_json::to_value(proof)?;
+                }
+            }
+            EventDetails::Job(details) => {
+                if details.yolo {
+                    event["yolo"] = true.into();
+                }
+                event["job_id"] = details.job_id.into();
+                event["argv_sha256"] = details.argv_sha256.into();
+                event["cwd"] = details.cwd.to_string_lossy().into_owned().into();
+                event["timeout_seconds"] = details.timeout_seconds.into();
+                event["max_output_bytes"] = details.max_output_bytes.into();
+                event["state"] = details.state.into();
+                event["stdout_bytes"] = details.stdout_bytes.into();
+                event["stderr_bytes"] = details.stderr_bytes.into();
+            }
         }
         self.0.append(event)
     }
+}
+
+impl AuditPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Intent => "intent",
+            Self::Success => "success",
+            Self::Failure => "failure",
+            Self::Uncertain => "uncertain",
+        }
+    }
+}
+
+fn validate_principal(principal: &str) -> io::Result<()> {
+    if principal.is_empty() || principal.len() > 128 || principal.chars().any(char::is_control) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid audit principal",
+        ));
+    }
+    Ok(())
 }
 
 fn invalid_audit() -> io::Error {
@@ -271,8 +407,12 @@ fn check_directory(directory: impl AsFd) -> io::Result<()> {
 }
 
 fn check_file(metadata: &Stat) -> io::Result<()> {
+    check_file_mode(metadata, 0o600)
+}
+
+fn check_file_mode(metadata: &Stat, mode: u32) -> io::Result<()> {
     if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile
-        || metadata.st_mode & 0o7777 != 0o600
+        || metadata.st_mode & 0o7777 != mode
         || metadata.st_uid != rustix::process::geteuid().as_raw()
         || metadata.st_nlink != 1
     {

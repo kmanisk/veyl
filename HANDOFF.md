@@ -527,3 +527,183 @@ parent directory.
 The external checkpoint is the lowest-overhead option because it can run
 on demand without adding a resident process. Gate 1 leaves this threat
 unresolved.
+
+## Beta 1 Gate 2 authorization and execution
+
+Gate 2 extends the existing private client JSON with `policy_version: 1`
+and per-client `mode`. Omitted mode means Standard. `disabled` rejects the
+client's bearer requests, including requests on existing MCP sessions.
+`yolo` requires a policy revision that matches the client's latest
+successful mode transition in the audit chain. The local CLI owns these
+transitions. A YOLO setting has no TTL. Credential expiry and tool grants
+continue to apply in every mode.
+
+```sh
+mcp-gateway yolo status --client codex --config /absolute/operator/clients.json
+mcp-gateway yolo enable --client codex --config /absolute/operator/clients.json
+mcp-gateway yolo disable --client codex --config /absolute/operator/clients.json
+```
+
+The Linux config owner and a non-group-writable operator directory define
+the local administration boundary. The HTTP transport has no operator
+tool or route. The CLI and HTTP admission coordinate through an advisory
+file lock. The CLI syncs the audit intent, publishes and syncs a pending
+marker, atomically replaces and syncs the config, records the successful
+outcome, and removes and syncs the marker. Admission reads the private
+file under a shared lock and rechecks the bearer and current policy at
+tool dispatch. Identical bytes in a replaced or edited file are
+revalidated against audit. Changes to audit or job-store settings require
+a restart.
+
+An interrupted transition quarantines the configuration. Restore a
+healthy audit ledger first if it is unavailable. Then run `yolo disable`
+for the affected client to publish a safe policy and record the recovery.
+Restoring an old YOLO configuration over a later recorded revocation is
+rejected. A verified owner-read-only active audit segment permits
+degraded startup. Mutation, job execution and YOLO operations remain
+denied until the operator restores a writable ledger and restarts.
+
+Use per-client `yolo_roots` to authorize existing canonical directories
+outside the primary root. Only the selected client's granted tools can
+access them, and explicit extra roots can be included in that client's
+isolated jobs. An empty array opts out of extra roots. For an existing
+file-only config with no `yolo_roots`, explicit CLI enablement can approve
+a snapshot of eligible owner-only sibling directories in the private
+operator workspace collection. The collection must be mode `0700` and
+contain the client's primary root as a direct child. The snapshot
+excludes hidden directories, other client roots, and known gateway state.
+Those implicit shares are file-tool only. No future sibling is picked up
+automatically. Prefer explicit roots for real deployments.
+
+Linux HTTP file tools use pinned root handles and kernel path resolution.
+Configuration, audit and job-store paths are kept outside approved
+scopes. On legacy read-only configurations that keep credentials in the
+client root, the file path and policy companions are excluded explicitly.
+File tools run in the trusted gateway process and enforce path policy
+through Linux file descriptors. Job execution has a separate kernel
+boundary.
+
+Managed execution uses Bubblewrap for both detached jobs and
+`run_command`. On Linux x86_64 it creates user, mount, PID, IPC, UTS and
+network namespaces. It drops capabilities, disables nested user
+namespaces, clears the environment, mounts fixed system binaries and
+libraries read-only, and exposes the selected workspace directories
+through pinned handles. Seccomp denies socket creation, file-handle opens,
+and io_uring setup. The runner rejects unexpected inheritable descriptors
+before job publication and again at runner entry. Commands use a fixed
+operator profile. Profiles can call a system interpreter with an
+approved workspace script. Job roots containing nested mounts and
+unavailable kernel prerequisites fail closed.
+
+Unversioned Milestone 2 configurations retain the legacy, operator-trusted
+fixed host profiles. They carry the gateway user's OS authority. Treat
+their executables, arguments and inputs as trusted. The first managed
+transition refuses while a legacy job is active or has an uncertain
+outcome. After migration, both Standard and YOLO jobs remain confined
+even after the last YOLO client is downgraded. The local actor controlling
+the operator UID and files remains trusted.
+
+Revocation applies at the next tool admission. A job already admitted can
+finish inside its original immutable sandbox or be canceled through the
+owner's granted job tool. Restart reconciles the signed receipt without
+replaying the command. An active detached runner may be reported as
+uncertain while it finishes. Cancellation becomes terminal only after
+cleanup is reconciled.
+
+YOLO intents and outcomes use the Gate 1 ledger. Protected job logs stay
+in the job store. The local hash chain still cannot independently prove
+history against someone with the audit owner's authority. Anchoring a
+signed or verifiable audit head off the device remains the lowest
+overhead option.
+
+### Gate 2 verification
+
+The trusted verifier passed 102/102 cases across 13 suites. The 78
+inherited cases and the 11 YOLO cases used the normal build. The audit
+suite used a separate `test-hooks` build and passed all 13 cases.
+The trusted combined command has a quoting defect for the audit Python
+path. For audit, the unchanged trusted extra-test entry point ran the
+same pinned file read-only with the isolated hook-enabled binary.
+All 15 registered suite pins matched before and after verification.
+Dashboard and service/network were hash-checked only.
+
+| Suite | Passed | SHA-256 |
+| --- | ---: | --- |
+| Stdio | 8 | `0b9a680e155b156f65cbbb766dc7e9444bf494aeb45bfb4c43c596a55cdadc9f` |
+| Stdio edge | 7 | `5379e25caf867bd6db739a36fc21bc5c80ac4607b77ed7ebdd488d5122f76dde` |
+| Standard policy | 10 | `76edbb613950fc66a0fbe9c68bed7d66a19c30a48f2af3d8de4cf1d9378f262b` |
+| HTTP | 12 | `3d5f29e088275ab05ec3f8695e036a7cc5a78dde34a54049a09fb025cc07bcbd` |
+| HTTP edge | 6 | `f6331f44e1b4f08f75f841a04f40430014d0e30494b8b60bcf15f5e7c72a8fbd` |
+| Audit contract | 6 | `88f268f3cb60c684c037381a4a729a5b995944db15bf252a43b81fe90f8801c2` |
+| File mutation | 9 | `8b26c330e203b5417357dd72ee90badfb8dceb4c13c90ef70c24550a9ce6ca2e` |
+| Audit fail-closed | 8 | `de520c15c57cb7a76326a0d4497c85cbe448445f8eece85d70bfe879781b3c20` |
+| Parent symlink | 2 | `ac5683be0d218381af585332d1a7a62e607deff17ca9d6e1f760f09b647736ba` |
+| Durable jobs | 9 | `ec71c4966f2639e34c6bbe7357d78a4b7adca8f38f84dd08ce43ae59dc04ee55` |
+| Output caps | 1 | `597bb1e3c5b936941dfee5d1b31271b9607e52c1f29594d561feca1abbe1be70` |
+| Audit chain | 13 | `8172a3cfef07b4b71099f48807fbb1b69325eee5d8d9afc7e723b0e90940d258` |
+| YOLO and CLI | 11 | `29140f94276ac9999958c2ce70decb059f6a9d16f3479fa2b3fbea5731edee19` |
+
+All 13 suite invocations exited zero. Case 11 ran an authenticated gateway
+job through the normal supervisor and checked the isolated namespace,
+workspace I/O, protected paths and terminal receipt. Supplemental probes
+used both the detached and synchronous execution paths. They also checked
+inheritable descriptors, host process paths, symlinks, operator CLI access,
+child environment and off-root workspace mounts. A detached grandchild
+with a new session was verified alive before cancellation and timeout.
+The timeout case included a gateway SIGKILL and restart. A separate
+SIGKILL targeted the interval after policy config replacement and before
+the audit outcome. The next startup refused the ambiguous policy and
+the local disable command recovered it. Restoring a revoked policy
+revision was denied both in the active session and on restart.
+
+Formatting, default and hook-enabled Clippy, offline locked debug and
+release builds, 24 unit and four integration tests, and whitespace checks
+passed. A clean local clone with the reviewed source diff built offline in
+debug and release. The dependency manifests and dependency graph were
+unchanged. RustSec audited 49 locked dependencies using 1,555 advisory
+records and exited zero with warnings denied. The normal release excluded
+both Gate 1 crash controls. The independent harness's regression and
+hardening tests passed 37/37.
+
+### Gate 2 performance
+
+A matched local release run built Milestone 2 and Gate 2 from source and
+used the same private job-enabled fixture and environment for both.
+Startup and shutdown are medians of nine launches. The idle sample
+spanned five seconds. RSS is the gateway process only.
+
+| Metric | Milestone 2 | Gate 2 Standard |
+| --- | ---: | ---: |
+| Idle RSS | 3,700 KiB | 3,980 KiB |
+| Idle CPU ticks in five seconds | 0 | 0 |
+| Startup to listener | 62.85 ms | 64.13 ms |
+| SIGTERM to exit | 0.37 ms | 0.57 ms |
+| Job-start request | 1.70 ms | 2.54 ms |
+| Gateway RSS with five jobs | 3,912 KiB | 4,212 KiB |
+
+The absolute startup measurements differ from the older supplied
+Milestone 2 baseline. The table uses a fresh measurement for both builds
+in the same environment. The YOLO fixture recorded 11.25 ms median
+isolated job-start latency, 4,176 KiB gateway RSS with five jobs, and
+210.60 ms median synchronous isolated command completion. The matched
+legacy synchronous command on the Gate 2 binary took 232.36 ms median.
+Synchronous samples include the inherited runner's wait and cleanup.
+The pure policy evaluator took approximately 0.18 microseconds for
+Standard and 0.09 microseconds for YOLO on a separate microbenchmark.
+Authorized read round trips were 0.66 ms and 1.01 ms respectively.
+
+Gate 2 logs and reproducible local probes are under `target/gate2/`.
+These supplemental artifacts are outside the tracked change set. No
+dashboard, Tailscale settings, service installation, or root provisioning
+is part of Gate 2.
+
+The disposable mutation run detected all 11 changes. YOLO cases 01, 02,
+04, 05, 06, 08 and 11 caught ignored revocation, remote operator tool
+success, global YOLO, stale authorization, missing audit flags, verifier
+disclosure and a mount that exposed the operator configuration. Inherited
+jobs case 08 caught loss of process-group signaling. Supplemental tests
+caught a job running in the host mount namespace, direct calls to a hidden
+command, and replay of a revoked configuration when the file-identity
+comparison was removed. Each mutant compiled and its intended test exited
+one. The disposable source was restored and compared with the real
+worktree.

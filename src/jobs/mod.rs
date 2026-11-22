@@ -9,6 +9,7 @@ mod receipt;
 mod recovery;
 mod resources;
 mod runner;
+mod sandbox;
 mod store;
 
 use std::collections::HashSet;
@@ -22,12 +23,21 @@ use mcp_gateway::security::audit::{AuditAction, AuditLimits, AuditPhase, AuditSi
 pub(crate) use config::{JobRoot, Profiles, parse_settings};
 pub(crate) use resources::verify as verify_scope;
 pub(crate) use runner::run_worker;
+pub(crate) use sandbox::probe as probe_sandbox;
+pub(crate) use store::has_unconfined_jobs;
 
 use receipt::Receipt;
 use resources::Scopes;
 use store::Store;
 
 const SHORT_TIMEOUT: u64 = 2;
+
+#[derive(Clone, Copy)]
+pub(crate) struct JobPolicy<'a> {
+    pub yolo: bool,
+    /// Some (including an empty slice) requires kernel isolation.
+    pub workspace_mounts: Option<&'a [JobRoot]>,
+}
 
 pub(crate) struct Jobs {
     store: Store,
@@ -112,6 +122,7 @@ fn record(
             state: receipt.state.label(),
             stdout_bytes: receipt.stdout_bytes,
             stderr_bytes: receipt.stderr_bytes,
+            yolo: receipt.yolo,
         },
     )
 }

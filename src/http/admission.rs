@@ -16,7 +16,12 @@ use crate::jobs::{JobRoot, Profiles};
 #[cfg(target_os = "linux")]
 use crate::tools::MutationRoot;
 use crate::tools::registry::Tool;
-use mcp_gateway::security::policy::Action;
+use mcp_gateway::security::policy::{Action, ExecutionMode};
+
+#[cfg(target_os = "linux")]
+use super::operator::Mode;
+#[cfg(target_os = "linux")]
+use super::scope::{open_extra_roots, protected};
 
 pub struct Client {
     pub id: String,
@@ -24,10 +29,17 @@ pub struct Client {
     pub expires_at: u64,
     pub root: PathBuf,
     pub actions: Vec<Action>,
+    pub mode: ExecutionMode,
+    #[cfg(target_os = "linux")]
+    pub yolo_revision: Option<String>,
+    #[cfg(target_os = "linux")]
+    pub extra_roots: Vec<MutationRoot>,
     #[cfg(target_os = "linux")]
     pub mutation_root: Option<MutationRoot>,
     #[cfg(target_os = "linux")]
     pub job_root: Option<JobRoot>,
+    #[cfg(target_os = "linux")]
+    pub job_extra_roots: Vec<JobRoot>,
 }
 
 pub struct Configuration {
@@ -36,16 +48,23 @@ pub struct Configuration {
     pub clients: Vec<Client>,
     pub audit_log: Option<PathBuf>,
     #[cfg(target_os = "linux")]
+    pub runtime_settings: Value,
+    #[cfg(target_os = "linux")]
+    pub managed: bool,
+    #[cfg(target_os = "linux")]
     pub jobs: Option<(PathBuf, Profiles)>,
 }
 
+#[cfg(not(target_os = "linux"))]
 pub fn load_clients(path: &Path) -> Result<Configuration, String> {
+    parse_clients(path, &read_config(path)?)
+}
+
+pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, String> {
     if !path.is_absolute() {
         return Err("credential config requires an absolute path".into());
     }
-    let bytes = read_config(path)?;
-    let document: Value = serde_json::from_slice(&bytes)
-        .map_err(|_| "invalid credential configuration".to_string())?;
+    let document = parse_document(bytes)?;
     let audit_log = document
         .get("audit_log")
         .map(|value| {
@@ -60,7 +79,7 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
         document.get("job_state_dir").is_some() || document.get("job_profiles").is_some();
     #[cfg(target_os = "linux")]
     let jobs = if has_job_settings {
-        let (state, profiles) = crate::jobs::parse_settings(&bytes)?;
+        let (state, profiles) = crate::jobs::parse_settings(bytes)?;
         let audit = audit_log
             .as_ref()
             .ok_or("Job configuration requires audit_log")?;
@@ -91,6 +110,34 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
     let mut verifiers = HashSet::new();
     for entry in entries {
         let field = |key: &str| entry.get(key).and_then(Value::as_str);
+        #[cfg(target_os = "linux")]
+        let mode = Mode::from_entry(entry)?;
+        #[cfg(not(target_os = "linux"))]
+        let mode = if entry.get("mode").is_none() {
+            ExecutionMode::Standard
+        } else {
+            return Err("Persistent authorization requires Linux".into());
+        };
+        #[cfg(target_os = "linux")]
+        let yolo_revision = match (mode, entry.get("yolo_revision")) {
+            (Mode::Yolo, Some(value)) => Some(
+                value
+                    .as_str()
+                    .filter(|id| {
+                        id.len() == 32
+                            && id
+                                .bytes()
+                                .all(|byte| matches!(byte, b'a'..=b'f' | b'0'..=b'9'))
+                    })
+                    .ok_or("Invalid YOLO policy revision")?
+                    .to_owned(),
+            ),
+            (Mode::Yolo, None) => {
+                return Err("YOLO authorization requires a policy revision".into());
+            }
+            (_, Some(_)) => return Err("Inactive client has retained a YOLO revision".into()),
+            (_, None) => None,
+        };
         let id = field("id").ok_or("missing client identity")?;
         if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
             return Err("invalid client identity".into());
@@ -110,6 +157,17 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
         let root = configured_root
             .canonicalize()
             .map_err(|_| "client root is unavailable".to_string())?;
+        #[cfg(target_os = "linux")]
+        if (audit_log.is_some() || mode == Mode::Yolo)
+            && protected(
+                path,
+                audit_log.as_deref(),
+                jobs.as_ref().map(|j| j.0.as_path()),
+                &root,
+            )
+        {
+            return Err("Client root overlaps protected gateway state".into());
+        }
         if !root.is_dir() {
             return Err("client root must be an existing directory".into());
         }
@@ -139,15 +197,19 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
             return Err("Job grants require private Linux job configuration".into());
         }
         #[cfg(target_os = "linux")]
-        let mutation_root =
-            if actions.contains(&Action::WriteFile) || actions.contains(&Action::ApplyPatch) {
-                Some(
-                    MutationRoot::open(&configured_root)
-                        .map_err(|_| "mutation root must be an existing symlink-free directory")?,
-                )
-            } else {
-                None
-            };
+        let mutation_root = if actions.iter().any(|action| {
+            matches!(
+                action,
+                Action::ReadFile | Action::WriteFile | Action::ApplyPatch
+            )
+        }) {
+            Some(
+                MutationRoot::open(&configured_root)
+                    .map_err(|_| "Client root must be an existing symlink-free directory")?,
+            )
+        } else {
+            None
+        };
         #[cfg(target_os = "linux")]
         if let Some((state, profiles)) = &jobs {
             let credentials = path
@@ -167,12 +229,37 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
                 profiles.reject_mutable_executables(&root)?;
             }
         }
+        #[cfg(target_os = "linux")]
+        let extra_roots = open_extra_roots(
+            &document,
+            entry,
+            &root,
+            path,
+            audit_log.as_deref(),
+            jobs.as_ref().map(|j| j.0.as_path()),
+        )?;
+        #[cfg(target_os = "linux")]
+        let job_extra_roots = if has_job_grant && mode == Mode::Yolo {
+            super::scope::root_paths(entry, "yolo_roots")?
+                .iter()
+                .map(|root| JobRoot::open(root))
+                .collect::<Result<_, _>>()?
+        } else {
+            Vec::new()
+        };
         clients.push(Client {
             id: id.to_string(),
             digest,
             expires_at,
             root,
             actions,
+            mode: mode.into(),
+            #[cfg(target_os = "linux")]
+            yolo_revision,
+            #[cfg(target_os = "linux")]
+            extra_roots,
+            #[cfg(target_os = "linux")]
+            job_extra_roots,
             #[cfg(target_os = "linux")]
             mutation_root,
             #[cfg(target_os = "linux")]
@@ -183,6 +270,16 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
             },
         });
     }
+    #[cfg(target_os = "linux")]
+    let mut runtime_settings = document.clone();
+    #[cfg(target_os = "linux")]
+    {
+        let static_fields = runtime_settings
+            .as_object_mut()
+            .ok_or("invalid credential configuration")?;
+        static_fields.remove("clients");
+        static_fields.remove("policy_version");
+    }
     Ok(Configuration {
         #[cfg(target_os = "linux")]
         audit_limits: mcp_gateway::security::audit::AuditLimits::from_config(&document)
@@ -190,12 +287,36 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
         clients,
         audit_log,
         #[cfg(target_os = "linux")]
+        runtime_settings,
+        #[cfg(target_os = "linux")]
+        managed: document.get("policy_version").is_some(),
+        #[cfg(target_os = "linux")]
         jobs,
     })
 }
 
+pub(crate) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    return super::operator::parse_document(bytes);
+    #[cfg(not(target_os = "linux"))]
+    serde_json::from_slice(bytes).map_err(|_| "invalid credential configuration".into())
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn read_config(path: &Path) -> Result<Vec<u8>, String> {
+    read_config_version(path).map(|(bytes, _)| bytes)
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Eq, PartialEq)]
+pub(super) struct ConfigStamp {
+    device: u64,
+    inode: u64,
+    changed: (i64, i64),
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn read_config_version(path: &Path) -> Result<(Vec<u8>, ConfigStamp), String> {
     use std::fs::File;
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
@@ -224,14 +345,27 @@ pub(crate) fn read_config(path: &Path) -> Result<Vec<u8>, String> {
     {
         return Err("credential config must be private and owned by the gateway user".into());
     }
+    let stamp = |meta: &std::fs::Metadata| ConfigStamp {
+        device: meta.dev(),
+        inode: meta.ino(),
+        changed: (meta.ctime(), meta.ctime_nsec()),
+    };
+    let version = stamp(&meta);
     let mut bytes = Vec::new();
-    file.take(65_537)
+    (&file)
+        .take(65_537)
         .read_to_end(&mut bytes)
         .map_err(|_| "credential config cannot be read")?;
     if bytes.len() > 65_536 {
         return Err("credential config exceeds size limit".into());
     }
-    Ok(bytes)
+    let after = file
+        .metadata()
+        .map_err(|_| "credential config unavailable")?;
+    if stamp(&after) != version {
+        return Err("credential config changed while being read".into());
+    }
+    Ok((bytes, version))
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -289,7 +423,7 @@ pub fn authenticate(clients: &[Client], header: Option<&HeaderValue>, now: u64) 
     for (index, client) in clients.iter().enumerate() {
         // Inspect every verifier, even after a match.
         let matched: bool = client.digest.ct_eq(candidate.as_slice()).into();
-        if matched && now < client.expires_at {
+        if matched && now < client.expires_at && client.mode != ExecutionMode::Disabled {
             found = Some(index);
         }
     }

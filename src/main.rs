@@ -9,6 +9,8 @@ mod jobs;
 mod protocol;
 mod tools;
 mod transport;
+#[cfg(target_os = "linux")]
+mod yolo_cli;
 
 use std::io;
 use std::path::PathBuf;
@@ -44,6 +46,10 @@ fn run() -> Result<(), String> {
     if args.len() == 2 && args[0] == "--job-scope-check" {
         return jobs::verify_scope(args[1].to_str().unwrap_or_default())
             .map_err(|_| "job resource ceilings unavailable".into());
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "yolo") {
+        return yolo_cli::run(&args[1..]);
     }
     if args.first().is_some_and(|arg| arg == "http") {
         return http::run(args.into_iter().skip(1).collect());

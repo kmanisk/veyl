@@ -12,7 +12,7 @@ use crate::tools::registry::{Tool, tool_text};
 
 use super::receipt::Receipt;
 use super::store::{JobDir, valid_id};
-use super::{JobRoot, Jobs, SHORT_TIMEOUT, invalid, logs, process, record};
+use super::{JobPolicy, JobRoot, Jobs, SHORT_TIMEOUT, invalid, logs, process, record};
 
 const PAGE_SIZE: usize = 40;
 
@@ -23,6 +23,7 @@ impl Jobs {
         args: Option<&Value>,
         owner: &str,
         root: &JobRoot,
+        policy: JobPolicy<'_>,
     ) -> Value {
         if !self.available() {
             return tool_text(true, "Job audit unavailable");
@@ -55,13 +56,14 @@ impl Jobs {
                 if short {
                     profile.timeout_seconds = profile.timeout_seconds.min(SHORT_TIMEOUT);
                 }
-                self.start(owner, root, name, profile).and_then(|receipt| {
-                    if short {
-                        self.wait_short(owner, &receipt.job_id)
-                    } else {
-                        Ok(receipt.status())
-                    }
-                })
+                self.start(owner, root, name, profile, policy)
+                    .and_then(|receipt| {
+                        if short {
+                            self.wait_short(owner, &receipt.job_id)
+                        } else {
+                            Ok(receipt.status())
+                        }
+                    })
             }
             Tool::ListJobs => match args.get("cursor") {
                 None if args.is_empty() => self.list(owner, ""),
@@ -83,6 +85,13 @@ impl Jobs {
         match result {
             Ok(value) => tool_text(false, &value.to_string()),
             Err(error) if error.kind() == ErrorKind::NotFound => tool_text(true, "Job not found"),
+            Err(error) if error.kind() == ErrorKind::Unsupported => {
+                tool_text(true, "Required Linux execution isolation unavailable")
+            }
+            Err(error) if error.kind() == ErrorKind::PermissionDenied => tool_text(
+                true,
+                "Job execution denied; verify inherited descriptors and workspace permissions",
+            ),
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
                 tool_text(true, "Job capacity reached")
             }

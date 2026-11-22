@@ -43,6 +43,8 @@ impl Action {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ExecutionMode {
     Standard,
+    PersistentYolo,
+    Disabled,
     /// Merely expressing intent is never evidence of an authorized YOLO lease.
     YoloRequested,
 }
@@ -51,6 +53,7 @@ pub enum ExecutionMode {
 pub enum Denial {
     AuditUnavailable,
     Unauthenticated,
+    Disabled,
     MissingGrant,
     PrincipalMismatch,
     ExpiredGrant,
@@ -90,6 +93,9 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
         return Err(Denial::AuditUnavailable);
     }
 
+    if input.mode == ExecutionMode::Disabled {
+        return Err(Denial::Disabled);
+    }
     let principal = input
         .principal
         .filter(|name| !name.is_empty())
@@ -116,7 +122,7 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
     }
 
     match input.action {
-        action if action.is_job() && input.mode == ExecutionMode::Standard => Ok(()),
+        action if action.is_job() && input.mode != ExecutionMode::YoloRequested => Ok(()),
         Action::ReadFile | Action::ListTools | Action::WriteFile | Action::ApplyPatch => Ok(()),
         _ => {
             // No trust decision can be upgraded merely because the caller
