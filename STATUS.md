@@ -207,3 +207,25 @@ Receipts and reproducible local probes are in `target/gate3/`. Sessions
 22086, 54244, 79044, 17318 and 33805 completed. Only source, tests and
 documentation belong in the commits. Release artifacts belong in ignored
 `dist/`. No persistent service or host changes were made.
+
+## Packaged partial release
+
+A clean local clone of `afa56e9c0c0d3b4b746b59ce004b1137884b1f9a`
+built offline in debug and release. The archive uses that release
+binary. The extraction smoke passed checksums, help and version, a
+disposable generated systemd unit, authenticated managed Standard and
+scoped YOLO network-denial probes, and supervised FULL running as UID
+1000. All gateway probes exited zero after SIGTERM. A separate extracted
+CLI smoke confirmed Disabled reset, FULL confirmation enforcement,
+anchor export, verification after a later append, and a side-effect-free
+service dry-run. The example configuration uses placeholders and is
+deliberately disabled with an expired credential until locally edited.
+
+- Binary `dist/gate3-beta/mcp-gateway` SHA-256
+  `189df235d6d6a7eb3c1b5924641bed9bc05decc6532ae062c6cdb38461d8227f`.
+- Archive `dist/mcp-gateway-gate3-linux-x86_64.tar.gz` SHA-256
+  `077a2dc0b5ec93aabb815f3303b2a589ab6917b1ecc0a2508ed0231ff96597e0`.
+- Release session 51379 completed with exit 0. See
+  `target/gate3/release.log` and `target/gate3/release-cli.log`.
+- Final independent pin check matched all 16 files. Packaging created
+  only ignored artifacts. This receipt is documentation-only.
