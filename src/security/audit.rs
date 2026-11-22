@@ -265,6 +265,26 @@ impl AuditSink {
         }))
     }
 
+    pub fn record_protected_paths(
+        &self,
+        operation: &str,
+        rule: &str,
+        path_hash: &str,
+        phase: AuditPhase,
+        unix_seconds: u64,
+    ) -> io::Result<()> {
+        self.0.append(json!({
+            "principal": "local_operator",
+            "tool": "protected_paths",
+            "phase": phase.label(),
+            "unix_seconds": unix_seconds,
+            "actor_uid": rustix::process::geteuid().as_raw(),
+            "operation": operation,
+            "rule": rule,
+            "path_sha256": path_hash,
+        }))
+    }
+
     pub fn pending_stages(&self) -> io::Result<Vec<(String, StageProof)>> {
         Ok(self.0.inspection(true)?.stages)
     }

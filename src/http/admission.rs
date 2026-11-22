@@ -50,9 +50,23 @@ pub struct Configuration {
     #[cfg(target_os = "linux")]
     pub runtime_settings: Value,
     #[cfg(target_os = "linux")]
+    pub(crate) protected_paths: crate::protected_paths::Rules,
+    #[cfg(target_os = "linux")]
     pub managed: bool,
     #[cfg(target_os = "linux")]
     pub jobs: Option<(PathBuf, Profiles)>,
+    #[cfg(target_os = "linux")]
+    reserved_job_state: Option<PathBuf>,
+}
+
+#[cfg(target_os = "linux")]
+impl Configuration {
+    pub(crate) fn job_state_path(&self) -> Option<&Path> {
+        self.jobs
+            .as_ref()
+            .map(|(path, _)| path.as_path())
+            .or(self.reserved_job_state.as_deref())
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -75,10 +89,25 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
                 .ok_or("audit_log must be an absolute path")
         })
         .transpose()?;
-    let has_job_settings =
-        document.get("job_state_dir").is_some() || document.get("job_profiles").is_some();
+    let has_job_profiles = document.get("job_profiles").is_some();
     #[cfg(target_os = "linux")]
-    let jobs = if has_job_settings {
+    let reserved_job_state = if has_job_profiles {
+        None
+    } else {
+        document
+            .get("job_state_dir")
+            .map(|value| {
+                let state = value
+                    .as_str()
+                    .map(PathBuf::from)
+                    .ok_or("Invalid job_state_dir")?;
+                crate::protected_paths::validate_path(&state)?;
+                Ok::<_, String>(state)
+            })
+            .transpose()?
+    };
+    #[cfg(target_os = "linux")]
+    let jobs = if has_job_profiles {
         let (state, profiles) = crate::jobs::parse_settings(bytes)?;
         let audit = audit_log
             .as_ref()
@@ -94,9 +123,14 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         None
     };
     #[cfg(not(target_os = "linux"))]
-    if has_job_settings {
+    if has_job_profiles || document.get("job_state_dir").is_some() {
         return Err("Job configuration is supported only on Linux".into());
     }
+    #[cfg(target_os = "linux")]
+    let job_state = jobs
+        .as_ref()
+        .map(|(state, _)| state.as_path())
+        .or(reserved_job_state.as_deref());
     let entries = document
         .get("clients")
         .and_then(Value::as_array)
@@ -158,13 +192,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             .canonicalize()
             .map_err(|_| "client root is unavailable".to_string())?;
         #[cfg(target_os = "linux")]
-        if (audit_log.is_some() || mode == Mode::ScopedYolo)
-            && protected(
-                path,
-                audit_log.as_deref(),
-                jobs.as_ref().map(|j| j.0.as_path()),
-                &root,
-            )
+        if (audit_log.is_some() || job_state.is_some() || mode == Mode::ScopedYolo)
+            && protected(path, audit_log.as_deref(), job_state, &root)
         {
             return Err("Client root overlaps protected gateway state".into());
         }
@@ -193,7 +222,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             actions.push(Action::ListTools);
         }
         let has_job_grant = actions.iter().any(|action| action.is_job());
-        if has_job_grant && (!has_job_settings || !cfg!(target_os = "linux")) {
+        if has_job_grant && (!has_job_profiles || !cfg!(target_os = "linux")) {
             return Err("Job grants require private Linux job configuration".into());
         }
         #[cfg(target_os = "linux")]
@@ -236,7 +265,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             &root,
             path,
             audit_log.as_deref(),
-            jobs.as_ref().map(|j| j.0.as_path()),
+            job_state,
         )?;
         #[cfg(target_os = "linux")]
         let job_extra_roots = if has_job_grant && mode == Mode::ScopedYolo {
@@ -279,8 +308,11 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             .ok_or("invalid credential configuration")?;
         static_fields.remove("clients");
         static_fields.remove("policy_version");
+        static_fields.remove("protected_paths");
     }
-    Ok(Configuration {
+    #[cfg(target_os = "linux")]
+    let protected_paths = crate::protected_paths::Rules::parse(&document)?;
+    let settings = Configuration {
         #[cfg(target_os = "linux")]
         audit_limits: mcp_gateway::security::audit::AuditLimits::from_config(&document)
             .map_err(|error| error.to_string())?,
@@ -292,7 +324,21 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         managed: document.get("policy_version").is_some(),
         #[cfg(target_os = "linux")]
         jobs,
-    })
+        #[cfg(target_os = "linux")]
+        reserved_job_state,
+        #[cfg(target_os = "linux")]
+        protected_paths,
+    };
+    #[cfg(target_os = "linux")]
+    for kind in [
+        crate::protected_paths::Kind::Optional,
+        crate::protected_paths::Kind::ReadOnly,
+    ] {
+        for rule in settings.protected_paths.selected(kind) {
+            crate::protected_paths::check_conflicts(path, &settings, &rule.path, kind)?;
+        }
+    }
+    Ok(settings)
 }
 
 pub(crate) fn parse_document(bytes: &[u8]) -> Result<Value, String> {

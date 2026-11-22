@@ -1,0 +1,260 @@
+//! Validated operator rules for a future broad execution profile.
+
+use std::path::{Path, PathBuf};
+
+use mcp_gateway::security::linux_fs::open_absolute_dir;
+use rustix::fs::{self, FileType, Mode, OFlags, ResolveFlags};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::http::admission::Configuration;
+use crate::http::operator::policy_path;
+
+pub(crate) const OPTIONAL_DEFAULTS: &[&str] = &[".ssh", ".gnupg", ".codex"];
+pub(crate) const READONLY_DEFAULTS: &[&str] = &[
+    ".bashrc",
+    ".profile",
+    ".bash_profile",
+    ".zshrc",
+    ".config/systemd",
+    ".config/autostart",
+    ".local/bin",
+    ".ssh/authorized_keys",
+];
+const MAX_RULES: usize = 64;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Optional,
+    ReadOnly,
+}
+
+impl Kind {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Optional => "optional",
+            Self::ReadOnly => "readonly",
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Rule {
+    pub(crate) path: PathBuf,
+    device: u64,
+    inode: u64,
+    object: Object,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Object {
+    Directory,
+    RegularFile,
+}
+
+impl Rule {
+    pub(crate) fn inspect(path: &Path, kind: Kind) -> Result<Self, String> {
+        validate_path(path)?;
+        let parent = path.parent().ok_or("Missing protection parent")?;
+        let name = path.file_name().ok_or("Missing protection name")?;
+        let open = || {
+            let parent = open_absolute_dir(parent).map_err(|_| "Unsafe or unavailable parent")?;
+            let handle = fs::openat2(
+                parent,
+                name,
+                OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+                ResolveFlags::BENEATH
+                    | ResolveFlags::NO_SYMLINKS
+                    | ResolveFlags::NO_MAGICLINKS
+                    | ResolveFlags::NO_XDEV,
+            )
+            .map_err(|_| "Unsafe or unavailable protected path, including mount aliases")?;
+            fs::fstat(handle).map_err(|_| "Cannot identify protected path")
+        };
+        let stat = open()?;
+        let object = match FileType::from_raw_mode(stat.st_mode) {
+            FileType::Directory => Object::Directory,
+            FileType::RegularFile if kind == Kind::ReadOnly && stat.st_nlink == 1 => {
+                Object::RegularFile
+            }
+            _ => return Err("Use a directory for optional protection or a singly-linked regular file for read-only protection".into()),
+        };
+        let again = open()?;
+        if (stat.st_dev, stat.st_ino, stat.st_mode, stat.st_nlink)
+            != (again.st_dev, again.st_ino, again.st_mode, again.st_nlink)
+        {
+            return Err("Protected path changed during validation".into());
+        }
+        Ok(Self {
+            path: path.to_owned(),
+            device: stat.st_dev,
+            inode: stat.st_ino,
+            object,
+        })
+    }
+
+    pub(crate) fn check_identity(&self, kind: Kind) -> Result<(), String> {
+        if *self != Self::inspect(&self.path, kind)? {
+            return Err("Protected path identity changed; review and re-add the rule".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Rules {
+    version: u8,
+    optional: Vec<Rule>,
+    readonly: Vec<Rule>,
+}
+
+impl Rules {
+    pub(crate) fn parse(document: &Value) -> Result<Self, String> {
+        let Some(raw) = document.get("protected_paths") else {
+            return Ok(Self {
+                version: 1,
+                optional: Vec::new(),
+                readonly: Vec::new(),
+            });
+        };
+        let rules: Self =
+            serde_json::from_value(raw.clone()).map_err(|_| "Invalid protected-path rules")?;
+        let all: Vec<_> = rules.optional.iter().chain(&rules.readonly).collect();
+        if rules.version != 1 || all.len() > MAX_RULES {
+            return Err("Unsupported protected-path version or too many rules".into());
+        }
+        for (index, rule) in all.iter().enumerate() {
+            validate_path(&rule.path)?;
+            if rule.inode == 0
+                || (index < rules.optional.len() && rule.object != Object::Directory)
+                || all[..index].iter().any(|other| {
+                    overlaps(&rule.path, &other.path)
+                        || (rule.device, rule.inode) == (other.device, other.inode)
+                })
+            {
+                return Err("Conflicting or invalid protected-path rules".into());
+            }
+        }
+        Ok(rules)
+    }
+
+    pub(crate) fn selected(&self, kind: Kind) -> &[Rule] {
+        match kind {
+            Kind::Optional => &self.optional,
+            Kind::ReadOnly => &self.readonly,
+        }
+    }
+
+    pub(crate) fn insert(&mut self, kind: Kind, rule: Rule) -> Result<bool, String> {
+        let present = self.check_candidate(kind, &rule)?;
+        if present {
+            return Ok(false);
+        }
+        let rules = self.selected_mut(kind);
+        rules.push(rule);
+        rules.sort_by(|first, second| first.path.cmp(&second.path));
+        Ok(true)
+    }
+
+    pub(crate) fn check_candidate(&self, kind: Kind, rule: &Rule) -> Result<bool, String> {
+        let mut present = false;
+        for (selected, rules) in [
+            (Kind::Optional, &self.optional),
+            (Kind::ReadOnly, &self.readonly),
+        ] {
+            for other in rules {
+                if selected == kind && other == rule {
+                    present = true;
+                } else if overlaps(&other.path, &rule.path)
+                    || (other.device, other.inode) == (rule.device, rule.inode)
+                {
+                    return Err("Rule conflicts with an existing path or object identity".into());
+                }
+            }
+        }
+        if !present && self.optional.len() + self.readonly.len() >= MAX_RULES {
+            return Err("Too many protected-path rules".into());
+        }
+        Ok(present)
+    }
+
+    pub(crate) fn remove(&mut self, kind: Kind, path: &Path) -> bool {
+        let rules = self.selected_mut(kind);
+        let before = rules.len();
+        rules.retain(|rule| rule.path != path);
+        rules.len() != before
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.optional.is_empty() && self.readonly.is_empty()
+    }
+
+    fn selected_mut(&mut self, kind: Kind) -> &mut Vec<Rule> {
+        match kind {
+            Kind::Optional => &mut self.optional,
+            Kind::ReadOnly => &mut self.readonly,
+        }
+    }
+}
+
+pub(crate) fn validate_path(path: &Path) -> Result<(), String> {
+    if !path.is_absolute()
+        || path == Path::new("/")
+        || path.components().collect::<PathBuf>().as_os_str() != path.as_os_str()
+        || path.to_str().is_none_or(|text| {
+            text.len() > 4096
+                || text.chars().any(char::is_control)
+                || text.split('/').any(|segment| matches!(segment, "." | ".."))
+        })
+        || ["/proc", "/sys", "/dev", "/run"]
+            .iter()
+            .any(|location| path.starts_with(location))
+    {
+        return Err("Expected a canonical absolute path outside kernel and runtime trees".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn is_mandatory(config: &Path, settings: &Configuration, path: &Path) -> bool {
+    policy_path(config, path)
+        || overlaps(config, path)
+        || settings
+            .audit_log
+            .as_deref()
+            .and_then(Path::parent)
+            .is_some_and(|directory| overlaps(directory, path))
+        || settings
+            .job_state_path()
+            .is_some_and(|directory| overlaps(directory, path))
+}
+
+pub(crate) fn check_conflicts(
+    config: &Path,
+    settings: &Configuration,
+    path: &Path,
+    kind: Kind,
+) -> Result<(), String> {
+    if is_mandatory(config, settings, path) {
+        return Err("Path overlaps mandatory gateway protection".into());
+    }
+    if kind == Kind::Optional
+        && settings.clients.iter().any(|client| {
+            client.root.starts_with(path)
+                || client
+                    .extra_roots
+                    .iter()
+                    .any(|root| root.path().starts_with(path))
+        })
+    {
+        return Err("An optional mask cannot hide a configured client workspace".into());
+    }
+    Ok(())
+}
+
+fn overlaps(first: &Path, second: &Path) -> bool {
+    first.starts_with(second) || second.starts_with(first)
+}

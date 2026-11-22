@@ -73,8 +73,47 @@ invalid token, missing grant, symlink denial, live revocation, non-root
 identity and FULL audit intent/outcome. Reproduce it with
 `python3 -B target/gate3b/full-probe.py target/debug/mcp-gateway`.
 
-Next: implement durable protected-path rule administration. Broad YOLO
-remains closed pending a verified enforcement boundary.
+Checkpoint 1 commit: `590fba650e6aa32660e01d28b0b010821e84975a`.
+
+## Checkpoint 2 — Protected-path policy administration
+
+The local CLI implements list, add, remove and validate, with Suite F's
+`--mandatory`, `--optional` and `--readonly` selectors. Config, its
+companions, the audit directory and job state are mandatory. The CLI
+lists built-in default templates and manages custom entries. Optional
+masks accept directories. Read-only rules accept directories or
+singly-linked regular files. Descriptor-based validation rejects
+symlink components and leaf mount crossings. Saved device and inode
+identity detect replaced entries during follow-up validation. These
+rules are staged for broad YOLO and have no effect on established
+Standard, legacy YOLO or FULL authority.
+
+Rules live in a versioned section of the private policy document. A
+policy lock, durable transaction marker and hashed-path audit records
+guard edits. Recovery requires repeating the exact local command.
+File-only configurations can now reserve a private job-state path.
+A directory path alone does not configure job profiles or grant jobs.
+Older binaries reject the new rule field. A supported rollback must
+restore the matching configuration or remove custom rules first.
+
+Files changed: `src/main.rs`, `src/protected_cli.rs`,
+`src/protected_paths.rs`, `src/http/admission.rs`, `src/http/operator.rs`,
+`src/http/scope.rs`, `src/jobs/config.rs`, `src/security/audit.rs`,
+`STATUS.md`. Checkpoint commit message:
+`feat(cli): add durable protected-path management`.
+
+Session 64288 exited 1 on the fixture's file-only state declaration.
+The implementation now reserves that path while requiring actual
+profiles for every job grant. Session 79112 exited 0 with 70/70,
+including Suite F 15/15. Clippy passed. Logs and pin comparisons are
+in `target/gate3b/protected-v2/`. Two supplemental local checks verified
+audit intent/outcome, mandatory-path rejection, alias rejection, stale
+identity, exact command recovery and rollback on audit failure. The
+Suite F remote check is a no-op and its audit assertion is tautological.
+The local probes do not constitute independent acceptance.
+
+Next: record the verified same-UID architecture blocker and finish
+regressions of the independently shippable checkpoints.
 
 ---
 

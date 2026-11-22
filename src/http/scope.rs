@@ -109,7 +109,7 @@ pub(crate) fn sibling_scopes(
             || protected(
                 config,
                 settings.audit_log.as_deref(),
-                settings.jobs.as_ref().map(|job| job.0.as_path()),
+                settings.job_state_path(),
                 &path,
             )
             || settings

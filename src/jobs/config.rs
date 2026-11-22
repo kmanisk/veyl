@@ -91,6 +91,8 @@ struct JobDocument {
     _max_audit_file_bytes: Option<u64>,
     #[serde(default, rename = "max_audit_dir_bytes")]
     _max_audit_dir_bytes: Option<u64>,
+    #[serde(default, rename = "protected_paths")]
+    _protected_paths: Option<serde_json::Value>,
     job_state_dir: PathBuf,
     #[serde(deserialize_with = "unique_profiles")]
     job_profiles: BTreeMap<String, Profile>,

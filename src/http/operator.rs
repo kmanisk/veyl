@@ -238,9 +238,7 @@ impl PolicyFile {
 
     fn admitted_snapshot(&self) -> Result<(Vec<u8>, ConfigStamp), String> {
         if self.pending_client()?.is_some() {
-            return Err(
-                "Interrupted authorization update requires local YOLO disable recovery".into(),
-            );
+            return Err("Interrupted policy update requires local operator recovery".into());
         }
         read_config_version(&self.path)
     }
@@ -329,7 +327,7 @@ fn invalid() -> io::Error {
     )
 }
 
-pub(super) fn policy_path(config: &Path, path: &Path) -> bool {
+pub(crate) fn policy_path(config: &Path, path: &Path) -> bool {
     config == path
         || config.parent() == path.parent()
             && path.file_name().is_some_and(|name| {
@@ -352,6 +350,7 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "max_audit_file_bytes",
         "max_audit_dir_bytes",
         "policy_version",
+        "protected_paths",
     ];
     const CLIENT: &[&str] = &[
         "id",
