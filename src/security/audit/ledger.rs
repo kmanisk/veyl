@@ -12,6 +12,7 @@ use rustix::io::Errno;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::anchor::{self, Anchor};
 use super::chain::{self, Tip};
 use super::{
     AuditLimits, StageProof, check_directory, check_file, check_file_mode, invalid_audit,
@@ -91,7 +92,7 @@ impl Ledger {
                 let archived = ledger.archives()?;
                 if head.is_some() || !archived.is_empty() {
                     let (_, observed) =
-                        ledger.scan(&archived, head.as_ref(), false, false, |_| {})?;
+                        ledger.scan(&archived, head.as_ref(), false, false, |_, _| {})?;
                     if !ledger.interrupted_rotation(&archived, head.as_ref(), &observed.head.tip) {
                         return Err(invalid_audit());
                     }
@@ -116,7 +117,7 @@ impl Ledger {
             }
             segments.push(active);
             let (inspection, verified) =
-                ledger.scan(&segments, head.as_ref(), true, false, |_| {})?;
+                ledger.scan(&segments, head.as_ref(), true, false, |_, _| {})?;
             if inspection.torn_bytes != 0 {
                 ledger.append_locked(
                     verified,
@@ -142,7 +143,7 @@ impl Ledger {
 
     pub(super) fn inspect_path(path: &Path, collect: bool) -> io::Result<Inspection> {
         let ledger = Self::bind(path, AuditLimits::default(), false)?;
-        ledger.transaction(|ledger| ledger.verify(collect, |_| {}))
+        ledger.transaction(|ledger| ledger.verify(collect, |_, _| {}))
     }
 
     pub(super) fn inspect_transitions(
@@ -151,17 +152,71 @@ impl Ledger {
     ) -> io::Result<()> {
         let mut ledger = Self::bind(path, AuditLimits::default(), false)?;
         ledger
-            .transaction(|ledger| ledger.verify(false, &mut visit).map(|_| ()))
+            .transaction(|ledger| ledger.verify(false, |_, record| visit(record)).map(|_| ()))
             .or_else(|_| {
                 ledger.read_only_active = true;
-                ledger.transaction(|ledger| ledger.verify(false, visit).map(|_| ()))
+                ledger.transaction(|ledger| {
+                    ledger.verify(false, |_, record| visit(record)).map(|_| ())
+                })
             })
     }
 
     pub(super) fn verify_read_only_active(path: &Path) -> io::Result<()> {
         let mut ledger = Self::bind(path, AuditLimits::default(), false)?;
         ledger.read_only_active = true;
-        ledger.transaction(|ledger| ledger.verify(false, |_| {}).map(|_| ()))
+        ledger.transaction(|ledger| ledger.verify(false, |_, _| {}).map(|_| ()))
+    }
+
+    pub(super) fn export_anchor(path: &Path) -> io::Result<Anchor> {
+        let ledger = Self::bind(path, AuditLimits::default(), false)?;
+        ledger.transaction(|ledger| {
+            let inspection = ledger.verify(false, |_, _| {})?;
+            Ok(Anchor {
+                format_version: 1,
+                ledger_identity: ledger.anchor_identity(true)?,
+                sequence: inspection.sequence,
+                hash: inspection.hash,
+            })
+        })
+    }
+
+    pub(super) fn verify_anchor(path: &Path, anchor: &Anchor) -> io::Result<Inspection> {
+        let ledger = Self::bind(path, AuditLimits::default(), false)?;
+        ledger.transaction(|ledger| {
+            if ledger.anchor_identity(false)? != anchor.ledger_identity {
+                return Err(io::Error::other("AUDIT_ANCHOR_LEDGER_MISMATCH"));
+            }
+            let mut found = anchor.sequence == 0 && anchor.hash == Tip::default().hash;
+            let inspection = ledger.verify(false, |tip, _| {
+                if tip.sequence == anchor.sequence {
+                    found = tip.hash == anchor.hash;
+                }
+            })?;
+            if !found {
+                return Err(io::Error::other("AUDIT_ANCHOR_PREFIX_MISMATCH"));
+            }
+            Ok(inspection)
+        })
+    }
+
+    fn anchor_identity(&self, create: bool) -> io::Result<String> {
+        let name = companion(&self.name, ".ledger-id");
+        match open_file(&self.directory, &name, OFlags::RDONLY) {
+            Ok(file) => {
+                let mut id = String::new();
+                file.take(65).read_to_string(&mut id)?;
+                if !anchor::valid_hash(&id) {
+                    return Err(invalid_audit());
+                }
+                Ok(id)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
+                let id = anchor::random_hex()?;
+                anchor::publish_new(&self.directory, &name, id.as_bytes())?;
+                Ok(id)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn bind(path: &Path, limits: AuditLimits, create: bool) -> io::Result<Self> {
@@ -355,7 +410,7 @@ impl Ledger {
         {
             return Ok(snapshot.clone());
         }
-        let (_, verified) = self.scan(&segments, Some(&head), false, false, |_| {})?;
+        let (_, verified) = self.scan(&segments, Some(&head), false, false, |_, _| {})?;
         if verified.head != head {
             // A complete uncheckpointed append is recoverable on startup.
             // A running writer must stop after a persistence failure.
@@ -368,10 +423,10 @@ impl Ledger {
     }
 
     pub(super) fn inspection(&self, collect: bool) -> io::Result<Inspection> {
-        self.transaction(|ledger| ledger.verify(collect, |_| {}))
+        self.transaction(|ledger| ledger.verify(collect, |_, _| {}))
     }
 
-    fn verify(&self, collect: bool, visit: impl FnMut(&Value)) -> io::Result<Inspection> {
+    fn verify(&self, collect: bool, visit: impl FnMut(&Tip, &Value)) -> io::Result<Inspection> {
         let head = self.read_head()?.ok_or_else(invalid_audit)?;
         let segments = self.segments()?;
         if segments.last().map(Segment::identity) != Some(head.active) {
@@ -402,7 +457,7 @@ impl Ledger {
         expected: Option<&Head>,
         recover: bool,
         collect: bool,
-        mut visit: impl FnMut(&Value),
+        mut visit: impl FnMut(&Tip, &Value),
     ) -> io::Result<(Inspection, Snapshot)> {
         let mut tip = Tip::default();
         let mut records = Vec::new();
@@ -455,7 +510,7 @@ impl Ledger {
                         return Err(chain::broken(tip.sequence));
                     }
                 }
-                visit(&record);
+                visit(&tip, &record);
                 if collect {
                     collect_stage(&mut stages, &record)?;
                     record["hash"] = Value::from(tip.hash.clone());

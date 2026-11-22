@@ -1,5 +1,6 @@
 //! Typed events for the durable, tamper-evident Linux audit ledger.
 
+mod anchor;
 mod chain;
 mod ledger;
 
@@ -266,8 +267,21 @@ impl AuditSink {
         Ok(self.0.inspection(true)?.stages)
     }
 
+    pub fn export_head(path: &Path, out: &Path) -> io::Result<()> {
+        Ledger::export_anchor(path)?.write(out)
+    }
+
+    pub fn verify_anchor(path: &Path, anchor_path: &Path) -> io::Result<Value> {
+        let anchor = anchor::Anchor::read(anchor_path)?;
+        let inspection = Ledger::verify_anchor(path, &anchor)?;
+        Self::inspection_json(inspection)
+    }
+
     pub fn inspect(path: &Path, include_records: bool) -> io::Result<Value> {
-        let result = Ledger::inspect_path(path, include_records)?;
+        Self::inspection_json(Ledger::inspect_path(path, include_records)?)
+    }
+
+    fn inspection_json(result: ledger::Inspection) -> io::Result<Value> {
         Ok(json!({
             "schema_version": 1,
             "status": "verified",

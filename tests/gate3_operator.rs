@@ -168,3 +168,79 @@ fn disabled_client_cannot_select_full_even_with_confirmation() {
     );
     assert_eq!(f.read(), original);
 }
+
+#[test]
+fn audit_anchor_pins_a_prefix_across_append_and_rotation() {
+    let f = Fixture::new("disabled");
+    ok(f.mode(&["reset"]));
+    let anchor = f.0.join("anchor.json");
+    let path = anchor.to_str().unwrap();
+    assert!(ok(f.run(&["audit", "export-head", "--out", path])).contains("EXPORTED"));
+    let original = fs::read(&anchor).unwrap();
+    let checkpoint: Value = serde_json::from_slice(&original).unwrap();
+    assert_eq!(checkpoint["format_version"], 1);
+    assert!(checkpoint["sequence"].as_u64().unwrap() >= 2);
+    assert_eq!(checkpoint["ledger_identity"].as_str().unwrap().len(), 64);
+    assert_eq!(
+        fs::metadata(&anchor).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(
+        !f.run(&["audit", "export-head", "--out", path])
+            .status
+            .success()
+    );
+    assert_eq!(fs::read(&anchor).unwrap(), original);
+    ok(f.run(&["audit", "rotate"]));
+    ok(f.mode(&["enable"]));
+    assert!(ok(f.run(&["audit", "verify", "--anchor", path])).contains("VERIFY_RESULT=VALID"));
+
+    let other = Fixture::new("disabled");
+    ok(other.mode(&["reset"]));
+    let other_anchor = other.0.join("anchor.json");
+    ok(other.run(&[
+        "audit",
+        "export-head",
+        "--out",
+        other_anchor.to_str().unwrap(),
+    ]));
+    assert!(
+        !other
+            .run(&["audit", "verify", "--anchor", path])
+            .status
+            .success()
+    );
+
+    for (field, replacement) in [
+        ("hash", Value::from("0".repeat(64))),
+        ("sequence", Value::from(u64::MAX)),
+        ("format_version", Value::from(9)),
+    ] {
+        let mut invalid = checkpoint.clone();
+        invalid[field] = replacement;
+        fs::write(&anchor, invalid.to_string()).unwrap();
+        assert!(
+            !f.run(&["audit", "verify", "--anchor", path])
+                .status
+                .success(),
+            "{field}"
+        );
+    }
+    fs::write(&anchor, &original).unwrap();
+    let archive = fs::read_dir(f.0.join("audit"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains(".segment-")
+        })
+        .unwrap();
+    fs::write(archive, b"tampered\n").unwrap();
+    assert!(
+        !f.run(&["audit", "verify", "--anchor", path])
+            .status
+            .success()
+    );
+}

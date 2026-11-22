@@ -123,3 +123,16 @@ a throwaway HOME for the controller and ran only the harmless id command.
 The pinned legacy YOLO suite passed 11/11. The pinned modes suite passed
 3/5, with only the disputed cases 04 and 05 failing. Execution sessions
 11724 and 68027 completed. Broad YOLO remains fail-closed.
+
+## Audit anchors locally verified
+
+`audit export-head --out PATH` and `audit verify --anchor FILE` are
+implemented and locally tested. The first export assigns a private,
+persistent random ledger ID. The verified export is published atomically
+without replacement. Verification authenticates the requested prefix
+against the whole verified chain, across appends and segment rotation.
+Local tests cover wrong ledger, hash, sequence, format, archived tampering,
+and existing output. The audit-chain suite passed 13/13 and Clippy passed.
+Session 78620 completed. Local evidence is awaiting independent acceptance.
+The retained anchor must be outside FULL's write authority for independent
+whole-log rewrite detection. Next task is Linux service preparation.
