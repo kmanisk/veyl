@@ -154,3 +154,56 @@ its signal feature, which adds locked signal-hook-registry 1.4.8
 tests, Clippy, the supervised FULL probe and unit validation.
 Sessions 13057 and 58092 completed. Service work awaits independent
 acceptance.
+
+## Partial release verification
+
+The final Rust implementation checkpoint is `2ddd40c`, after scoped
+compatibility and SEC-01 (`42315e6`), confirmed FULL (`cb17b8c`), and
+audit anchors (`633f915`). `GATE3_BETA.md` gives mode semantics, operator
+commands, service planning and rollback instructions.
+
+All original 102 cases pass. The Gate 3 mode suite remains 3/5 with only
+the disputed networking and raw FULL cases. The inherited jobs suite
+passed 9/9 on its original unversioned compatibility profile. All 16
+locked pins matched. The hardening script passed 6/6, and the harness
+regression run passed 36/37. Its sole failure expects four Pass 3
+registrations but the trusted manifest now contains five. The handoff
+records this separate review item. No independent files were edited.
+
+Formatting, Clippy, locked debug and release builds, all 36 Rust tests,
+and RustSec audit of 50 crates passed. The release excluded both audit
+crash-hook controls. Controlled loopback was denied in Standard and
+scoped YOLO. FULL ran supervised as the gateway UID. Seven disposable
+mutants compiled and were detected by local assertions. These covered
+confirmation, reset, audit anchors, FULL confinement and audit mode, and
+network isolation for Standard and scoped YOLO. These local oracles
+await independent review.
+
+Broad YOLO activation stays fail-closed. A synthetic writable-mount probe
+demonstrated that masking a single path leaves an existing hardlink
+visible and can lose the mask after atomic replacement. Mandatory
+control-plane protection, persistence mounts, optional protection CLI,
+direct file-tool parity, and broad socket probes are unfinished.
+Next smallest implementation task is a protected-directory mount design
+and local alias/replacement tests that prove the boundary before any
+networked host-write profile is admitted.
+
+Matched single-run release measurements, without the user systemd
+manager, use the same disposable fixture. Idle samples measured zero CPU
+ticks over five seconds for every tested policy.
+
+| Policy | Gate 2 RSS KiB | Partial Gate 3 RSS KiB | Gate 2 admission ms | Partial Gate 3 admission ms |
+| --- | ---: | ---: | ---: | ---: |
+| Managed Standard | 3944 | 4068 | 10.282 | 10.457 |
+| Legacy scoped YOLO | 4088 | 4168 | 11.038 | 12.502 |
+| Confirmed FULL | — | 4068 | — | 3.139 |
+
+Partial Gate 3 startup/shutdown samples were 2.272/0.882 ms for Standard,
+2.479/1.089 ms for scoped YOLO and 3.272/0.412 ms for FULL. Gate 2
+returned signal termination under the same shutdown probe. Five-job RSS
+was not sampled. Broad YOLO was unavailable for measurement.
+
+Receipts and reproducible local probes are in `target/gate3/`. Sessions
+22086, 54244, 79044, 17318 and 33805 completed. Only source, tests and
+documentation belong in the commits. Release artifacts belong in ignored
+`dist/`. No persistent service or host changes were made.

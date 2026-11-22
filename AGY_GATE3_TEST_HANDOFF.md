@@ -49,3 +49,10 @@ changes in the trusted harness. Migration rollback, protected object
 aliases, persistence mounts, socket exposure, audit anchors and service
 planning need their own independent evidence. This handoff leaves the
 locked suites and harness untouched.
+
+The trusted harness's own
+`test_pass3_suites_pinned_and_required_on_m3_branch` currently fails on
+`5 != 4`. Its fixed Pass 3 suite count predates the fifth registered suite.
+Please reconcile the harness regression assertion with the actual intended
+registry during independent review. This is separate from the locked case
+results and does not require a gateway code change.
