@@ -42,6 +42,7 @@ pub struct JobAuditInfo<'a> {
     pub stdout_bytes: usize,
     pub stderr_bytes: usize,
     pub yolo: bool,
+    pub effective_mode: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -195,10 +196,11 @@ impl AuditSink {
         Ledger::verify_read_only_active(path)
     }
 
-    pub fn record_yolo(
+    pub fn record_runtime_mode(
         &self,
         principal: &str,
         tool: &str,
+        mode: &str,
         phase: AuditPhase,
         unix_seconds: u64,
     ) -> io::Result<()> {
@@ -208,29 +210,30 @@ impl AuditSink {
             "tool": tool,
             "phase": phase.label(),
             "unix_seconds": unix_seconds,
-            "yolo": true,
+            "yolo": mode == "yolo",
+            "effective_mode": if mode == "yolo" { "legacy_scoped_yolo" } else { mode },
         }))
     }
 
-    pub fn verify_mode_approvals(path: &Path, expected: &[(&str, &str)]) -> io::Result<()> {
+    pub fn verify_mode_approvals(path: &Path, expected: &[(&str, &str, &str)]) -> io::Result<()> {
         let mut approvals: std::collections::HashMap<_, _> = expected
             .iter()
-            .map(|&(principal, revision)| (principal, (revision, false)))
+            .map(|&(principal, revision, mode)| (principal, (revision, mode, false)))
             .collect();
         Ledger::inspect_transitions(path, |record| {
             if record["tool"] == "yolo_transition"
                 && record["phase"] == "success"
-                && let Some((revision, matched)) = record["principal"]
+                && let Some((revision, mode, matched)) = record["principal"]
                     .as_str()
                     .and_then(|principal| approvals.get_mut(principal))
             {
-                *matched = record["requested_mode"] == "yolo"
+                *matched = record["requested_mode"].as_str() == Some(*mode)
                     && record["policy_revision"].as_str() == Some(*revision);
             }
         })?;
-        if approvals.values().any(|(_, matched)| !matched) {
+        if approvals.values().any(|(_, _, matched)| !matched) {
             return Err(io::Error::other(
-                "YOLO authorization has no successful audit transition",
+                "Execution mode has no matching successful audit transition",
             ));
         }
         Ok(())
@@ -348,6 +351,7 @@ impl AuditSink {
                 }
             }
             EventDetails::Job(details) => {
+                event["effective_mode"] = details.effective_mode.into();
                 if details.yolo {
                     event["yolo"] = true.into();
                 }

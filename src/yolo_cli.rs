@@ -15,7 +15,7 @@ use crate::http::operator::{
 use crate::http::scope::sibling_scopes;
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
-    const USAGE: &str = "usage: mcp-gateway yolo <enable|disable|reset|status|set --mode standard> --client ID --config PATH";
+    const USAGE: &str = "usage: mcp-gateway yolo <enable|disable|reset|status|set --mode MODE [--confirm-full]> --client ID --config PATH";
     if args.iter().any(|arg| arg == "--help") {
         println!("{USAGE}");
         return Ok(());
@@ -33,10 +33,12 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     let mut id = None;
     let mut path = None;
     let mut requested_mode = None;
+    let mut confirm_full = false;
     let mut args = args[1..].iter();
     while let Some(option) = args.next() {
         match option.to_str() {
             Some("--client") if id.is_none() => id = args.next().and_then(|arg| arg.to_str()),
+            Some("--confirm-full") if command == "set" && !confirm_full => confirm_full = true,
             Some("--mode") if command == "set" && requested_mode.is_none() => {
                 requested_mode = Some(args.next().and_then(|arg| arg.to_str()).ok_or(USAGE)?);
             }
@@ -44,11 +46,15 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             _ => return Err(USAGE.into()),
         }
     }
+    if confirm_full && requested_mode != Some("full") {
+        return Err(USAGE.into());
+    }
     let command = match (command, requested_mode) {
         ("set", Some("standard")) | ("standard", None) => "reset",
-        ("set", _) => {
-            return Err("Only explicit Standard selection is supported at this checkpoint".into());
-        }
+        ("set", Some("full")) if confirm_full => "full",
+        ("set", Some("full")) => return Err("FULL requires --confirm-full".into()),
+        ("set", Some("yolo")) => return Err("Broad YOLO isolation is unavailable".into()),
+        ("set", _) => return Err(USAGE.into()),
         _ => command,
     };
     let id = id.ok_or(USAGE)?;
@@ -84,26 +90,29 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         verify_approvals(&settings)?;
     }
     let target = match command {
-        "enable" if previous == Mode::Disabled => return Err("Client is disabled".into()),
+        "enable" | "full" if previous == Mode::Disabled => return Err("Client is disabled".into()),
+        "enable" if previous == Mode::Full => {
+            return Err("Select Standard before enabling scoped YOLO".into());
+        }
         "enable" => Mode::ScopedYolo,
+        "full" => Mode::Full,
         "reset" => Mode::Standard,
         "disable" if previous != Mode::Disabled => Mode::Standard,
         _ => previous,
     };
-    if command == "enable" {
-        if !settings.managed {
-            require_completed_legacy_jobs(&settings)?;
-        }
-        if settings.jobs.is_some()
-            && (!settings.managed
-                || client
-                    .actions
-                    .iter()
-                    .any(|action| matches!(action, Action::RunShortJob | Action::StartJob)))
-        {
-            crate::jobs::probe_sandbox()
-                .map_err(|_| "Required Linux execution isolation unavailable")?;
-        }
+    if !settings.managed && target != previous && command != "status" {
+        require_completed_legacy_jobs(&settings)?;
+    }
+    if command == "enable"
+        && settings.jobs.is_some()
+        && (!settings.managed
+            || client
+                .actions
+                .iter()
+                .any(|action| matches!(action, Action::RunShortJob | Action::StartJob)))
+    {
+        crate::jobs::probe_sandbox()
+            .map_err(|_| "Required Linux execution isolation unavailable")?;
     }
 
     if command != "status" && (target != previous || pending.is_some()) {
@@ -125,13 +134,18 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         object.insert("mode".into(), Value::from(target.label()));
         object.remove("yolo_shared_roots");
         object.remove("yolo_revision");
-        if target == Mode::ScopedYolo {
+        if matches!(target, Mode::ScopedYolo | Mode::Full) {
             object.insert("yolo_revision".into(), Value::from(revision.as_str()));
         }
         if !implicit.is_empty() {
             object.insert("yolo_shared_roots".into(), serde_json::json!(implicit));
         }
-        document["policy_version"] = 1.into();
+        document["policy_version"] = if target == Mode::Full || document["policy_version"] == 2 {
+            2
+        } else {
+            1
+        }
+        .into();
         let mut candidate =
             serde_json::to_vec_pretty(&document).map_err(|_| "Cannot encode policy")?;
         candidate.push(b'\n');

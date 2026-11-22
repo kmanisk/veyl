@@ -35,6 +35,7 @@ const SHORT_TIMEOUT: u64 = 2;
 #[derive(Clone, Copy)]
 pub(crate) struct JobPolicy<'a> {
     pub yolo: bool,
+    pub full: bool,
     /// Some (including an empty slice) requires kernel isolation.
     pub workspace_mounts: Option<&'a [JobRoot]>,
 }
@@ -123,6 +124,15 @@ fn record(
             stdout_bytes: receipt.stdout_bytes,
             stderr_bytes: receipt.stderr_bytes,
             yolo: receipt.yolo,
+            effective_mode: if receipt.full {
+                "full"
+            } else if receipt.yolo {
+                "legacy_scoped_yolo"
+            } else if receipt.isolated {
+                "standard"
+            } else {
+                "legacy_unversioned"
+            },
         },
     )
 }

@@ -85,6 +85,7 @@ impl Jobs {
             stderr_bytes: 0,
             resource_ceilings_enforced: false,
             yolo: policy.yolo,
+            full: policy.full,
             isolated: policy.workspace_mounts.is_some(),
             sandbox_roots: sandbox_roots.clone(),
         };

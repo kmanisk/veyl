@@ -430,13 +430,18 @@ fn dispatch_tools(
                 return Vec::new();
             }
             #[cfg(target_os = "linux")]
-            if client.mode == ExecutionMode::PersistentYolo
-                && (!state
-                    .mutations
-                    .record_yolo(&client.id, "tools/list", AuditPhase::Intent)
-                    || !state
-                        .mutations
-                        .record_yolo(&client.id, "tools/list", AuditPhase::Success))
+            if let Some(mode) = client.mode.audit_mode()
+                && (!state.mutations.record_runtime_mode(
+                    &client.id,
+                    "tools/list",
+                    mode,
+                    AuditPhase::Intent,
+                ) || !state.mutations.record_runtime_mode(
+                    &client.id,
+                    "tools/list",
+                    mode,
+                    AuditPhase::Success,
+                ))
             {
                 return Vec::new();
             }
@@ -457,25 +462,30 @@ fn dispatch_tools(
             });
             if !permitted {
                 #[cfg(target_os = "linux")]
-                if client.mode == ExecutionMode::PersistentYolo {
+                if let Some(mode) = client.mode.audit_mode() {
                     // Known names come from the tool registry. Never journal
                     // the caller's arbitrary text for an unknown tool.
                     let name = if tool.is_some() { name } else { "unknown_tool" };
-                    if state
-                        .mutations
-                        .record_yolo(&client.id, name, AuditPhase::Intent)
-                    {
-                        let _ = state
-                            .mutations
-                            .record_yolo(&client.id, name, AuditPhase::Failure);
+                    if state.mutations.record_runtime_mode(
+                        &client.id,
+                        name,
+                        mode,
+                        AuditPhase::Intent,
+                    ) {
+                        let _ = state.mutations.record_runtime_mode(
+                            &client.id,
+                            name,
+                            mode,
+                            AuditPhase::Failure,
+                        );
                     }
                 }
                 return tool.map(|_| tool_text(true, "Not authorized or capability unavailable"));
             }
             let tool = tool?;
             #[cfg(target_os = "linux")]
-            if client.mode == ExecutionMode::PersistentYolo {
-                return Some(yolo_tool(state, client, tool, name, args, now));
+            if client.mode.audit_mode().is_some() {
+                return Some(privileged_tool(state, client, tool, name, args, now));
             }
             #[cfg(target_os = "linux")]
             if tool == Tool::ReadFile {
@@ -502,6 +512,7 @@ fn dispatch_tools(
                         root,
                         JobPolicy {
                             yolo: false,
+                            full: false,
                             workspace_mounts: managed.then_some(&[]),
                         },
                     ));
@@ -527,7 +538,7 @@ fn dispatch_tools(
 }
 
 #[cfg(target_os = "linux")]
-fn yolo_tool(
+fn privileged_tool(
     state: &State,
     client: &Client,
     tool: Tool,
@@ -535,9 +546,13 @@ fn yolo_tool(
     args: Option<&Value>,
     now: u64,
 ) -> Value {
+    let Some(mode) = client.mode.audit_mode() else {
+        return tool_text(true, "Privileged execution mode unavailable");
+    };
+    let full = client.mode == ExecutionMode::Full;
     if !state
         .mutations
-        .record_yolo(&client.id, name, AuditPhase::Intent)
+        .record_runtime_mode(&client.id, name, mode, AuditPhase::Intent)
     {
         return tool_text(true, "Audit intent unavailable");
     }
@@ -549,8 +564,9 @@ fn yolo_tool(
                 &client.id,
                 root,
                 JobPolicy {
-                    yolo: true,
-                    workspace_mounts: Some(&client.job_extra_roots),
+                    yolo: !full,
+                    full,
+                    workspace_mounts: (!full).then_some(&client.job_extra_roots),
                 },
             )),
             _ => None,
@@ -565,7 +581,10 @@ fn yolo_tool(
     } else {
         AuditPhase::Success
     };
-    if !state.mutations.record_yolo(&client.id, name, phase) {
+    if !state
+        .mutations
+        .record_runtime_mode(&client.id, name, mode, phase)
+    {
         return tool_text(
             true,
             "Audit outcome unavailable; operation status uncertain",
@@ -635,7 +654,7 @@ fn scoped_file_tool(
         root,
         &client.id,
         now,
-        true,
+        yolo,
     ))
 }
 
@@ -661,8 +680,8 @@ fn authorized(
     audit_available: bool,
     now: u64,
 ) -> bool {
-    let audit_available = audit_available
-        && (client.mode != ExecutionMode::PersistentYolo || state.mutations.available());
+    let audit_available =
+        audit_available && (client.mode.audit_mode().is_none() || state.mutations.available());
     let grant = Grant {
         principal: &client.id,
         root: &client.root,

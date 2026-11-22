@@ -57,6 +57,7 @@ pub(crate) fn has_unconfined_jobs(path: &Path) -> io::Result<bool> {
             Err(error) => return Err(error),
         };
         if !receipt.isolated
+            && !receipt.full
             && (receipt.state.active() || receipt.state == super::receipt::State::Uncertain)
         {
             return Ok(true);

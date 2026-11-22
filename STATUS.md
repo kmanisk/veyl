@@ -1,6 +1,6 @@
 # Gate 3 status
 
-**Blocked at Checkpoint 1, acceptance compatibility.**  
+**Blocked at Checkpoint 1, acceptance compatibility.**
 Branch `milestone3/modes-service` starts at Gate 2 commit
 `7a666d3c42c17fc4a8e0506005b3ec9ac258c15c`, also tagged locally as
 `gate2-scoped`. This is the last green implementation checkpoint.
@@ -96,3 +96,30 @@ Next task is explicit confirmed mode approval and supervised FULL
 execution. Broader YOLO remains unavailable until its required isolation
 can be verified. Audit anchors and service preparation are separate
 implementation checkpoints.
+
+## Explicit FULL approval and supervised execution
+
+Gate 3 stores confirmed FULL in policy schema 2. A mode-specific chain
+approval is required at startup and refresh. Existing Gate 2 version-1
+scoped YOLO approvals are recognized without rewriting configurations.
+Missing confirmation, old schema, forged mode/approval combinations,
+Disabled-to-FULL activation, and replay after reset are rejected. The
+legacy enable command never selects FULL or broad networked YOLO.
+
+FULL job admission uses the normal grants, audit, signing and supervisor.
+It selects the existing host execution branch with inherited
+NoNewPrivileges, scrubbed environment, owned process supervision and the
+gateway UID. Direct file tools remain scoped. FULL jobs carry the host
+UID's file and network permissions and may access or alter same-UID
+control-plane state, including audit history. Keep FULL disabled for
+clients that lack local-operator trust. Gate 2 refuses schema 2 during
+rollback. Retain the older file separately and never use stale approvals
+to recover an active policy.
+
+Local tests passed 6/6 and Clippy passed. The synthetic FULL probe ran
+`id -u` through authenticated MCP and returned UID 1000, a signed
+unconfined receipt, and FULL runtime audit intent and outcome. It used
+a throwaway HOME for the controller and ran only the harmless id command.
+The pinned legacy YOLO suite passed 11/11. The pinned modes suite passed
+3/5, with only the disputed cases 04 and 05 failing. Execution sessions
+11724 and 68027 completed. Broad YOLO remains fail-closed.

@@ -120,7 +120,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         };
         #[cfg(target_os = "linux")]
         let yolo_revision = match (mode, entry.get("yolo_revision")) {
-            (Mode::ScopedYolo, Some(value)) => Some(
+            (Mode::ScopedYolo | Mode::Full, Some(value)) => Some(
                 value
                     .as_str()
                     .filter(|id| {
@@ -132,8 +132,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
                     .ok_or("Invalid YOLO policy revision")?
                     .to_owned(),
             ),
-            (Mode::ScopedYolo, None) => {
-                return Err("YOLO authorization requires a policy revision".into());
+            (Mode::ScopedYolo | Mode::Full, None) => {
+                return Err("Privileged mode requires a policy revision".into());
             }
             (_, Some(_)) => return Err("Inactive client has retained a YOLO revision".into()),
             (_, None) => None,

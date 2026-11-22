@@ -44,9 +44,20 @@ impl Action {
 pub enum ExecutionMode {
     Standard,
     PersistentYolo,
+    Full,
     Disabled,
     /// Merely expressing intent is never evidence of an authorized YOLO lease.
     YoloRequested,
+}
+
+impl ExecutionMode {
+    pub fn audit_mode(self) -> Option<&'static str> {
+        match self {
+            Self::PersistentYolo => Some("yolo"),
+            Self::Full => Some("full"),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

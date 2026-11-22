@@ -134,3 +134,37 @@ fn malformed_legacy_mode_cannot_be_activated() {
     let f = Fixture::new("full");
     assert!(!f.mode(&["status"]).status.success());
 }
+
+#[test]
+fn full_requires_confirmed_mode_specific_approval_and_disallows_replay() {
+    let f = Fixture::new("standard");
+    let standard = f.read();
+    assert!(!f.mode(&["set", "--mode", "full"]).status.success());
+    assert_eq!(f.read(), standard);
+    assert!(ok(f.mode(&["set", "--mode", "full", "--confirm-full"])).contains("mode=full"));
+    let full = f.read();
+    assert_eq!(full["policy_version"], 2);
+    assert!(ok(f.mode(&["status"])).contains("effective_policy=full"));
+    let mut forged = full.clone();
+    forged["clients"][0]["mode"] = "yolo".into();
+    f.write(&forged);
+    assert!(!f.mode(&["status"]).status.success());
+    f.write(&full);
+    assert!(!f.mode(&["enable"]).status.success());
+    ok(f.mode(&["reset"]));
+    assert_eq!(f.read()["policy_version"], 2);
+    f.write(&full);
+    assert!(!f.mode(&["status"]).status.success());
+}
+
+#[test]
+fn disabled_client_cannot_select_full_even_with_confirmation() {
+    let f = Fixture::new("disabled");
+    let original = f.read();
+    assert!(
+        !f.mode(&["set", "--mode", "full", "--confirm-full"])
+            .status
+            .success()
+    );
+    assert_eq!(f.read(), original);
+}

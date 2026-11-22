@@ -115,10 +115,16 @@ impl MutationAudit {
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn record_yolo(&self, principal: &str, tool: &str, phase: AuditPhase) -> bool {
+    pub(crate) fn record_runtime_mode(
+        &self,
+        principal: &str,
+        tool: &str,
+        mode: &str,
+        phase: AuditPhase,
+    ) -> bool {
         self.sink.lock().is_ok_and(|guard| {
             guard.as_ref().is_some_and(|sink| {
-                sink.record_yolo(principal, tool, phase, unix_seconds())
+                sink.record_runtime_mode(principal, tool, mode, phase, unix_seconds())
                     .is_ok()
             })
         })

@@ -30,6 +30,7 @@ const CREATE: OFlags = OFlags::WRONLY
 pub(crate) enum Mode {
     Standard,
     ScopedYolo,
+    Full,
     Disabled,
 }
 
@@ -40,6 +41,7 @@ impl Mode {
             Some(value) => match value.as_str() {
                 Some("standard") => Ok(Self::Standard),
                 Some("yolo") => Ok(Self::ScopedYolo),
+                Some("full") => Ok(Self::Full),
                 Some("disabled") => Ok(Self::Disabled),
                 _ => Err("Invalid client authorization mode".into()),
             },
@@ -50,6 +52,7 @@ impl Mode {
         match self {
             Self::Standard => "standard",
             Self::ScopedYolo => "yolo",
+            Self::Full => "full",
             Self::Disabled => "disabled",
         }
     }
@@ -60,6 +63,7 @@ impl From<Mode> for ExecutionMode {
         match mode {
             Mode::Standard => Self::Standard,
             Mode::ScopedYolo => Self::PersistentYolo,
+            Mode::Full => Self::Full,
             Mode::Disabled => Self::Disabled,
         }
     }
@@ -85,10 +89,13 @@ pub(crate) fn verify_approvals(settings: &Configuration) -> Result<(), String> {
         .clients
         .iter()
         .filter_map(|client| {
-            client
-                .yolo_revision
-                .as_deref()
-                .map(|revision| (client.id.as_str(), revision))
+            client.yolo_revision.as_deref().map(|revision| {
+                (
+                    client.id.as_str(),
+                    revision,
+                    client.mode.audit_mode().unwrap_or("disabled"),
+                )
+            })
         })
         .collect();
     if expected.is_empty() {
@@ -371,9 +378,18 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
     }
     if document
         .get("policy_version")
-        .is_some_and(|version| version.as_u64() != Some(1))
+        .is_some_and(|version| !matches!(version.as_u64(), Some(1 | 2)))
     {
         return Err("Unsupported authorization policy schema".into());
+    }
+    if document["policy_version"].as_u64() != Some(2)
+        && document["clients"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|entry| entry["mode"] == "full")
+    {
+        return Err("FULL requires authorization policy version 2".into());
     }
     if document.get("policy_version").is_none()
         && document["clients"]
