@@ -200,3 +200,30 @@ automatically mandatory** in `harness/acceptance.py`, which was left unchanged.
 Its coverage does not imply mid-operation storage fault, power-loss,
 noncooperating local writer, or crash-reconciliation guarantees. Jobs and
 process execution remain out of scope and unavailable.
+
+## Pass 2 committed review and verified mandatory gates
+
+The Linux scoped `write_file` / `apply_patch` increment was committed to
+`milestone2/tools-jobs` as
+`46e4f94155aab1cfc2c5cac1fd3a59928a270904`.
+A separate clean clone of that commit passed all **68/68 external locked
+cases**, 25 Rust tests, offline build, formatting and Clippy. All test hashes
+were unchanged and the clean clone was removed after verification. The
+trusted harness now automatically requires nine suites for this commit and
+descendants; only the original five suites apply to historical M1/Pass 1
+branches. The previous statement that the audit failure suite was not
+mandatory is historical. Harness tests: **35/35** regression and **6/6**
+hardening.
+
+Mutation faults bypassing audit intent and combined containment safeguards
+were independently detected. SIGKILL before the same-directory rename left
+the original file intact and one orphaned stage; ordinary post-staging
+failure left no stage. Source, test and limitations are in
+`PASS2_WRITE_PATCH_REVIEW.md`.
+
+Direct RustSec `cargo-audit 0.23.0` on the committed lockfile passed with
+exit **0** (49 packages, zero vulnerabilities or warnings). The tool was
+installed only under the lab's `tools/cargo-audit/` directory; the JSON
+receipt is `~/Projects/rust-mcp-gateway-lab/review_reports/pass2_cargo_audit_20261122.json`.
+The next increment is separate supervised jobs, beginning with locked tests,
+not a production service or YOLO.

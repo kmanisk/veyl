@@ -85,3 +85,28 @@ copies, not production code.
 
 **Deferred:** all jobs/process execution, Windows, Linux systemd integration,
 Funnel, permanent YOLO, elevated host operations, dashboard and packaging.
+
+## Post-commit independent acceptance — 2026-11-22
+
+- **Commit:** `46e4f94155aab1cfc2c5cac1fd3a59928a270904` on
+  `milestone2/tools-jobs`; 22 intended source, test, Cargo and documentation
+  files. No merge, push or deployment.
+- A separate `git clone --no-local` of the committed branch passed offline
+  build, Rust tests (21 unit plus 4 integration), formatting, Clippy with
+  warnings denied and all **68 external acceptance tests** in isolated
+  Bubblewrap. All nine SHA-256 checks remained unchanged, the checkout was
+  clean and the temporary clone was removed after successful verification.
+- The trusted harness now automatically selects all 68 cases for this commit
+  and its descendants but preserves the historical 43 cases for older branches.
+  Harness regression tests **35/35** and hardening checks **6/6** passed.
+- The real `cargo-audit 0.23.0` completed with exit **0**: 49 lockfile
+  dependencies, 0 vulnerabilities, 0 warnings against a 1,555-advisory
+  database. JSON receipt:
+  `~/Projects/rust-mcp-gateway-lab/review_reports/pass2_cargo_audit_20261122.json`.
+- Current normal-dependency graph: Pass 1 **37** entries, Pass 2 **40**
+  entries, including the application. `rustix 1.1.6` is the only additional
+  direct crate. There was no global package install or permanent service.
+
+The two deliberate code faults were caught by the independently locked audit
+and parent-symlink tests; SIGKILL left the target intact but revealed orphaned
+staging as an outstanding crash-reconciliation task. Jobs remain separate.
