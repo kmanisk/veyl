@@ -84,6 +84,10 @@ struct JobDocument {
     _clients: Vec<JobClient>,
     #[serde(rename = "audit_log")]
     _audit_log: String,
+    #[serde(default, rename = "max_audit_file_bytes")]
+    _max_audit_file_bytes: Option<u64>,
+    #[serde(default, rename = "max_audit_dir_bytes")]
+    _max_audit_dir_bytes: Option<u64>,
     job_state_dir: PathBuf,
     #[serde(deserialize_with = "unique_profiles")]
     job_profiles: BTreeMap<String, Profile>,

@@ -2,12 +2,15 @@
 
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
+use mcp_gateway::security::audit::{AuditPhase, StageProof};
 use mcp_gateway::security::linux_fs::{open_absolute_dir, open_beneath_dir, reopen_regular};
 use rustix::fd::OwnedFd;
-use rustix::fs::{self, AtFlags, FileType, FlockOperation, Mode, OFlags, ResolveFlags, Stat};
+use rustix::fs::{
+    self, AtFlags, FileType, FlockOperation, Mode, OFlags, ResolveFlags, Stat, StatxFlags,
+};
 use rustix::io::Errno;
 
 pub(super) const MAX_TEXT_BYTES: usize = 65_536;
@@ -35,6 +38,46 @@ impl MutationRoot {
 
     pub(super) fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(super) fn recover_stage(
+        &self,
+        proof: &StageProof,
+        audit: impl Fn(AuditPhase) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let hex = proof.name.strip_prefix(".mcp-stage-");
+        if proof.root != self.path
+            || proof
+                .parent
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+            || !hex
+                .is_some_and(|name| name.len() == 32 && name.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Ok(());
+        }
+        let relative = proof.parent.join(&proof.name);
+        let Some(relative) = relative.to_str() else {
+            return Ok(());
+        };
+        let Ok(target) = self.target(relative) else {
+            // A live writer owns the parent lock. Never sweep its stage.
+            return Ok(());
+        };
+        let directory = fs::fstat(&target.directory)?;
+        if directory_identity(&directory) != proof.directory || !target.matches_stage(proof) {
+            return Ok(());
+        }
+        audit(AuditPhase::Intent)?;
+        target
+            .check_directory()
+            .map_err(|_| io::Error::other("Stage directory changed"))?;
+        if !target.matches_stage(proof) {
+            return Err(io::Error::other("Stage identity changed before cleanup"));
+        }
+        fs::unlinkat(&target.directory, target.name, AtFlags::empty())?;
+        fs::fsync(&target.directory)?;
+        audit(AuditPhase::Success)
     }
 
     pub(super) fn target<'a>(&'a self, path: &'a str) -> Result<Target<'a>, MutationError> {
@@ -79,6 +122,34 @@ pub(super) struct Target<'a> {
 }
 
 impl Target<'_> {
+    pub(super) fn stage_proof(&self, name: &str, file: &File) -> Result<StageProof, MutationError> {
+        let directory =
+            fs::fstat(&self.directory).map_err(|_| Rejected("Cannot identify stage directory"))?;
+        let created = birth_time(file, "", AtFlags::EMPTY_PATH)
+            .map_err(|_| Rejected("Cannot verify staging birth time"))?;
+        let file = fs::fstat(file).map_err(|_| Rejected("Cannot identify stage file"))?;
+        Ok(StageProof {
+            root: self.root.path.clone(),
+            parent: self.relative_parent.to_owned(),
+            directory: directory_identity(&directory),
+            name: name.to_owned(),
+            file: directory_identity(&file),
+            size: file.st_size as u64,
+            modified: [file.st_mtime, file.st_mtime_nsec as i64],
+            created,
+            uid: file.st_uid,
+        })
+    }
+
+    pub(super) fn matches_stage(&self, proof: &StageProof) -> bool {
+        let name = proof.name.as_str();
+        fs::statat(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW).is_ok_and(|stat| {
+            FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
+                && matches_proof(&stat, proof)
+        }) && birth_time(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW)
+            .is_ok_and(|created| created == proof.created)
+    }
+
     pub(super) fn check_directory(&self) -> Result<(), MutationError> {
         let changed = || Rejected("File directory changed during the operation");
         let root = open_absolute_dir(&self.root.path).map_err(|_| changed())?;
@@ -164,4 +235,30 @@ fn same_snapshot(first: &Stat, second: &Stat) -> bool {
         && first.st_size == second.st_size
         && (first.st_mtime, first.st_mtime_nsec) == (second.st_mtime, second.st_mtime_nsec)
         && (first.st_ctime, first.st_ctime_nsec) == (second.st_ctime, second.st_ctime_nsec)
+}
+
+fn directory_identity(stat: &Stat) -> [u64; 2] {
+    [stat.st_dev, stat.st_ino]
+}
+
+fn matches_proof(stat: &Stat, proof: &StageProof) -> bool {
+    directory_identity(stat) == proof.file
+        && stat.st_uid == proof.uid
+        && stat.st_nlink == 1
+        && stat.st_size as u64 == proof.size
+        && [stat.st_mtime, stat.st_mtime_nsec as i64] == proof.modified
+}
+
+fn birth_time(
+    directory: impl rustix::fd::AsFd,
+    name: impl rustix::path::Arg,
+    flags: AtFlags,
+) -> io::Result<[i64; 2]> {
+    let stat = fs::statx(directory, name, flags, StatxFlags::BTIME)?;
+    if stat.stx_mask & StatxFlags::BTIME.bits() == 0 {
+        return Err(io::Error::other(
+            "Staging filesystem has no file birth time",
+        ));
+    }
+    Ok([stat.stx_btime.tv_sec, i64::from(stat.stx_btime.tv_nsec)])
 }

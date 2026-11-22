@@ -1,7 +1,7 @@
 //! Explicitly launched, loopback-only authenticated MCP-over-HTTP transport.
 //! No persistent unit, public listener, or privileged operation is created.
 
-mod admission;
+pub(crate) mod admission;
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -92,11 +92,18 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
     let has_mutation_grants = config.clients.iter().any(|client| {
         client.actions.contains(&Action::WriteFile) || client.actions.contains(&Action::ApplyPatch)
     });
-    let audit_log = config.audit_log.as_deref().filter(|_| has_mutation_grants);
-    let mutations = MutationAudit::open(&path, audit_log);
+    let audit_log = config.audit_log.as_deref();
+    let mutations = MutationAudit::open(
+        &path,
+        audit_log,
+        #[cfg(target_os = "linux")]
+        config.audit_limits,
+    )?;
     if has_mutation_grants && !mutations.available() {
         return Err("Mutation grants require a private, available audit log".into());
     }
+    #[cfg(target_os = "linux")]
+    mutations.recover(&config.clients)?;
     #[cfg(target_os = "linux")]
     let jobs = config
         .jobs
@@ -105,6 +112,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
                 &state,
                 profiles,
                 config.audit_log.as_deref().ok_or("Missing job audit log")?,
+                config.audit_limits,
             )
         })
         .transpose()?;
@@ -313,9 +321,11 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     session.last_used = Instant::now();
 
     #[cfg(target_os = "linux")]
-    if state.jobs.is_some() && matches!(method, Some("tools/list" | "tools/call")) {
+    if (state.jobs.is_some() || cfg!(feature = "test-hooks"))
+        && matches!(method, Some("tools/list" | "tools/call"))
+    {
         // Tool requests leave protocol phase unchanged. Release session state
-        // before waiting on durable storage or a short command.
+        // before waiting on storage, a short command, or crash instrumentation.
         let mut protocol = session.protocol.clone();
         drop(sessions);
         return match tokio::task::spawn_blocking(move || {

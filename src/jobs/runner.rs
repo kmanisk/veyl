@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use rustix::process::Signal;
 use serde::{Deserialize, Serialize};
 
-use mcp_gateway::security::audit::{AuditAction, AuditPhase, AuditSink};
+use mcp_gateway::security::audit::{AuditAction, AuditLimits, AuditPhase, AuditSink};
 
 use super::config::{Profile, RootIdentity, restrict_child_privileges};
 use super::logs::{Log, nonblocking};
@@ -26,6 +26,7 @@ const CANCEL_POLL: Duration = Duration::from_millis(40);
 pub(super) struct Launch {
     pub store: PathBuf,
     pub audit: PathBuf,
+    pub audit_limits: AuditLimits,
     pub audit_id: [u64; 4],
     pub root: RootIdentity,
     pub profile: Profile,
@@ -50,7 +51,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
     let store = Store::open(&launch.store, false)?;
     let job = store.job(&launch.job_id)?;
     job.check_worker_lease(io::stdout())?;
-    let mut audit = AuditSink::open(&launch.audit)?;
+    let mut audit = AuditSink::open_with_limits(&launch.audit, launch.audit_limits)?;
     if audit.identity()? != launch.audit_id {
         return Err(invalid());
     }

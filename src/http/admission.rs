@@ -31,6 +31,8 @@ pub struct Client {
 }
 
 pub struct Configuration {
+    #[cfg(target_os = "linux")]
+    pub audit_limits: mcp_gateway::security::audit::AuditLimits,
     pub clients: Vec<Client>,
     pub audit_log: Option<PathBuf>,
     #[cfg(target_os = "linux")]
@@ -182,6 +184,9 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
         });
     }
     Ok(Configuration {
+        #[cfg(target_os = "linux")]
+        audit_limits: mcp_gateway::security::audit::AuditLimits::from_config(&document)
+            .map_err(|error| error.to_string())?,
         clients,
         audit_log,
         #[cfg(target_os = "linux")]
@@ -190,7 +195,7 @@ pub fn load_clients(path: &Path) -> Result<Configuration, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn read_config(path: &Path) -> Result<Vec<u8>, String> {
+pub(crate) fn read_config(path: &Path) -> Result<Vec<u8>, String> {
     use std::fs::File;
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
@@ -230,7 +235,7 @@ fn read_config(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn read_config(path: &Path) -> Result<Vec<u8>, String> {
+pub(crate) fn read_config(path: &Path) -> Result<Vec<u8>, String> {
     let metadata =
         fs::symlink_metadata(path).map_err(|_| "credential config is unavailable".to_string())?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {

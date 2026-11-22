@@ -1,15 +1,17 @@
-//! Standalone append-only audit sink for a trusted local directory.
+//! Typed events for the durable, tamper-evident Linux audit ledger.
 
-use std::ffi::OsString;
-use std::fs::File;
-use std::io::{self, Write};
+mod chain;
+mod ledger;
+
+use std::io;
 use std::path::{Path, PathBuf};
 
-use rustix::fd::{AsFd, OwnedFd};
-use rustix::fs::{self, AtFlags, FileType, FlockOperation, Mode, OFlags, Stat, fstat};
-use rustix::io::Errno;
+use rustix::fd::AsFd;
+use rustix::fs::{FileType, Stat, fstat};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
-use super::linux_fs::{open_operator_dir, reopen_regular};
+use ledger::Ledger;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuditAction {
@@ -17,6 +19,7 @@ pub enum AuditAction {
     ApplyPatch,
     JobStart,
     JobCancel,
+    StageCleanup,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,113 +43,129 @@ pub struct JobAuditInfo<'a> {
     pub stderr_bytes: usize,
 }
 
-#[derive(Debug)]
-pub struct AuditSink {
-    file: File,
-    directory: OwnedFd,
-    parent: PathBuf,
-    name: OsString,
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuditLimits {
+    segment_bytes: u64,
+    total_bytes: u64,
 }
 
-impl AuditSink {
-    /// Bind audit writes to one private log and its already-open parent.
-    pub fn open(path: &Path) -> io::Result<Self> {
-        let bytes = path.as_os_str().as_encoded_bytes();
-        if !path.is_absolute()
-            || bytes.ends_with(b"/")
-            || bytes
-                .split(|&byte| byte == b'/')
-                .any(|part| part == b"." || part == b"..")
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid audit path",
-            ));
+impl Default for AuditLimits {
+    fn default() -> Self {
+        Self {
+            segment_bytes: 4 * 1024 * 1024,
+            total_bytes: 32 * 1024 * 1024,
         }
+    }
+}
 
-        let parent = path.parent().ok_or_else(invalid_audit)?.to_path_buf();
-        let name = path.file_name().ok_or_else(invalid_audit)?.to_os_string();
-        let directory = open_operator_dir(&parent)?;
-        check_directory(&directory)?;
+impl AuditLimits {
+    pub fn from_config(document: &Value) -> io::Result<Self> {
+        let defaults = Self::default();
+        let field = |name: &str, default, minimum, maximum| {
+            document.get(name).map_or(Ok(default), |value| {
+                value
+                    .as_u64()
+                    .filter(|value| (minimum..=maximum).contains(value))
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "Invalid audit capacity")
+                    })
+            })
+        };
+        let total_bytes = field(
+            "max_audit_dir_bytes",
+            defaults.total_bytes,
+            512,
+            256 * 1024 * 1024,
+        )?;
+        let segment_bytes = field(
+            "max_audit_file_bytes",
+            defaults.segment_bytes,
+            512,
+            64 * 1024 * 1024,
+        )?;
+        Ok(Self {
+            segment_bytes: segment_bytes.min(total_bytes),
+            total_bytes,
+        })
+    }
+}
 
-        let flags =
-            OFlags::APPEND | OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-        let file = match fs::statat(&directory, &name, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(expected) => {
-                check_file(&expected)?;
-                let handle = fs::openat(
-                    &directory,
-                    &name,
-                    OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                    Mode::empty(),
-                )?;
-                if !same_inode(&expected, &fstat(&handle)?) {
-                    return Err(invalid_audit());
-                }
-                reopen_regular(&handle, OFlags::APPEND | OFlags::WRONLY | OFlags::NONBLOCK)?
-            }
-            Err(Errno::NOENT) => {
-                let file = fs::openat(
-                    &directory,
-                    &name,
-                    flags | OFlags::CREATE | OFlags::EXCL,
-                    Mode::RUSR | Mode::WUSR,
-                )?;
-                fs::fchmod(&file, Mode::RUSR | Mode::WUSR)?;
-                file
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let sink = Self {
-            file: file.into(),
-            directory,
-            parent,
-            name,
-        };
-        sink.check_binding()?;
-        sink.file.sync_all()?;
-        fs::fsync(&sink.directory)?;
-        sink.check_binding()?;
-        Ok(sink)
+/// Identity and location recorded by the writer after staging and syncing a file.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StageProof {
+    pub root: PathBuf,
+    pub parent: PathBuf,
+    pub directory: [u64; 2],
+    pub name: String,
+    pub file: [u64; 2],
+    pub size: u64,
+    pub modified: [i64; 2],
+    pub created: [i64; 2],
+    pub uid: u32,
+}
+
+#[derive(Debug)]
+pub struct AuditSink(Ledger);
+
+impl AuditSink {
+    pub fn open(path: &Path) -> io::Result<Self> {
+        Self::open_with_limits(path, AuditLimits::default())
     }
 
-    /// Verify the configured name still designates the same owned log and directory.
+    pub fn open_with_limits(path: &Path, limits: AuditLimits) -> io::Result<Self> {
+        Ledger::open(path, limits).map(Self)
+    }
+
     pub fn check_binding(&self) -> io::Result<()> {
-        let current_dir = open_operator_dir(&self.parent)?;
-        check_directory(&current_dir)?;
-        if !same_inode(&fstat(&self.directory)?, &fstat(&current_dir)?) {
-            return Err(invalid_audit());
-        }
-        let current_file = fs::statat(&current_dir, &self.name, AtFlags::SYMLINK_NOFOLLOW)?;
-        let opened_file = fstat(&self.file)?;
-        check_file(&current_file)?;
-        check_file(&opened_file)?;
-        if !same_inode(&opened_file, &current_file) {
-            return Err(invalid_audit());
-        }
-        Ok(())
+        self.0.check_binding()
+    }
+
+    pub fn identity(&self) -> io::Result<[u64; 4]> {
+        self.0.identity()
     }
 
     pub fn record(
-        &mut self,
+        &self,
         principal: &str,
         action: AuditAction,
         phase: AuditPhase,
         unix_seconds: u64,
     ) -> io::Result<()> {
-        self.record_event(principal, action, phase, unix_seconds, None)
+        self.record_event(principal, action, phase, unix_seconds, None, None)
     }
 
-    pub fn identity(&self) -> io::Result<[u64; 4]> {
-        self.check_binding()?;
-        let directory = fstat(&self.directory)?;
-        let file = fstat(&self.file)?;
-        Ok([
-            directory.st_dev as u64,
-            directory.st_ino as u64,
-            file.st_dev as u64,
-            file.st_ino as u64,
-        ])
+    pub fn record_stage(
+        &self,
+        principal: &str,
+        action: AuditAction,
+        phase: AuditPhase,
+        unix_seconds: u64,
+        proof: &StageProof,
+    ) -> io::Result<()> {
+        self.record_event(principal, action, phase, unix_seconds, None, Some(proof))
+    }
+
+    pub fn pending_stages(&self) -> io::Result<Vec<(String, StageProof)>> {
+        Ok(self.0.inspection(true)?.stages)
+    }
+
+    pub fn inspect(path: &Path, include_records: bool) -> io::Result<Value> {
+        let result = Ledger::inspect_path(path, include_records)?;
+        Ok(json!({
+            "schema_version": 1,
+            "status": "verified",
+            "sequence": result.sequence,
+            "hash": result.hash,
+            "segments": result.segments,
+            "bytes": result.bytes,
+            "records": result.records,
+        }))
+    }
+
+    pub fn rotate(path: &Path, limits: AuditLimits) -> io::Result<()> {
+        Ledger::open(path, limits)?.rotate()
     }
 
     pub fn record_job(
@@ -175,16 +194,17 @@ impl AuditSink {
                 "invalid audit job metadata",
             ));
         }
-        self.record_event(principal, action, phase, unix_seconds, Some(details))
+        self.record_event(principal, action, phase, unix_seconds, Some(details), None)
     }
 
     fn record_event(
-        &mut self,
+        &self,
         principal: &str,
         action: AuditAction,
         phase: AuditPhase,
         unix_seconds: u64,
         details: Option<JobAuditInfo<'_>>,
+        stage: Option<&StageProof>,
     ) -> io::Result<()> {
         if principal.is_empty() || principal.len() > 128 || principal.chars().any(char::is_control)
         {
@@ -199,6 +219,7 @@ impl AuditSink {
             AuditAction::ApplyPatch => "apply_patch",
             AuditAction::JobStart => "job_start",
             AuditAction::JobCancel => "job_cancel",
+            AuditAction::StageCleanup => "stage_cleanup",
         };
         let phase = match phase {
             AuditPhase::Intent => "intent",
@@ -222,20 +243,10 @@ impl AuditSink {
             event["stdout_bytes"] = details.stdout_bytes.into();
             event["stderr_bytes"] = details.stderr_bytes.into();
         }
-        let mut line = serde_json::to_vec(&event)?;
-        line.push(b'\n');
-        fs::flock(&self.file, FlockOperation::LockExclusive)?;
-        let written = self.append(&line);
-        let unlocked = fs::flock(&self.file, FlockOperation::Unlock);
-        written.and(unlocked.map_err(io::Error::from))
-    }
-
-    fn append(&mut self, line: &[u8]) -> io::Result<()> {
-        self.check_binding()?;
-        self.file.write_all(line)?;
-        self.file.flush()?;
-        self.file.sync_data()?;
-        self.check_binding()
+        if let Some(proof) = stage {
+            event["staging"] = serde_json::to_value(proof)?;
+        }
+        self.0.append(event)
     }
 }
 

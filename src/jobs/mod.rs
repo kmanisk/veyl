@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use mcp_gateway::security::audit::{AuditAction, AuditPhase, AuditSink, JobAuditInfo};
+use mcp_gateway::security::audit::{AuditAction, AuditLimits, AuditPhase, AuditSink, JobAuditInfo};
 
 pub(crate) use config::{JobRoot, Profiles, parse_settings};
 pub(crate) use resources::verify as verify_scope;
@@ -33,6 +33,7 @@ pub(crate) struct Jobs {
     store: Store,
     profiles: Profiles,
     audit_path: PathBuf,
+    audit_limits: AuditLimits,
     audit: Mutex<AuditSink>,
     scopes: Option<Scopes>,
     /// Jobs that existed before this HTTP instance began. Their runner may
@@ -45,6 +46,7 @@ impl Jobs {
         state: &Path,
         profiles: Profiles,
         audit_path: &Path,
+        audit_limits: AuditLimits,
     ) -> Result<Self, String> {
         if rustix::process::geteuid().is_root() {
             return Err("Jobs require an unprivileged gateway user".into());
@@ -55,12 +57,13 @@ impl Jobs {
             .map_err(|_| "Cannot inspect existing private job receipts")?
             .into_iter()
             .collect();
-        let audit =
-            AuditSink::open(audit_path).map_err(|_| "Job grants require a private audit log")?;
+        let audit = AuditSink::open_with_limits(audit_path, audit_limits)
+            .map_err(|_| "Job grants require a private audit log")?;
         let jobs = Self {
             store,
             profiles,
             audit_path: audit_path.to_owned(),
+            audit_limits,
             audit: Mutex::new(audit),
             scopes: Scopes::detect(),
             recovered,

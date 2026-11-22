@@ -5,7 +5,7 @@ use std::path::Path;
 use std::{path::PathBuf, sync::Mutex};
 
 #[cfg(target_os = "linux")]
-use mcp_gateway::security::audit::{AuditAction, AuditPhase, AuditSink};
+use mcp_gateway::security::audit::{AuditAction, AuditLimits, AuditPhase, AuditSink, StageProof};
 #[cfg(target_os = "linux")]
 use serde_json::{Value, json};
 
@@ -27,22 +27,61 @@ pub(crate) struct MutationAudit {
 }
 
 impl MutationAudit {
-    pub(crate) fn open(config: &Path, path: Option<&Path>) -> Self {
+    pub(crate) fn open(
+        config: &Path,
+        path: Option<&Path>,
+        #[cfg(target_os = "linux")] limits: AuditLimits,
+    ) -> Result<Self, String> {
         #[cfg(target_os = "linux")]
         {
-            Self {
-                sink: Mutex::new(path.and_then(|p| AuditSink::open(p).ok())),
+            Ok(Self {
+                sink: Mutex::new(
+                    path.map(|p| AuditSink::open_with_limits(p, limits))
+                        .transpose()
+                        .map_err(|error| error.to_string())?,
+                ),
                 credentials: config
                     .canonicalize()
                     .unwrap_or_else(|_| config.to_path_buf()),
                 directory: path.and_then(Path::parent).map(Path::to_path_buf),
-            }
+            })
         }
         #[cfg(not(target_os = "linux"))]
         {
             let _ = (config, path);
-            Self {}
+            Ok(Self {})
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn recover(&self, clients: &[crate::http::admission::Client]) -> Result<(), String> {
+        let guard = self.sink.lock().map_err(|_| "Audit lock failed")?;
+        let Some(sink) = guard.as_ref() else {
+            return Ok(());
+        };
+        for (principal, proof) in sink.pending_stages().map_err(|error| error.to_string())? {
+            let Some(root) = clients
+                .iter()
+                .find(|client| client.id == principal)
+                .and_then(|client| client.mutation_root.as_ref())
+            else {
+                continue;
+            };
+            if root.path() != proof.root {
+                continue;
+            }
+            root.recover_stage(&proof, |phase| {
+                sink.record_stage(
+                    &principal,
+                    AuditAction::StageCleanup,
+                    phase,
+                    unix_seconds(),
+                    &proof,
+                )
+            })
+            .map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     pub(crate) fn available(&self) -> bool {
@@ -87,9 +126,14 @@ impl MutationAudit {
         let Ok(mut guard) = self.sink.lock() else {
             return tool_text(true, "Audit unavailable; mutation denied");
         };
-        let Some(sink) = guard.as_mut() else {
+        let Some(sink) = guard.as_ref() else {
             return tool_text(true, "Audit unavailable; mutation denied");
         };
+
+        if sink.check_binding().is_err() {
+            *guard = None;
+            return tool_text(true, "Audit intent unavailable; mutation denied");
+        }
 
         let action = match tool {
             Tool::WriteFile => AuditAction::WriteFile,
@@ -97,13 +141,18 @@ impl MutationAudit {
             _ => return tool_text(true, "Invalid mutation tool"),
         };
         let field = |name: &str| args.get(name).and_then(Value::as_str);
-        let mut healthy = true;
-        let result = run_audited(
-            |phase| {
-                healthy = sink.record(principal, action, phase, unix_seconds).is_ok();
-                healthy
-            },
-            || match action {
+        let mut journal = MutationJournal {
+            sink,
+            principal,
+            action,
+            unix_seconds,
+            attempted: false,
+            healthy: true,
+            proof: None,
+        };
+        let result = (|| {
+            let mut record_stage = |proof: &StageProof| journal.prepare(Some(proof));
+            match action {
                 AuditAction::WriteFile => {
                     let content = field("content")
                         .ok_or(MutationError::Rejected("Missing string argument: content"))?;
@@ -116,7 +165,7 @@ impl MutationAudit {
                     if args.len() != 2 + usize::from(args.contains_key("overwrite")) {
                         return Err(MutationError::Rejected("Unexpected write_file argument"));
                     }
-                    write::write_file(root, path, content, overwrite)?;
+                    write::write_file(root, path, content, overwrite, &mut record_stage)?;
                     Ok(patch::checksum(content))
                 }
                 AuditAction::ApplyPatch => {
@@ -130,12 +179,13 @@ impl MutationAudit {
                     if args.len() != 4 {
                         return Err(MutationError::Rejected("Unexpected apply_patch argument"));
                     }
-                    patch::apply_patch(root, path, expected, old, new)
+                    patch::apply_patch(root, path, expected, old, new, &mut record_stage)
                 }
                 _ => unreachable!("unsupported mutation"),
-            },
-        );
-        if !healthy {
+            }
+        })();
+        let result = journal.finish(result);
+        if !journal.healthy {
             *guard = None;
         }
 
@@ -151,69 +201,174 @@ impl MutationAudit {
 }
 
 #[cfg(target_os = "linux")]
-fn run_audited<T>(
-    mut record: impl FnMut(AuditPhase) -> bool,
-    execute: impl FnOnce() -> Result<T, MutationError>,
-) -> Result<T, MutationError> {
-    if !record(AuditPhase::Intent) {
-        return Err(MutationError::Rejected(
-            "Audit intent unavailable; mutation denied",
-        ));
-    }
-    let result = execute();
-    let phase = match result {
-        Ok(_) => AuditPhase::Success,
-        Err(MutationError::Rejected(_)) => AuditPhase::Failure,
-        Err(MutationError::Uncertain) => AuditPhase::Uncertain,
-    };
-    let recorded = record(phase);
-    if !recorded && result.is_ok() {
-        return Err(MutationError::Uncertain);
-    }
-    result
+fn unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(target_os = "linux")]
+struct MutationJournal<'a> {
+    sink: &'a AuditSink,
+    principal: &'a str,
+    action: AuditAction,
+    unix_seconds: u64,
+    attempted: bool,
+    healthy: bool,
+    proof: Option<StageProof>,
+}
+
+#[cfg(target_os = "linux")]
+impl MutationJournal<'_> {
+    fn prepare(&mut self, proof: Option<&StageProof>) -> Result<(), MutationError> {
+        self.attempted = true;
+        self.healthy = self.record(AuditPhase::Intent, proof);
+        if !self.healthy {
+            return Err(MutationError::Rejected(
+                "Audit intent unavailable; mutation denied",
+            ));
+        }
+        self.proof = proof.cloned();
+        Ok(())
+    }
+
+    fn record(&self, phase: AuditPhase, proof: Option<&StageProof>) -> bool {
+        match proof {
+            Some(proof) => {
+                self.sink
+                    .record_stage(self.principal, self.action, phase, self.unix_seconds, proof)
+            }
+            None => self
+                .sink
+                .record(self.principal, self.action, phase, self.unix_seconds),
+        }
+        .is_ok()
+    }
+
+    fn finish<T>(&mut self, result: Result<T, MutationError>) -> Result<T, MutationError> {
+        // Rejected validation has no visible side effects. Record the same
+        // intent/outcome pair even when no stage could be prepared.
+        if !self.attempted {
+            self.prepare(None)?;
+        }
+        if !self.healthy {
+            return result;
+        }
+        let phase = match result {
+            Ok(_) => AuditPhase::Success,
+            Err(MutationError::Rejected(_)) => AuditPhase::Failure,
+            Err(MutationError::Uncertain) => AuditPhase::Uncertain,
+        };
+        self.healthy = self.record(phase, self.proof.as_ref());
+        if !self.healthy && result.is_ok() {
+            return Err(MutationError::Uncertain);
+        }
+        result
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::os::unix::fs::DirBuilderExt;
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new() -> Self {
+            let mut random = [0; 16];
+            getrandom::fill(&mut random).unwrap();
+            let path = std::env::temp_dir().join(format!(
+                "mcp-audit-test-{:032x}",
+                u128::from_ne_bytes(random)
+            ));
+            fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+            Self(path)
+        }
+
+        fn journal(sink: &AuditSink) -> MutationJournal<'_> {
+            MutationJournal {
+                sink,
+                principal: "client",
+                action: AuditAction::WriteFile,
+                unix_seconds: 1,
+                attempted: false,
+                healthy: true,
+                proof: None,
+            }
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
-    fn a_failed_intent_never_starts_the_mutation() {
-        let result = run_audited::<()>(
-            |phase| {
-                assert_eq!(phase, AuditPhase::Intent);
-                false
-            },
-            || panic!("failed intent must prevent execution"),
-        );
-        assert!(matches!(result, Err(MutationError::Rejected(_))));
+    fn a_failed_intent_never_publishes_a_file_or_stage() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("audit.jsonl");
+        let sink = AuditSink::open(&path).unwrap();
+        let root = MutationRoot::open(&fixture.0).unwrap();
+        fs::remove_file(&path).unwrap();
+        let mut journal = Fixture::journal(&sink);
+        let result = write::write_file(&root, "target", "text", false, &mut |proof| {
+            journal.prepare(Some(proof))
+        });
+        assert!(matches!(
+            journal.finish(result),
+            Err(MutationError::Rejected(_))
+        ));
+        assert!(!fixture.0.join("target").exists());
+        assert!(fs::read_dir(&fixture.0).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .as_encoded_bytes()
+                .starts_with(b".mcp-stage-")
+        }));
     }
 
     #[test]
     fn a_failed_outcome_record_reports_an_uncertain_mutation() {
-        let mut journal = Vec::new();
-        let result = run_audited(
-            |phase| {
-                journal.push(phase);
-                phase == AuditPhase::Intent
-            },
-            || Ok("published"),
+        let fixture = Fixture::new();
+        let path = fixture.0.join("audit.jsonl");
+        let sink = AuditSink::open(&path).unwrap();
+        let root = MutationRoot::open(&fixture.0).unwrap();
+        let mut journal = Fixture::journal(&sink);
+        let result = write::write_file(&root, "target", "text", false, &mut |proof| {
+            journal.prepare(Some(proof))
+        });
+        assert_eq!(result, Ok(()));
+        fs::remove_file(&path).unwrap();
+        assert_eq!(journal.finish(result), Err(MutationError::Uncertain));
+        assert_eq!(
+            fs::read_to_string(fixture.0.join("target")).unwrap(),
+            "text"
         );
-        assert_eq!(journal, [AuditPhase::Intent, AuditPhase::Success]);
-        assert_eq!(result, Err(MutationError::Uncertain));
     }
 
     #[test]
     fn an_uncertain_publication_is_recorded_as_uncertain() {
-        let mut journal = Vec::new();
-        let result = run_audited::<()>(
-            |phase| {
-                journal.push(phase);
-                true
-            },
-            || Err(MutationError::Uncertain),
+        let fixture = Fixture::new();
+        let path = fixture.0.join("audit.jsonl");
+        let sink = AuditSink::open(&path).unwrap();
+        let mut journal = Fixture::journal(&sink);
+        journal.prepare(None).unwrap();
+        assert_eq!(
+            journal.finish::<()>(Err(MutationError::Uncertain)),
+            Err(MutationError::Uncertain)
         );
-        assert_eq!(journal, [AuditPhase::Intent, AuditPhase::Uncertain]);
-        assert_eq!(result, Err(MutationError::Uncertain));
+        let contents = AuditSink::inspect(&path, true).unwrap();
+        let phases: Vec<_> = contents["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|record| record["phase"].as_str().unwrap())
+            .collect();
+        assert_eq!(phases, ["intent", "uncertain"]);
     }
 }

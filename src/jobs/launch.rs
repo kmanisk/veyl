@@ -88,6 +88,7 @@ impl Jobs {
         let launch = Launch {
             store: self.store.path().to_owned(),
             audit: self.audit_path.clone(),
+            audit_limits: self.audit_limits,
             audit_id,
             root: root.clone(),
             profile,

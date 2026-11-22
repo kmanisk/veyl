@@ -3,7 +3,7 @@
 use sha2::{Digest, Sha256};
 
 use super::filesystem::{MAX_TEXT_BYTES, MutationError, MutationRoot, read_text};
-use super::write::{check_size, publish};
+use super::write::{RecordStage, check_size, publish};
 use MutationError::Rejected;
 
 pub(super) fn apply_patch(
@@ -12,6 +12,7 @@ pub(super) fn apply_patch(
     expected_sha256: &str,
     old: &str,
     new: &str,
+    record_stage: &mut RecordStage<'_>,
 ) -> Result<String, MutationError> {
     if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
@@ -55,7 +56,7 @@ pub(super) fn apply_patch(
     updated.push_str(new);
     updated.push_str(&input[start + old.len()..]);
 
-    publish(&target, Some((&file, &prior)), &updated)?;
+    publish(&target, Some((&file, &prior)), &updated, record_stage)?;
     Ok(checksum(&updated))
 }
 

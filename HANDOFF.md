@@ -323,7 +323,7 @@ because the independent audit-chain test and recorded hash do not exist.
 ### Audit-chain suite (Milestone 3 New)
 - **Full path:** `/home/onyx/Projects/rust-mcp-gateway-lab/acceptance_pass3_auditchain/locked_audit_chain.py`
 - **Actual case count:** 13 cases (`test_01` to `test_13`).
-- **SHA-256:** `04d996e011dd834268d5b69413ff1027db15f86659a97543d9ef625c5298b6f8`
+- **SHA-256:** `31cf5bf0bbd9945a791177fca04a074169d2456416e19c237de4c5692e4ee2ef`
 - **Red-baseline result on M2 codebase:** **1 PASS / 12 FAIL** (Expected red baseline).
   - Passing: `test_13_sensitive_data_exclusion` (existing M2 audit excludes secrets).
   - Failing: `test_01`–`test_12` (missing `prev_hash` cryptographic link, missing `audit verify` CLI, missing torn-tail recovery, missing multi-segment rotation, missing audit size cap enforcement, missing `.mcp-stage-*` cleanup).
@@ -331,16 +331,32 @@ because the independent audit-chain test and recorded hash do not exist.
 
 ### YOLO/CLI suite (Milestone 3 New)
 - **Full path:** `/home/onyx/Projects/rust-mcp-gateway-lab/acceptance_pass3_yolo/locked_yolo_service.py`
-- **Actual case count:** 10 cases (`test_01` to `test_10`).
-- **SHA-256:** `fcede8a93c933dbcb0e570c86aca392f80d972890a911a1c78b2986ff716ce78`
-- **Red-baseline result on M2 codebase:** **3 PASS / 7 FAIL** (Expected red baseline).
+- **Actual case count:** 11 cases (`test_01` to `test_11`).
+- **SHA-256:** `0db6754f9f74b1e9767b8acf98310609441a08df9a005b72ef4cfb8dbd3a21eb`
+- **Red-baseline result on M2 codebase:** **3 PASS / 8 FAIL** (Expected red baseline).
   - Passing: `test_02_local_cli_operator_ownership_and_mcp_denial` (MCP tools and spoofed headers denied), `test_08_secret_redaction_in_operator_cli` (secrets not printed), `test_10_os_security_boundaries_service_user_permissions` (mode 0000 access denied by OS).
-  - Failing: `test_01`, `test_03`, `test_04`, `test_05`, `test_06`, `test_07`, `test_09` (missing `yolo enable/disable/status` CLI, root bypass denied by STANDARD policy, missing immediate dynamic reload, missing `yolo: true` audit flag, missing config/audit directory containment check).
-- **Known test limitations:** Tests operate against local CLI `mcp-gateway yolo enable/disable/status [--client <id>] [--config <path>]` and HTTP `/mcp` listener.
+  - Failing: `test_01`, `test_03`, `test_04`, `test_05`, `test_06`, `test_07`, `test_09`, `test_11` (missing `yolo enable/disable/status` CLI, root bypass denied by STANDARD policy, missing immediate dynamic reload, missing `yolo: true` audit flag, missing config/audit directory containment check, missing gateway-launched job kernel isolation).
+- **Kernel isolation coverage:** `test_11_gateway_launched_job_kernel_isolation` verifies positive workspace IO, `/proc` namespace isolation, and negative blocking of config, operator secret key, audit log, symlink traversal, and host process descriptors. Test oracle validated via disposable reference fixtures and unconfined mutation failure.
+
+### Dashboard suite (Milestone 3 New)
+- **Full path:** `/home/onyx/Projects/rust-mcp-gateway-lab/acceptance_pass3_dashboard/locked_dashboard_acceptance.py`
+- **Actual case count:** 15 cases (`test_01` to `test_15`).
+- **SHA-256:** `5148a3814e7030fabb4ce6794151c1cfcad27fd1dd4d423744f98346341f8cab`
+- **Red-baseline result on M2 codebase:** **0 PASS / 15 FAIL** (Expected red baseline).
+  - Failing: `test_01`–`test_15` (missing `dashboard pair` CLI, missing `/dashboard` web interface, missing pairing redemption, missing session management, missing CSRF enforcement, missing browser smoke test).
+- **Browser smoke coverage:** `test_15_real_browser_dashboard_smoke_test` launches headless Brave (`/home/onyx/.local/bin/brave`), connects via stdlib Chrome DevTools Protocol (CDP) WebSocket, navigates to pairing URL, verifies DOM rendering, queries UI elements, captures PNG screenshot evidence, and verifies `HttpOnly` / `SameSite` session cookie scoping.
+
+### Service/Network suite (Milestone 3 New)
+- **Full path:** `/home/onyx/Projects/rust-mcp-gateway-lab/acceptance_pass3_service_network/locked_service_network.py`
+- **Actual case count:** 12 cases (`test_01` to `test_12`).
+- **SHA-256:** `bb23f8929709b967de5f4c67498c01ac3acce26b29bf289c56dd88b2a6036f49`
+- **Red-baseline result on M2 codebase:** **5 PASS / 7 FAIL** (Expected red baseline).
+  - Passing: `test_02_loopback_binding_and_remote_denial`, `test_03_tls_support_on_configured_endpoints`, `test_04_session_timeout_and_activity_tracking`, `test_08_dns_rebinding_host_header_validation`, `test_11_no_privilege_escalation_or_extra_daemons`.
+  - Failing: `test_01`, `test_05`, `test_06`, `test_07`, `test_09`, `test_10`, `test_12` (missing systemd user unit generation, service management CLI `service install/start/stop/status`, and unmanaged lingering daemon checks).
 
 ### Harness integration
 - **Trusted manifest location:** `/home/onyx/Projects/rust-mcp-gateway-lab/harness/acceptance.py`
-- **Branch registration:** Target branch `milestone3/yolo-service` and descendant branches registered to require all 13 suites (101 total cases).
+- **Branch registration:** Target branch `milestone3/yolo-service` and descendant branches registered to require all 15 suites (129 total cases).
 - **Protected test locations:** Mode `0444` files in mode `0555` directories outside agent writable worktrees:
   - `acceptance_m1/` (8 cases)
   - `acceptance_m1_edge/` (7 cases)
@@ -354,23 +370,28 @@ because the independent audit-chain test and recorded hash do not exist.
   - `acceptance_pass2_jobs/` (9 cases, corrected)
   - `acceptance_pass2_jobs_limits/` (1 case)
   - `acceptance_pass3_auditchain/` (13 cases, new)
-  - `acceptance_pass3_yolo/` (10 cases, new)
-- **Hash verification:** All 13 suite hashes verified matching manifest.
+  - `acceptance_pass3_yolo/` (11 cases, new)
+  - `acceptance_pass3_dashboard/` (15 cases, new)
+  - `acceptance_pass3_service_network/` (12 cases, new)
+- **Hash verification:** All 15 suite hashes verified matching manifest.
 - **Codex write protection:** Codex sandbox runs with `--clearenv` and unprivileged Bubblewrap; lab acceptance test directories are mounted strictly read-only and cannot be altered or substituted by the coding agent.
 
 ### Codex implementation gate
-Codex may begin Phase 3 ONLY after the following prerequisites are met:
-1. **[BLOCKED]** Milestone 2 jobs implementation is committed to `milestone2/jobs-supervisor` by the human operator.
-2. **[PASSED]** Corrected jobs suite passes (9/9).
-3. **[PASSED]** Output-limit suite passes (1/1).
-4. **[PASSED]** Audit-chain suite exists, is locked (`04d996e0...`), and red baseline recorded (1 pass, 12 fail).
-5. **[PASSED]** YOLO/CLI suite exists, is locked (`fcede8a9...`), and red baseline recorded (3 pass, 7 fail).
-6. **[PASSED]** All 13 suite hashes registered in `harness/acceptance.py`.
-7. **[PASSED]** Inherited 68 cases pass without modification.
-8. **[PASSED]** Mutation 1 verified in disposable copy; test infrastructure is clean and deterministic.
+Codex may begin Phase 3 now that all prerequisite gates are met:
+1. **[PASSED]** Milestone 2 jobs implementation committed by human operator (`76cafa0a5c0a8efc894366cd6ccf89ca4de74d3a` on `milestone2/jobs-supervisor`).
+2. **[PASSED]** Milestone 2 baseline passes 78/78 cases across 11 suites.
+3. **[PASSED]** Corrected jobs suite passes (9/9).
+4. **[PASSED]** Output-limit suite passes (1/1).
+5. **[PASSED]** Audit-chain suite exists, is locked (`31cf5bf0...`), and red baseline recorded (1 pass, 12 fail).
+6. **[PASSED]** YOLO/CLI suite exists, is locked (`0db6754f...`), and red baseline recorded (3 pass, 8 fail).
+7. **[PASSED]** Dashboard suite exists, is locked (`5148a381...`), and red baseline recorded (0 pass, 15 fail).
+8. **[PASSED]** Service/Network suite exists, is locked (`bb23f892...`), and red baseline recorded (5 pass, 7 fail).
+9. **[PASSED]** All 15 suite hashes registered in `harness/acceptance.py`.
+10. **[PASSED]** Test oracle validation verified via `scripts/verify_yolo_job_isolation_oracle.py`.
+11. **[PASSED]** Harness regression (37/37) and hardening verification (6/6) pass.
+12. **[PASSED]** Phase 3 worktree `worktrees/m3-yolo-service` is clean and ready.
 
-**Action Required from User/Operator:**
-Commit the dirty working tree on `milestone2/jobs-supervisor`, then create worktree/branch `milestone3/yolo-service` from that verified commit before starting Codex.
+**Phase 3 Implementation Gate Verdict:** **READY FOR CODEX PHASE 3**
 
 ## Milestone 2 jobs baseline verification
 
@@ -393,3 +414,116 @@ arguments and runs under the gateway UID. It does not provide a separate
 sandbox or authorize arbitrary YOLO execution. AGY independently owns all
 locked tests, including the dashboard and service/network gates required
 before Phase 3 implementation.
+
+## Beta 1 Gate 1 working state before the corrected oracle
+
+Branch `milestone3/yolo-service` remains at base
+`76cafa0a5c0a8efc894366cd6ccf89ca4de74d3a` with uncommitted Gate 1
+source. The inherited 78 cases passed before and after the changes. The
+working tree contains the independently prepared readiness notes above.
+
+### Audit and interrupted writes
+
+The Linux ledger uses canonical JSONL, SHA-256 links, a stable interprocess
+lock, and a checkpoint published by syncing a temporary file, renaming it,
+and syncing the directory. The checkpoint identifies the active segment and
+last committed record. Startup verifies earlier committed records before
+recovering an incomplete final append. Rotation preserves links across
+segments. A deleted or replaced active ledger, a complete malformed record,
+and missing committed history fail closed. A privileged operator with
+control over the whole directory can still rewrite the history.
+
+Set `max_audit_file_bytes` for the segment limit and
+`max_audit_dir_bytes` for the total retained record bytes. The defaults are
+4 MiB and 32 MiB respectively. Rotation retains history and cannot relieve
+the total cap by deleting it. The active log, rotated segments and private
+checkpoint belong in the same backup. Preserve legacy unchained logs
+separately and initialize a new log explicitly. A nonempty legacy log
+without a valid checkpoint is refused without altering its records.
+
+`mcp-gateway audit verify|status|inspect|rotate --config /absolute/clients.json`
+and `--log /absolute/events.jsonl` operate on the same ledger. Read-only
+verification reports the first broken sequence where it can identify one.
+Inspection returns bounded, local JSON. Explicit rotation can also be
+performed while a cooperating gateway is running.
+
+Mutation staging requires Linux `O_TMPFILE`, file birth time, and linking a
+pinned anonymous inode through procfs. The visible staging name is created
+only after the sync of its exact intent. Startup cleanup validates the
+principal, authorized root, parent directory identity, and staged inode
+identity and metadata. It takes the same parent lock used by a live writer
+and commits an intent and outcome around a confirmed removal. Read and job
+behavior otherwise retains the Milestone 2 security profile.
+
+### Verification and blocker
+
+- `cargo fmt --all --check`, offline locked Clippy with denied warnings,
+  build, and Cargo tests passed (24 unit, four integration).
+- The trusted verifier ran all 15 suites with matching hashes before and
+  after. It returned 98/129. Gate 1 passed 12/13 audit cases, and later
+  unimplemented gates reported their expected baseline failures.
+- The actual HTTP binary started against a stage created by a process that
+  exited after committing its intent and linking the file. Startup preserved
+  a foreign lookalike, removed the proven stage, and produced a valid
+  three-record chain. A separate test verified that a locked parent is
+  preserved while its writer is active.
+- Locked audit case 12 requires cleanup after writing an unverifiable
+  genesis record with a fabricated hash and an unconfigured principal. AGY
+  independently confirmed the contradiction with fail-closed startup.
+  The gateway refuses that history and preserves the files. Only AGY can
+  repair and re-lock the fixture with explicit authorization. Keep its
+  cleanup and preservation assertions.
+
+Local receipts are under `target/beta-receipts/`. The locked suite files,
+runner, and trusted manifest were preserved. Gate 1 is uncommitted, and
+Gates 2 through 8 remain pending.
+
+## Beta 1 Gate 1 accepted
+
+The corrected audit suite passed 13/13 with SHA-256
+`8172a3cfef07b4b71099f48807fbb1b69325eee5d8d9afc7e723b0e90940d258`.
+Case 12a observed a genuine staged write with a synced intent before
+SIGKILL, then verified that restart removed it and recorded the cleanup.
+Case 12b preserved unprovenanced staging names and foreign lookalikes. All
+78 inherited cases passed using the normal build. All 15 locked suite hashes
+matched the trusted manifest before and after the runs.
+
+The opt-in Cargo feature `test-hooks` compiles the pre-rename pause at the
+durability boundary before final validation and publication. In that build,
+`MCP_TEST_AUDIT_PRE_RENAME_HOOK` specifies a fresh marker path. The hook
+syncs `ready` and waits up to 30 seconds. The pinned audit suite uses the
+test-only switch `MCP_TEST_PRE_RENAME_PAUSE=1` and observes the linked stage
+directly. The test build releases the HTTP session lock and dispatches its
+tool work on a blocking worker. A separate authenticated HTTP probe observed
+the marker before SIGKILL and completed an unrelated read during the pause.
+An expiry probe verified the diagnostic and successful audited publication.
+
+The default release artifact is `target/release/mcp-gateway`. Its
+`strings` scan for both controls and the expiry diagnostic returned no
+matches. A real audited HTTP write completed with both variables set without
+creating a marker. The test artifact was built separately at
+`/tmp/mcp-gateway-test-hooks-target/debug/mcp-gateway`. Formatting, default
+and feature-enabled Clippy with warnings denied, offline locked debug and
+release builds, 24 unit tests, four integration tests, whitespace checks,
+and project-local RustSec audit all passed. Local receipts are under
+`target/gate1-close/`.
+
+### Whole-ledger rewrite risk
+
+A YOLO process running as the audit owner could delete or replace both the
+ledger and its local checkpoint and then reconstruct a consistent chain.
+Mode `0400` under that same Unix owner offers no independent trust anchor.
+The owner can change permissions and can replace the file through a writable
+parent directory.
+
+1. Export signed or independently verifiable audit heads to another device or
+   remote destination outside the gateway UID's control. Verification
+   against retained heads covers history through the latest exported head.
+2. Place ledger custody and append authorization under a separate UID that
+   owns the audit sink.
+3. Accept the limitation temporarily for Beta 1 and disclose that a process
+   with the audit owner's authority can rewrite the whole history.
+
+The external checkpoint is the lowest-overhead option because it can run
+on demand without adding a resident process. Gate 1 leaves this threat
+unresolved.

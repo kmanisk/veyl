@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+#[cfg(target_os = "linux")]
+mod audit_cli;
 mod file_access;
 mod http;
 #[cfg(target_os = "linux")]
@@ -15,6 +17,17 @@ use file_access::FileAccess;
 use protocol::Protocol;
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    {
+        let args: Vec<_> = std::env::args_os().skip(1).collect();
+        if args.first().is_some_and(|arg| arg == "audit") {
+            if let Err((status, message)) = audit_cli::run(&args[1..]) {
+                eprintln!("mcp-gateway: {message}");
+                std::process::exit(status);
+            }
+            return;
+        }
+    }
     if let Err(message) = run() {
         eprintln!("mcp-gateway: {message}");
         std::process::exit(2);
