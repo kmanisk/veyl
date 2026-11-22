@@ -120,7 +120,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         };
         #[cfg(target_os = "linux")]
         let yolo_revision = match (mode, entry.get("yolo_revision")) {
-            (Mode::Yolo, Some(value)) => Some(
+            (Mode::ScopedYolo, Some(value)) => Some(
                 value
                     .as_str()
                     .filter(|id| {
@@ -132,7 +132,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
                     .ok_or("Invalid YOLO policy revision")?
                     .to_owned(),
             ),
-            (Mode::Yolo, None) => {
+            (Mode::ScopedYolo, None) => {
                 return Err("YOLO authorization requires a policy revision".into());
             }
             (_, Some(_)) => return Err("Inactive client has retained a YOLO revision".into()),
@@ -158,7 +158,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             .canonicalize()
             .map_err(|_| "client root is unavailable".to_string())?;
         #[cfg(target_os = "linux")]
-        if (audit_log.is_some() || mode == Mode::Yolo)
+        if (audit_log.is_some() || mode == Mode::ScopedYolo)
             && protected(
                 path,
                 audit_log.as_deref(),
@@ -239,7 +239,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             jobs.as_ref().map(|j| j.0.as_path()),
         )?;
         #[cfg(target_os = "linux")]
-        let job_extra_roots = if has_job_grant && mode == Mode::Yolo {
+        let job_extra_roots = if has_job_grant && mode == Mode::ScopedYolo {
             super::scope::root_paths(entry, "yolo_roots")?
                 .iter()
                 .map(|root| JobRoot::open(root))

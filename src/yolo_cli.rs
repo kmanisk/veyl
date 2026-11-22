@@ -15,13 +15,16 @@ use crate::http::operator::{
 use crate::http::scope::sibling_scopes;
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
-    const USAGE: &str = "usage: mcp-gateway yolo <enable|disable|status> --client ID --config PATH";
+    const USAGE: &str = "usage: mcp-gateway yolo <enable|disable|reset|status|set --mode standard> --client ID --config PATH";
     if args.iter().any(|arg| arg == "--help") {
         println!("{USAGE}");
         return Ok(());
     }
     let command = args.first().and_then(|arg| arg.to_str()).ok_or(USAGE)?;
-    if !matches!(command, "enable" | "disable" | "status") {
+    if !matches!(
+        command,
+        "enable" | "disable" | "reset" | "standard" | "status" | "set"
+    ) {
         return Err(USAGE.into());
     }
     if rustix::process::geteuid().is_root() {
@@ -29,14 +32,25 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     }
     let mut id = None;
     let mut path = None;
+    let mut requested_mode = None;
     let mut args = args[1..].iter();
     while let Some(option) = args.next() {
         match option.to_str() {
             Some("--client") if id.is_none() => id = args.next().and_then(|arg| arg.to_str()),
+            Some("--mode") if command == "set" && requested_mode.is_none() => {
+                requested_mode = Some(args.next().and_then(|arg| arg.to_str()).ok_or(USAGE)?);
+            }
             Some("--config") if path.is_none() => path = args.next().map(PathBuf::from),
             _ => return Err(USAGE.into()),
         }
     }
+    let command = match (command, requested_mode) {
+        ("set", Some("standard")) | ("standard", None) => "reset",
+        ("set", _) => {
+            return Err("Only explicit Standard selection is supported at this checkpoint".into());
+        }
+        _ => command,
+    };
     let id = id.ok_or(USAGE)?;
     let path = path.ok_or(USAGE)?;
     let policy = PolicyFile::lock(&path, command != "status")?;
@@ -59,19 +73,20 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     let pending = policy.pending_client()?;
     if pending
         .as_deref()
-        .is_some_and(|pending| command != "disable" || pending != id)
+        .is_some_and(|pending| !matches!(command, "disable" | "reset") || pending != id)
     {
         return Err(
             "Interrupted authorization update requires local YOLO disable of the affected client"
                 .into(),
         );
     }
-    if pending.is_none() && command != "disable" {
+    if pending.is_none() && !matches!(command, "disable" | "reset") {
         verify_approvals(&settings)?;
     }
     let target = match command {
         "enable" if previous == Mode::Disabled => return Err("Client is disabled".into()),
-        "enable" => Mode::Yolo,
+        "enable" => Mode::ScopedYolo,
+        "reset" => Mode::Standard,
         "disable" if previous != Mode::Disabled => Mode::Standard,
         _ => previous,
     };
@@ -98,7 +113,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             .ok_or("YOLO requires a private audit ledger")?;
         let audit = AuditSink::open_with_limits(audit_path, settings.audit_limits)
             .map_err(|_| "YOLO requires a healthy private audit ledger")?;
-        let implicit = if target == Mode::Yolo && entry.get("yolo_roots").is_none() {
+        let implicit = if target == Mode::ScopedYolo && entry.get("yolo_roots").is_none() {
             sibling_scopes(&path, &settings, client)?
         } else {
             Vec::new()
@@ -110,7 +125,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         object.insert("mode".into(), Value::from(target.label()));
         object.remove("yolo_shared_roots");
         object.remove("yolo_revision");
-        if target == Mode::Yolo {
+        if target == Mode::ScopedYolo {
             object.insert("yolo_revision".into(), Value::from(revision.as_str()));
         }
         if !implicit.is_empty() {
@@ -148,18 +163,23 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         verify_approvals(&policy.snapshot()?)?;
     }
     println!(
-        "client={id} client_state={} yolo={} mode={} tool_grants={}",
+        "client={id} client_state={} yolo={} mode={} effective_policy={} tool_grants={}",
         if target == Mode::Disabled {
             "disabled"
         } else {
             "enabled"
         },
-        if target == Mode::Yolo {
+        if target == Mode::ScopedYolo {
             "enabled"
         } else {
             "disabled"
         },
         target.label(),
+        if target == Mode::ScopedYolo {
+            "legacy_scoped_yolo"
+        } else {
+            target.label()
+        },
         client
             .actions
             .iter()

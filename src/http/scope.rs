@@ -35,7 +35,7 @@ pub(super) fn open_extra_roots(
 ) -> Result<Vec<MutationRoot>, String> {
     let explicit = root_paths(entry, "yolo_roots")?;
     let shared = root_paths(entry, "yolo_shared_roots")?;
-    if !shared.is_empty() && Mode::from_entry(entry)? != Mode::Yolo {
+    if !shared.is_empty() && Mode::from_entry(entry)? != Mode::ScopedYolo {
         return Err("Inactive client has retained implicit YOLO scopes".into());
     }
     let roots: Vec<_> = explicit.into_iter().chain(shared).collect();

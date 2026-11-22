@@ -29,7 +29,7 @@ const CREATE: OFlags = OFlags::WRONLY
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub(crate) enum Mode {
     Standard,
-    Yolo,
+    ScopedYolo,
     Disabled,
 }
 
@@ -39,7 +39,7 @@ impl Mode {
             None => Ok(Self::Standard),
             Some(value) => match value.as_str() {
                 Some("standard") => Ok(Self::Standard),
-                Some("yolo") => Ok(Self::Yolo),
+                Some("yolo") => Ok(Self::ScopedYolo),
                 Some("disabled") => Ok(Self::Disabled),
                 _ => Err("Invalid client authorization mode".into()),
             },
@@ -49,7 +49,7 @@ impl Mode {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Standard => "standard",
-            Self::Yolo => "yolo",
+            Self::ScopedYolo => "yolo",
             Self::Disabled => "disabled",
         }
     }
@@ -59,7 +59,7 @@ impl From<Mode> for ExecutionMode {
     fn from(mode: Mode) -> Self {
         match mode {
             Mode::Standard => Self::Standard,
-            Mode::Yolo => Self::PersistentYolo,
+            Mode::ScopedYolo => Self::PersistentYolo,
             Mode::Disabled => Self::Disabled,
         }
     }
