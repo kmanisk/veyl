@@ -69,18 +69,31 @@ impl MutationAudit {
             return Ok(());
         };
         for (principal, proof) in sink.pending_stages().map_err(|error| error.to_string())? {
-            let Some(root) = clients
-                .iter()
-                .find(|client| client.id == principal)
-                .and_then(|client| {
-                    client
-                        .mutation_root
-                        .iter()
-                        .chain(&client.extra_roots)
-                        .find(|root| root.path() == proof.root)
-                })
-            else {
-                continue;
+            let host_root;
+            let root = if proof.host_parent && proof.parent.as_os_str().is_empty() {
+                // The intent was admitted under FULL. Revocation must not
+                // leave its stage behind. Recovery still verifies both inodes
+                // and takes the same parent lock as live writes.
+                let Ok(root) = MutationRoot::open_host_parent(&proof.root) else {
+                    continue;
+                };
+                host_root = root;
+                &host_root
+            } else {
+                let Some(root) = clients
+                    .iter()
+                    .find(|client| client.id == principal)
+                    .and_then(|client| {
+                        client
+                            .mutation_root
+                            .iter()
+                            .chain(&client.extra_roots)
+                            .find(|root| root.path() == proof.root)
+                    })
+                else {
+                    continue;
+                };
+                root
             };
             root.recover_stage(&proof, |phase| {
                 sink.record_stage(
@@ -148,11 +161,12 @@ impl MutationAudit {
         };
 
         let absolute = root.path().join(path);
-        if absolute == self.credentials
-            || self
-                .directory
-                .as_ref()
-                .is_some_and(|dir| absolute.starts_with(dir))
+        if !root.is_host_parent()
+            && (absolute == self.credentials
+                || self
+                    .directory
+                    .as_ref()
+                    .is_some_and(|dir| absolute.starts_with(dir)))
         {
             return tool_text(true, "Path is reserved for gateway configuration or audit");
         }

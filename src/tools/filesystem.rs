@@ -26,6 +26,7 @@ use MutationError::Rejected;
 pub(crate) struct MutationRoot {
     path: PathBuf,
     directory: OwnedFd,
+    host_parent: bool,
 }
 
 impl MutationRoot {
@@ -33,7 +34,24 @@ impl MutationRoot {
         Ok(Self {
             path: path.to_path_buf(),
             directory: open_absolute_dir(path)?,
+            host_parent: false,
         })
+    }
+
+    pub(crate) fn open_host_parent(path: &Path) -> io::Result<Self> {
+        if rustix::process::geteuid().is_root() {
+            return Err(io::Error::other(
+                "FULL file tools require a non-root gateway",
+            ));
+        }
+        Ok(Self {
+            host_parent: true,
+            ..Self::open(path)?
+        })
+    }
+
+    pub(super) fn is_host_parent(&self) -> bool {
+        self.host_parent
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -164,6 +182,7 @@ impl Target<'_> {
             modified: [file.st_mtime, file.st_mtime_nsec as i64],
             created,
             uid: file.st_uid,
+            host_parent: self.root.host_parent,
         })
     }
 
@@ -220,6 +239,16 @@ impl Target<'_> {
         let file = reopen_regular(&file, OFlags::RDONLY | OFlags::NONBLOCK)
             .map_err(|_| Rejected("Cannot safely read target file"))?;
         Ok(file.into())
+    }
+
+    pub(super) fn check_write_access(&self, file: &File) -> Result<(), MutationError> {
+        if self.root.host_parent {
+            // A directory owner can replace a read-only file by rename.
+            // FULL must have permission to write the original inode as well.
+            reopen_regular(file, OFlags::WRONLY | OFlags::NONBLOCK)
+                .map_err(|_| Rejected("Target is not writable"))?;
+        }
+        Ok(())
     }
 
     pub(super) fn check_target(&self, expected: Option<&Stat>) -> Result<(), MutationError> {

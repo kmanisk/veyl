@@ -532,7 +532,7 @@ fn dispatch_tools(
             #[cfg(target_os = "linux")]
             if tool == Tool::ReadFile {
                 return Some(
-                    scoped_file_tool(state, client, tool, args, now)
+                    client_file_tool(state, client, tool, args, now)
                         .unwrap_or_else(|| tool_text(true, "Operation outside an approved scope")),
                 );
             }
@@ -614,7 +614,7 @@ fn privileged_tool(
             _ => None,
         }
     } else {
-        scoped_file_tool(state, client, tool, args, now)
+        client_file_tool(state, client, tool, args, now)
     }
     .unwrap_or_else(|| tool_text(true, "Operation unavailable or outside an approved scope"));
 
@@ -636,7 +636,7 @@ fn privileged_tool(
 }
 
 #[cfg(target_os = "linux")]
-fn scoped_file_tool(
+fn client_file_tool(
     state: &State,
     client: &Client,
     tool: Tool,
@@ -652,7 +652,16 @@ fn scoped_file_tool(
         return None;
     }
     let yolo = client.mode == ExecutionMode::PersistentYolo;
-    let (root, relative) = if path.is_absolute() {
+    let full_root;
+    let absolute;
+    let (root, relative) = if client.mode == ExecutionMode::Full {
+        if raw_path.is_empty() || raw_path.ends_with('/') {
+            return None;
+        }
+        absolute = client.root.join(path);
+        full_root = crate::tools::MutationRoot::open_host_parent(absolute.parent()?).ok()?;
+        (&full_root, Path::new(absolute.file_name()?))
+    } else if path.is_absolute() {
         if !yolo {
             return None;
         }
@@ -675,7 +684,9 @@ fn scoped_file_tool(
     {
         return None;
     }
-    if operator::policy_path(state.policy.path(), &root.path().join(relative)) {
+    if client.mode != ExecutionMode::Full
+        && operator::policy_path(state.policy.path(), &root.path().join(relative))
+    {
         return None;
     }
     let relative = relative.to_str()?;

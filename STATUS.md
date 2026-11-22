@@ -1,3 +1,83 @@
+# Gate 3b status
+
+Branch `milestone3/broad-yolo` starts at
+`093c4a514a7c73264213a04e3926ff3e7023ed74`, tagged locally as `gate3-partial`.
+The `milestone3/modes-service` worktree and `gate2-scoped` tag remain available
+for rollback.
+
+## Preflight
+
+The trusted runner matched all 24 pins before and after running the 22
+required suites. It executed 195 cases. 181 passed and 14 failed in the
+sandbox. Twelve failures were expected: modes 04, Suite A 03–05, and
+Suite F 01–07 and 11. The two additional failures were service preparation
+07 (no systemd user runtime directory) and 09 (no user manager bus). The
+unchanged service suite passed 10/10, exit 0, in the same host user-manager
+environment used in AGY's raw report. The combined baseline is 183/195 with
+that independently recorded environment distinction. No service was
+installed, activated or modified.
+
+The detailed baseline log and pin comparisons are under
+`target/gate3b/baseline/`. The primary command was
+`PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD" python3 worktrees/m3-broad-yolo/target/gate3b/run.py baseline`
+from the lab root. The driver invokes the existing trusted verifier per
+suite and records each exit code. Session 71383 exited 1 with the expected
+red cases and the two environment-dependent failures. The read-only
+service rerun used `python3 -I -B ../../acceptance_pass3_service/locked_service_preparation.py`
+from the worktree.
+
+### Suite D boundary review
+
+All eight cases ran in the verifier namespace. None invokes the gateway,
+activates Broad or scoped YOLO, tests gateway admission or mounts a protected
+directory. Their 8/8 result characterizes the synthetic fixtures and
+demonstrates some failure modes. It provides no positive kernel-masking
+acceptance.
+
+| Case | Actual assertion and coverage |
+| --- | --- |
+| 01 | A hardlink in another directory resolves to the protected inode and reveals its synthetic data. No mask is installed. |
+| 02 | An ordinary atomic rename replaces content in an unmounted directory. No file mask or namespace transition is tested. |
+| 03 | An ordinary parent lookup exposes a replacement directory. No active mountpoint is replaced. |
+| 04 | A swapped symlink resolves to the protected directory. No gateway or sandbox denial is attempted. |
+| 05 | CLOEXEC is set on a test descriptor. The child cannot read a descriptor already closed by the fixture, so live gateway FD inheritance is untested. |
+| 06 | A standalone Python child returns a nonempty procfs FD listing. It does not check which descriptors are exposed. |
+| 07 | A test-side link count predicate rejects a doubly linked file. No gateway admission or runtime inventory is exercised. |
+| 08 | A same-UID actor creates an alias after an initial link-count check. No gateway startup or post-check enforcement is exercised. |
+
+## Checkpoint 1 — FULL direct file tools
+
+The existing authenticated tool dispatcher now resolves FULL file targets
+against a pinned host parent directory. The existing read, atomic
+replacement, hash-guarded patch, staging and audit code is reused. A FULL
+overwrite requires kernel write access to the original inode as well as
+the parent directory. FULL supports absolute host paths with the existing
+regular-file safety constraints. Symlinks, unsafe path components and
+incompatible metadata remain rejected. Only the FULL branch can use a
+host parent, and it rejects root execution.
+
+Host-parent proof is optional in the ledger format, so older records remain
+valid. Recovery uses the proven identity and the existing parent lock even
+if the operator revoked the client since the write. FULL is intentionally
+same-UID authority and can access state readable by the gateway owner.
+
+Files changed: `src/http/mod.rs`, `src/security/audit.rs`,
+`src/tools/filesystem.rs`, `src/tools/mutation.rs`, `src/tools/write.rs`,
+`STATUS.md`. Checkpoint commit message:
+`fix(files): honor confirmed full mode in direct file tools`.
+
+Session 96084 exited 0. Suite A passed 8/8. File mutations, parent symlinks,
+audit chain, scoped YOLO and migration passed 49/49. Logs and pins are
+under `target/gate3b/full/`. The supplemental authenticated probe passed
+invalid token, missing grant, symlink denial, live revocation, non-root
+identity and FULL audit intent/outcome. Reproduce it with
+`python3 -B target/gate3b/full-probe.py target/debug/mcp-gateway`.
+
+Next: implement durable protected-path rule administration. Broad YOLO
+remains closed pending a verified enforcement boundary.
+
+---
+
 # Gate 3 status
 
 **Blocked at Checkpoint 1, acceptance compatibility.**

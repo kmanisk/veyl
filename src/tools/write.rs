@@ -51,6 +51,7 @@ pub(super) fn publish(
 ) -> Result<(), MutationError> {
     check_size(content)?;
     if let Some((file, metadata)) = original {
+        target.check_write_access(file)?;
         if metadata.st_mode & 0o7000 != 0 {
             return Err(Rejected("Target has special permission bits"));
         }

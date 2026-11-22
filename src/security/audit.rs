@@ -107,6 +107,8 @@ pub struct StageProof {
     pub modified: [i64; 2],
     pub created: [i64; 2],
     pub uid: u32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host_parent: bool,
 }
 
 enum EventDetails<'a> {
