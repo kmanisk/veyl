@@ -133,6 +133,95 @@ Gitleaks scan found no leaks across the 17 commits in the initial push
 set. Re-scan final candidate refs before publishing. There is no project
 license file in the inspected refs.
 
+## Final checks and partial release
+
+The final source checkpoint is
+`46a1099237105cf1399f017a071095305e604992`. The 28 pinned suites ran
+283 cases. The trusted sandbox returned 242/283 overall and 215/225
+for the required selection. It exited 1. The nine broad implementation
+failures match the starting baseline. Service preparation's
+`systemd-analyze --user` case requires a user runtime directory absent
+from the trusted sandbox. The unchanged service suite passed 10/10
+with the original user-manager environment. Combining those
+environments gives 243/283 overall and 216/225 required. Audit passed
+13/13 with the dedicated hook build. The dashboard is 0/15, service
+network 11/12, skills 15/15, and upstream MCP 1/16. The lone upstream
+pass checks the synthetic fixture source and does not validate isolation.
+
+`target/gate3c/acceptance.tsv` records names, paths, exact counts,
+exit codes and all 28 matching hashes. Raw output is in
+`target/gate3c/final-skills.log` and per-suite files under
+`target/gate3c/final-skills/`. The baseline raw output is
+`target/gate3c/baseline.log`.
+
+Formatting, Clippy, locked offline debug and release builds, the 36
+Rust tests, whitespace, 37 harness tests, six hardening checks,
+and project-local cargo-audit passed. Cargo dependency trees matched.
+The normal release excludes the audit hook. A clean local clone at
+the source checkpoint produced a byte-identical release binary.
+The local state probe killed a mutant accepting hardlinks and locked
+skills case 05 killed a mutant dropping client-specific read grants.
+Unimplemented broad, dashboard and upstream paths have no runtime
+mutation result. See `build-final.log`, `harness.log`, and
+`mutations.log` in `target/gate3c/`.
+
+The extracted partial archive passed its checksum manifest, private
+state checks, disposable service lifecycle, skill authorization and
+authenticated MCP smoke tests. Managed Standard and legacy YOLO
+denied controlled loopback TCP. Confirmed FULL ran a harmless
+unprivileged command through the supervisor.
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `dist/gate3d-partial/mcp-gateway` | 2,857,984 | `6836e3ba85895cac52952d5c3ee2a046c3d2b0d064f08a25ad73c1ef7cde6f97` |
+| `dist/mcp-gateway-gate3d-linux-x86_64-partial.tar.gz` | 1,116,460 | `87a64a0896d77456eee2302b3e5ea3a4065bae9eee0ac7164e7ec3187895e551` |
+
+The package includes the binary, checksum manifest, configuration and
+systemd unit examples, skill format, scope, and rollback documentation.
+All distribution files are Git-ignored. See
+`target/gate3c/archive-smoke.log`.
+
+Matched release measurements, gate3-partial → current:
+
+| Mode | Idle RSS KiB | Five-job RSS KiB | Startup ms | Shutdown ms | Median job admission ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Standard | 4096 → 4300 | 4368 → 4568 | 1.457 → 1.548 | 1.426 → 1.410 | 9.288 → 9.022 |
+| Legacy scoped YOLO | 4164 → 4316 | 4316 → 4464 | 1.393 → 1.375 | 1.284 → 1.215 | 9.871 → 9.725 |
+| FULL | 4196 → 4296 | 4328 → 4436 | 1.417 → 1.421 | 1.279 → 1.016 | 3.298 → 3.204 |
+
+All idle samples had zero CPU ticks over five seconds. Single-run
+measurements are in `target/gate3c/performance.log`. Broad-mode,
+dashboard and upstream overhead are unavailable.
+
+Tracked sessions: 69949 baseline and 9049 final suite matrix (both
+exit 1); 94755 build, 54889 harness, 21692 mutations, 34860 archive
+smoke, and 25871 benchmark (all exit 0). Exact token usage was not
+available.
+
+## Continuation
+
+1. Have AGY distinguish the negative and positive broad fixtures
+   and pin their updated versions. Keep the positive state tree
+   disjoint from the workspaces. Preserve all independently scoped
+   tests. Then validate a pinned host mount graph that avoids nested
+   bind aliases, hides the complete state directory, and denies
+   protected object identities in direct file tools. Verify it
+   through a real supervised networked job before enabling broad.
+2. Have AGY discover the separate authenticated admin listener in
+   dashboard and service tests, then implement paired admin
+   sessions and the live dashboard under that transport.
+3. Implement bounded, authorized upstream MCP transport and tool
+   namespacing, then add the separate monitor if resources permit.
+4. When the existing GitHub credential store is unlocked, verify
+   authenticated `gh` identity and destination ownership and
+   visibility. Confirm the repository is private before any push.
+   The full redacted history scan and tracked filename review
+   found no secrets or generated artifacts. The local primary
+   branch remains `main`, independent from the development branch.
+
+No service activation, live network changes, production BridgeDev
+changes, deployment, publication, or push occurred.
+
 ---
 
 # Gate 3b status
