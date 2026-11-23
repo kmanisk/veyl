@@ -934,3 +934,64 @@ Verification entry points and saved logs:
 Next independent task: review the exact source commit and separately
 validate the preserved Gate 3d archive. Exercise authenticated Gemini
 forwarding in an approved account before approving a full product release.
+
+## Linux release candidate
+
+This checkpoint extends the independently accepted Gate 3e product
+commit `a9317036a359367ed602be1c241ef64888d37659`. The AGY acceptance
+section in `HANDOFF.md` is preserved verbatim. The reported Gate 3e
+archive was absent from the checked locations. The matching accepted
+gateway executable was preserved at
+`dist/gate3e-checkpoint/mcp-gateway` with SHA-256
+`f117ac52c234203cff569895a7ab6f16d9492fcd80c778b1fda27e747045fe71`.
+The independent Gate 3d rollback archive was also preserved.
+
+This candidate adds conditional private Serve management, user-service
+lifecycle and diagnostics, the authenticated on-demand monitor, and
+scoped search, Git, system and service inspection. It retains the four
+execution modes, dashboard, skills and upstream MCP. The resource and
+authorization boundaries are documented in `docs/PARITY.md`,
+`docs/LINUX.md` and `docs/TAILSCALE.md`.
+
+| Verification | Result |
+| --- | --- |
+| Locked acceptance | 287/287 across 28 suites, all pins unchanged |
+| Rust tests | 37 passed |
+| Product probes | 5 passed |
+| New Linux integration probes | 7 passed |
+| Harness regression and hardening | 37/37 and 6/6 |
+| Systemd private user manager | Install, enable, start, restart, stop, disable and uninstall. The process ID changed and the original job could still be canceled. |
+| Serve workflow | Disposable LocalAPI lifecycle, conditional update race, rollback, and authenticated HTTPS reverse proxy |
+| Live Tailscale | Read-only planning and validation on the existing node. Serve snapshots matched byte-for-byte. |
+| Codex | Actual authenticated discovery and a forwarded tool call |
+| Antigravity | Actual authenticated discovery. A model session requires independent Google sign-in. |
+
+Offline debug and release builds, formatter, Clippy, whitespace checks,
+and cargo-audit passed. The release excludes audit test hooks.
+No dependency was added for the terminal monitor. On this workstation
+the candidate used 4,952 KiB RSS idle versus 4,764 KiB for Gate 3e.
+The interactive monitor used 3,228 KiB. Each recorded zero CPU ticks
+over a two-second idle window. In this sample the median 24-request
+authenticated dashboard status latency was 1.89 ms versus 0.67 ms.
+These are local samples under current workstation load.
+
+Evidence is under `target/linux-final/`. The consolidated result is
+`acceptance.log`; per-suite outputs and before/after pins are under
+`target/gate3d/linux-final/`. Additional receipts are
+`systemd-lifecycle.log`, `tailnet-live-readonly.log`, `harness.log`,
+`toolchain-and-product.log`, `performance.log`, and `agy-client.log`.
+The disposable unit runner can be repeated with
+`bash tests/systemd_lifecycle.sh target/release/mcp-gateway`.
+
+The new archive is `dist/veyl-linux-x86_64.tar.gz` with an adjacent
+`.sha256` file. Its internal `RELEASE.md` identifies the exact source
+commit. The release build and extraction receipt is recorded under
+`target/linux-final/package.log`. Compiled files, credentials and logs
+are outside Git tracking.
+
+Next, AGY independently exercises the exact Linux commit. BridgeDev
+then checks the same commit and archive. Live Serve activation and
+production service activation require separate approval. GitHub
+authenticated the account as `kmanisk`, and the destination repository
+lookup did not resolve. Creation and private publication remain gated on
+both independent approvals.

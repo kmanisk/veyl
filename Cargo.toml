@@ -2,6 +2,7 @@
 name = "mcp-gateway"
 version = "0.1.0"
 edition = "2024"
+default-run = "mcp-gateway"
 
 [features]
 test-hooks = []

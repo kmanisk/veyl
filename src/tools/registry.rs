@@ -9,6 +9,10 @@ use crate::file_access::FileAccess;
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub(crate) enum Tool {
     ReadFile,
+    SearchFiles,
+    GitInspect,
+    SystemInfo,
+    ServiceStatus,
     WriteFile,
     ApplyPatch,
     RunCommand,
@@ -26,8 +30,12 @@ pub(crate) enum Tool {
 }
 
 impl Tool {
-    pub(crate) const ALL: [Self; 15] = [
+    pub(crate) const ALL: [Self; 19] = [
         Self::ReadFile,
+        Self::SearchFiles,
+        Self::GitInspect,
+        Self::SystemInfo,
+        Self::ServiceStatus,
         Self::WriteFile,
         Self::ApplyPatch,
         Self::RunCommand,
@@ -47,6 +55,10 @@ impl Tool {
     pub(crate) fn parse(name: &str) -> Option<Self> {
         match name {
             "read_file" => Some(Self::ReadFile),
+            "search_files" => Some(Self::SearchFiles),
+            "git_inspect" => Some(Self::GitInspect),
+            "system_info" => Some(Self::SystemInfo),
+            "service_status" => Some(Self::ServiceStatus),
             "write_file" => Some(Self::WriteFile),
             "apply_patch" => Some(Self::ApplyPatch),
             "run_command" => Some(Self::RunCommand),
@@ -68,6 +80,10 @@ impl Tool {
     pub(crate) fn action(self) -> Action {
         match self {
             Self::ReadFile => Action::ReadFile,
+            Self::SearchFiles => Action::SearchFiles,
+            Self::GitInspect => Action::GitInspect,
+            Self::SystemInfo => Action::SystemInfo,
+            Self::ServiceStatus => Action::ServiceStatus,
             Self::WriteFile => Action::WriteFile,
             Self::ApplyPatch => Action::ApplyPatch,
             Self::RunCommand => Action::RunShortJob,
@@ -81,6 +97,13 @@ impl Tool {
             Self::UpstreamsList => Action::ListUpstreams,
             Self::UpstreamsCall => Action::CallUpstream,
         }
+    }
+
+    pub(crate) fn inspection(self) -> bool {
+        matches!(
+            self,
+            Self::SearchFiles | Self::GitInspect | Self::SystemInfo | Self::ServiceStatus
+        )
     }
 
     pub(crate) fn schema(self) -> Value {
@@ -156,6 +179,18 @@ impl Tool {
                 "inputSchema": {"type":"object","properties":{"name":{"type":"string"},"arguments":{"type":"object"}},
                     "required":["name"],"additionalProperties":false}
             }),
+            Self::SearchFiles => {
+                json!({"name":"search_files","description":"Bounded literal path or UTF-8 content search in the configured workspace","inputSchema":{"type":"object","required":["query"],"additionalProperties":false,"properties":{"path":{"type":"string"},"query":{"type":"string"},"content":{"type":"boolean"}}}})
+            }
+            Self::GitInspect => {
+                json!({"name":"git_inspect","description":"Inspect a Git checkout in a bounded read-only offline snapshot","inputSchema":{"type":"object","required":["operation"],"additionalProperties":false,"properties":{"path":{"type":"string"},"operation":{"enum":["info","status","diff","history"]}}}})
+            }
+            Self::SystemInfo => {
+                json!({"name":"system_info","description":"Read Linux resource totals and workspace filesystem capacity","inputSchema":{"type":"object","additionalProperties":false}})
+            }
+            Self::ServiceStatus => {
+                json!({"name":"service_status","description":"Inspect the Veyl systemd user unit","inputSchema":{"type":"object","additionalProperties":false}})
+            }
             _ => self.job_schema(),
         }
     }

@@ -5,7 +5,11 @@ mod audit_cli;
 mod file_access;
 mod http;
 #[cfg(target_os = "linux")]
+mod inspection;
+#[cfg(target_os = "linux")]
 mod jobs;
+#[cfg(target_os = "linux")]
+mod linux_command;
 #[cfg(target_os = "linux")]
 mod protected_cli;
 #[cfg(target_os = "linux")]
@@ -21,6 +25,8 @@ mod skills;
 mod skills_cli;
 #[cfg(target_os = "linux")]
 mod state_cli;
+#[cfg(target_os = "linux")]
+mod tailnet;
 mod tools;
 mod transport;
 #[cfg(target_os = "linux")]
@@ -96,6 +102,14 @@ fn run() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "serve") {
         return serve_plan::run(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--git-inspect-worker")
+    {
+        return jobs::git_worker(&args[1..])
+            .map_err(|_| "Git worker confinement unavailable".into());
     }
     #[cfg(target_os = "linux")]
     if args

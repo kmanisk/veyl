@@ -245,3 +245,18 @@ authenticated admin API. Credential verifiers are excluded from status
 DTOs. See [dashboard](docs/DASHBOARD.md), [skills](docs/SKILLS.md) and
 [upstream transports](docs/UPSTREAM-MCP.md) for configuration and security
 boundaries.
+
+## Linux operator and inspection extension
+
+The daemon retains separate loopback MCP and admin listeners. An opt-in
+Serve configuration adds explicit HTTPS host authorities, independent
+browser proof for remote admin reads, and the same bearer boundary for
+MCP. The trusted Serve CLI scopes conditional updates to owned ports.
+The user-unit lifecycle remains local administration.
+
+Linux inspection grants share the core MCP policy and audit boundary.
+The native search begins from a pinned workspace handle. Git inspection
+runs a bounded snapshot through offline Bubblewrap with fixed commands.
+The separate terminal monitor pairs through the admin API and reads views
+on demand. See the [operator guide](docs/LINUX.md) and
+[capability and scope map](docs/PARITY.md).

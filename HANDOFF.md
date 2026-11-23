@@ -717,3 +717,36 @@ gated on Permanent Permissions 17, whose split-state fixture conflicts
 with mandatory dedicated-state containment. See [STATUS.md](STATUS.md)
 for the pinned run evidence and [the broad mode guide](docs/BROAD-YOLO.md)
 for the threat model, tested usage, state migration and rollback.
+
+## Final Product Security Acceptance (Gate 3e / Milestone 3 Final)
+
+- Acceptance status: AGY PASS.
+- Verified commit: `a9317036a359367ed602be1c241ef64888d37659` on `milestone3/broad-yolo`.
+- Locked suite pins: 28/28 verified matching disk before and after execution.
+- Acceptance suite battery: 287/287 passing across all 28 registered suites (0 failures, 0 missing).
+- Rust tests: 36 passed (25 unit, 7 operator integration, 4 mutation integration).
+- Formatting and linting: `cargo fmt --all --check` clean; `cargo clippy --offline --locked --all-targets -- -D warnings` clean.
+- Product integration probes (`tests/product_features.py`): 5/5 passed.
+- Clean clone build and package smoke tests: verified from clean clone; binary SHA-256 `f117ac52c234203cff569895a7ab6f16d9492fcd80c778b1fda27e747045fe71`; archive SHA-256 `e70ac8502938bb00f78207356a8d002368a66d8e0705fe431af72ad71fbb29f4`.
+- Audit ledger: valid hash chaining verified via `mcp-gateway audit verify`.
+- External integration notes: Gemini interactive login requirement recorded as cloud provider auth constraint, not a Veyl defect.
+- Checkpoint is marked READY for BridgeDev second independent verification.
+
+## Linux implementation handoff
+
+The next Linux candidate extends the accepted product checkpoint with
+private Serve ownership and validation, the systemd user lifecycle,
+`veyl-monitor` and audited workspace inspection grants. See
+[STATUS.md](STATUS.md) for the verification receipt and
+[docs/PARITY.md](docs/PARITY.md) for scope and evidence.
+
+The Gate 3e executable still matches the AGY hash above. The reported
+Gate 3e archive was absent from the worktree, acceptance lab, and checked
+temporary paths. A preserved copy of the accepted executable is under
+ignored `dist/gate3e-checkpoint/`. The new Linux archive has its own
+manifest and must be reviewed against its own source commit and hashes.
+
+AGY owns the next independent consolidated security acceptance.
+BridgeDev then verifies the same commit and extracted package. Live
+Tailscale activation, production unit installation and private publication
+remain separate approval gates.

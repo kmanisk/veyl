@@ -99,6 +99,8 @@ struct JobDocument {
     _skills_disabled: Option<Vec<String>>,
     #[serde(default, rename = "admin_listen")]
     _admin_listen: Option<String>,
+    #[serde(default, rename = "tailscale_serve")]
+    _tailscale_serve: Option<serde_json::Value>,
     #[serde(default, rename = "mcp_servers")]
     _mcp_servers: Option<serde_json::Value>,
     job_state_dir: PathBuf,

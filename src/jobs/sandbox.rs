@@ -394,3 +394,54 @@ pub(crate) fn upstream_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
     sandbox.command.arg("--").arg(executable).args(args);
     Err(sandbox.command.exec())
 }
+
+pub(crate) fn git_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    let [operation, path] = args else {
+        return Err(unsupported());
+    };
+    let params: &[&str] = match operation.to_str() {
+        Some("info") => &["rev-parse", "--is-inside-work-tree", "--abbrev-ref", "HEAD"],
+        Some("status") => &[
+            "status",
+            "--porcelain=v1",
+            "--branch",
+            "--untracked-files=normal",
+        ],
+        Some("diff") => &["diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"],
+        Some("history") => &["log", "-n", "24", "--format=%H%x09%aI%x09%s", "--"],
+        _ => return Err(unsupported()),
+    };
+    check_inherited_fds()?;
+    rustix::thread::set_no_new_privs(true)?;
+    let mut sandbox = Sandbox::new()?;
+    let directory = mcp_gateway::security::linux_fs::open_absolute_dir(Path::new(path))?;
+    sandbox.pass("--ro-bind-fd", directory)?;
+    sandbox
+        .command
+        .args([
+            "/repo",
+            "--new-session",
+            "--setenv",
+            "HOME",
+            "/tmp",
+            "--setenv",
+            "GIT_CONFIG_NOSYSTEM",
+            "1",
+            "--setenv",
+            "GIT_CONFIG_GLOBAL",
+            "/dev/null",
+            "--",
+            "/usr/bin/git",
+            "--no-pager",
+            "--no-optional-locks",
+            "-C",
+            "/repo",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+        ])
+        .args(params);
+    Err(sandbox.command.exec())
+}

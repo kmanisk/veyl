@@ -52,7 +52,9 @@ pub struct Configuration {
     pub clients: Vec<Client>,
     pub audit_log: Option<PathBuf>,
     #[cfg(target_os = "linux")]
-    pub(super) admin_listen: Option<std::net::SocketAddr>,
+    pub(crate) admin_listen: Option<std::net::SocketAddr>,
+    #[cfg(target_os = "linux")]
+    pub(crate) tailnet: Option<crate::tailnet::Settings>,
     #[cfg(target_os = "linux")]
     pub runtime_settings: Value,
     #[cfg(target_os = "linux")]
@@ -253,7 +255,12 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         let mutation_root = if actions.iter().any(|action| {
             matches!(
                 action,
-                Action::ReadFile | Action::WriteFile | Action::ApplyPatch
+                Action::ReadFile
+                    | Action::WriteFile
+                    | Action::ApplyPatch
+                    | Action::SearchFiles
+                    | Action::GitInspect
+                    | Action::SystemInfo
             )
         }) {
             Some(
@@ -351,6 +358,11 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             .map_err(|error| error.to_string())?,
         clients,
         audit_log,
+        #[cfg(target_os = "linux")]
+        tailnet: document
+            .get("tailscale_serve")
+            .map(crate::tailnet::Settings::parse)
+            .transpose()?,
         #[cfg(target_os = "linux")]
         admin_listen: document
             .get("admin_listen")

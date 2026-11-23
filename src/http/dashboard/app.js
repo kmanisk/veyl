@@ -3,12 +3,16 @@
 const byId = id => document.getElementById(id);
 const api = "/dashboard/api/";
 const notice = byId("notice");
-let csrf;
+const remote = location.protocol === "https:";
+const proofKey = "veyl-session-proof";
+let csrf = remote ? sessionStorage.getItem(proofKey) : undefined;
 let nextPage;
 let jobRequest = 0;
 
 async function request(path, body) {
-  const response = await fetch(api + path, body === undefined ? {} : {
+  const response = await fetch(api + path, body === undefined ? {
+    headers: csrf ? { "X-CSRF-Token": csrf } : {}
+  } : {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
     body: JSON.stringify(body)
@@ -24,6 +28,7 @@ async function request(path, body) {
 
 function showPair() {
   csrf = undefined;
+  if (remote) sessionStorage.removeItem(proofKey);
   byId("dashboard").hidden = true;
   byId("controls").hidden = true;
   byId("pair").hidden = false;
@@ -263,7 +268,9 @@ byId("pair").addEventListener("submit", async event => {
   event.preventDefault();
   const code = byId("pairing-code");
   try {
-    await request("pair", { pairing_token: code.value.trim() });
+    const pairing = await request("pair", { pairing_token: code.value.trim() });
+    csrf = pairing.csrf;
+    if (remote) sessionStorage.setItem(proofKey, csrf);
     code.value = "";
     history.replaceState(null, "", "/dashboard");
     await refresh();

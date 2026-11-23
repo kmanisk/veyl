@@ -38,6 +38,7 @@ pub(super) struct Admin {
 struct AdminSession {
     created: Instant,
     csrf: String,
+    remote: bool,
 }
 
 impl Admin {
@@ -144,13 +145,21 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
     let Some(admin) = &state.admin else {
         return missing();
     };
-    let host = admin.addr.to_string();
+    let local = admin.addr.to_string();
+    let tail = state
+        .tailnet
+        .as_ref()
+        .map(|settings| settings.authority(true));
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or_default();
+    let remote = tail.as_deref() == Some(host);
     if request.uri().authority().is_some()
         || request.headers().get_all(header::HOST).iter().count() != 1
-        || request
-            .headers()
-            .get(header::HOST)
-            .is_none_or(|value| value.as_bytes() != host.as_bytes())
+        || request.headers().contains_key("Tailscale-Funnel-Request")
+        || !(host == local || remote)
     {
         return simple(Status::BAD_REQUEST, "Invalid Host");
     }
@@ -170,12 +179,14 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
     // The MCP listener is another Veyl-controlled origin with only bearer-authenticated JSON-RPC.
     // Browser requests from any other origin never reach pairing or state changes.
     if method == Method::POST {
-        let admin_origin = format!("http://{host}");
+        let scheme = if remote { "https" } else { "http" };
+        let admin_origin = format!("{scheme}://{host}");
         let mcp_origin = format!("http://{}", state.addr);
         if request.headers().get_all(header::ORIGIN).iter().count() != 1
             || request.headers().get(header::ORIGIN).is_none_or(|origin| {
                 origin.as_bytes() != admin_origin.as_bytes()
-                    && (origin.as_bytes() != mcp_origin.as_bytes()
+                    && (remote
+                        || origin.as_bytes() != mcp_origin.as_bytes()
                         || request.headers().contains_key("sec-fetch-site"))
             })
         {
@@ -195,7 +206,11 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             "/dashboard/style.css" => return asset(STYLE, "text/css; charset=utf-8"),
             "/dashboard/app.js" => return asset(SCRIPT, "text/javascript; charset=utf-8"),
             "/dashboard" if query.starts_with("token=") => {
-                return pair(admin, &query[6..], true).await;
+                return if remote {
+                    redirect("/dashboard/login")
+                } else {
+                    pair(admin, &query[6..], true, false).await
+                };
             }
             "/" => return redirect("/dashboard"),
             _ => {}
@@ -209,8 +224,12 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             admin,
             body["pairing_token"].as_str().unwrap_or_default(),
             false,
+            remote,
         )
         .await;
+    }
+    if remote && method == Method::GET && path == "/dashboard" {
+        return asset(INDEX, "text/html; charset=utf-8");
     }
     let key = request
         .headers()
@@ -225,7 +244,10 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
     let csrf = {
         let mut sessions = admin.sessions.lock().await;
         sessions.retain(|_, session| session.created.elapsed() < SESSION_TTL);
-        let Some(session) = key.and_then(|key| sessions.get(key)) else {
+        let Some(session) = key
+            .and_then(|key| sessions.get(key))
+            .filter(|session| session.remote == remote)
+        else {
             return if method == Method::GET && path == "/dashboard" {
                 redirect("/dashboard/login")
             } else {
@@ -237,6 +259,14 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
     if method == Method::GET && path == "/dashboard" {
         return asset(INDEX, "text/html; charset=utf-8");
     }
+    let csrf_matches = request.headers().get_all("X-CSRF-Token").iter().count() == 1
+        && request
+            .headers()
+            .get("X-CSRF-Token")
+            .is_some_and(|value| bool::from(value.as_bytes().ct_eq(csrf.as_bytes())));
+    if remote && !csrf_matches {
+        return simple(Status::UNAUTHORIZED, "Pair this browser tab");
+    }
     if method == Method::POST && path == "/api/dashboard/logout" {
         // This endpoint can only end the caller's own session. Exact Origin is required.
         if let Some(key) = key {
@@ -244,13 +274,19 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         }
         return cookie(ok(json!({"signed_out": true})), "", 0);
     }
-    if method == Method::POST
-        && request
-            .headers()
-            .get("X-CSRF-Token")
-            .is_none_or(|value| !bool::from(value.as_bytes().ct_eq(csrf.as_bytes())))
-    {
+    if method == Method::POST && !csrf_matches {
         return forbidden();
+    }
+    if method == Method::GET && path == "/api/dashboard/integrations" {
+        let config = admin.config.clone();
+        let tailnet = state.tailnet.clone();
+        let service = tokio::task::spawn_blocking(crate::service_cli::health);
+        let routes =
+            tokio::task::spawn_blocking(move || crate::tailnet::health(&config, tailnet.as_ref()));
+        return match (service.await, routes.await) {
+            (Ok(service), Ok(routes)) => ok(json!({"service":service,"tailscale":routes})),
+            _ => unavailable(),
+        };
     }
     if method == Method::GET && path == "/api/dashboard/status" {
         return status(state, admin, csrf).await;
@@ -397,7 +433,7 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
     missing()
 }
 
-async fn pair(admin: &Admin, token: &str, navigate: bool) -> Reply {
+async fn pair(admin: &Admin, token: &str, navigate: bool, remote: bool) -> Reply {
     if !secret_format(token) {
         return simple(Status::UNAUTHORIZED, "Invalid or expired pairing code");
     }
@@ -421,6 +457,7 @@ async fn pair(admin: &Admin, token: &str, navigate: bool) -> Reply {
         AdminSession {
             created: Instant::now(),
             csrf: csrf.clone(),
+            remote,
         },
     );
     let reply = if navigate {

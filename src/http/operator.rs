@@ -235,6 +235,25 @@ impl PolicyFile {
         })
     }
 
+    /// Read-only snapshot for dry runs. Atomic policy publication is still
+    /// checked, and the caller must reacquire the transaction lock to mutate.
+    pub(crate) fn preview(path: &Path) -> Result<Configuration, String> {
+        let directory = open_operator_dir(path.parent().ok_or("Invalid configuration path")?)
+            .map_err(|_| "Cannot open private configuration directory")?;
+        let pending = companion(
+            path.file_name().ok_or("Invalid configuration path")?,
+            ".policy-pending",
+        );
+        let check = || match fs::statat(&directory, &pending, AtFlags::SYMLINK_NOFOLLOW) {
+            Err(rustix::io::Errno::NOENT) => Ok(()),
+            _ => Err("Interrupted or active policy update requires local operator review"),
+        };
+        check()?;
+        let settings = parse_clients(path, &read_config(path)?)?;
+        check()?;
+        Ok(settings)
+    }
+
     pub(crate) fn snapshot(&self) -> Result<Configuration, String> {
         let (bytes, _) = self.admitted_snapshot()?;
         parse_clients(&self.path, &bytes)
@@ -325,6 +344,43 @@ impl PolicyFile {
         Ok(())
     }
 
+    pub(crate) fn read_serve_receipt(path: &Path) -> Result<Option<Vec<u8>>, String> {
+        let directory = open_operator_dir(path.parent().ok_or("Invalid configuration path")?)
+            .map_err(|_| "Cannot open private configuration directory")?;
+        let name = companion(
+            path.file_name().ok_or("Invalid configuration path")?,
+            ".serve-receipt",
+        );
+        match open_private(&directory, &name) {
+            Ok(file) => {
+                let mut bytes = Vec::new();
+                File::from(file)
+                    .take(2049)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| "Cannot read Serve receipt")?;
+                if bytes.len() > 2048 {
+                    return Err("Invalid Serve receipt size".into());
+                }
+                Ok(Some(bytes))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err("Unsafe Serve receipt".into()),
+        }
+    }
+
+    pub(crate) fn write_serve_receipt(&self, bytes: &[u8]) -> Result<(), String> {
+        let name = companion(self.path.file_name().unwrap_or_default(), ".serve-receipt");
+        self.write_named(&name, bytes)
+            .map_err(|_| "Cannot persist Serve receipt".into())
+    }
+
+    pub(crate) fn remove_serve_receipt(&self) -> Result<(), String> {
+        let name = companion(self.path.file_name().unwrap_or_default(), ".serve-receipt");
+        fs::unlinkat(&self.directory, name, AtFlags::empty())
+            .and_then(|()| fs::fsync(&self.directory))
+            .map_err(|_| "Cannot remove Serve receipt".into())
+    }
+
     pub(super) fn write_pairing(&self, bytes: &[u8]) -> io::Result<()> {
         self.write_named(&self.pairing_name(), bytes)
     }
@@ -393,6 +449,7 @@ pub(crate) fn policy_path(config: &Path, path: &Path) -> bool {
                 let config_name = config.file_name().unwrap_or_default();
                 name == companion(config_name, ".policy-lock")
                     || name == companion(config_name, ".dashboard-pair")
+                    || name == companion(config_name, ".serve-receipt")
                     || name == companion(config_name, ".policy-pending")
                     || name.as_encoded_bytes().starts_with(b".mcp-policy-")
                     || name.as_encoded_bytes().starts_with(b".mcp-upstream-")
@@ -415,6 +472,7 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "skills_dir",
         "skills_disabled",
         "admin_listen",
+        "tailscale_serve",
         "mcp_servers",
     ];
     const CLIENT: &[&str] = &[

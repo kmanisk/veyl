@@ -13,6 +13,10 @@ use std::path::{Component, Path};
 pub enum Action {
     ListTools,
     ReadFile,
+    SearchFiles,
+    GitInspect,
+    SystemInfo,
+    ServiceStatus,
     WriteFile,
     ApplyPatch,
     ListSkills,
@@ -141,6 +145,10 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
     match input.action {
         action if action.is_job() && input.mode != ExecutionMode::YoloRequested => Ok(()),
         Action::ReadFile
+        | Action::SearchFiles
+        | Action::GitInspect
+        | Action::SystemInfo
+        | Action::ServiceStatus
         | Action::ListTools
         | Action::WriteFile
         | Action::ApplyPatch

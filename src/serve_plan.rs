@@ -23,8 +23,18 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         println!("{HELP}");
         return Ok(());
     }
-    if args.first().is_none_or(|arg| arg != "plan") {
-        return Err(HELP.into());
+    // Preserve the legacy snapshot-only plan for configurations without Serve settings.
+    if args.first().is_none_or(|arg| arg != "plan")
+        || args.iter().any(|arg| arg == "--live")
+        || args.windows(2).any(|pair| {
+            pair[0] == "--config"
+                && read_config(Path::new(&pair[1]))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                    .is_some_and(|doc| doc.get("tailscale_serve").is_some())
+        })
+    {
+        return crate::tailnet::run(args);
     }
     let (mut config, mut snapshot, mut listen) = (None, None, None);
     let mut options = args[1..].iter();
@@ -101,7 +111,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     Ok(())
 }
 
-fn read_snapshot(path: &Path) -> Result<Value, String> {
+pub(crate) fn read_snapshot(path: &Path) -> Result<Value, String> {
     validate_path(path)?;
     let parent = open_absolute_dir(path.parent().ok_or("Invalid Serve snapshot path")?)
         .map_err(|_| "Serve snapshot directory unavailable")?;

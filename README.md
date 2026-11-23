@@ -70,10 +70,9 @@ mcp-gateway service uninstall --confirm --dry-run --config "$config"
 mcp-gateway serve plan --config "$config"
 ```
 
-The service workflow prepares a systemd user unit. Installing a unit file is
-explicit. Uninstall removes only a matching gateway unit file and leaves
-credentials, audit and jobs in place. Unit activation and daemon reload are
-separate operator actions. `serve plan` previews an MCP loopback route
+The service workflow prepares a systemd user unit. Installing a unit file is explicit. Uninstall removes only a matching gateway unit file and
+leaves credentials, audit and jobs in place. The verified service supports
+separate start, stop, restart, enable, disable and diagnostics commands. `serve plan` previews an MCP loopback route
 without contacting or changing Tailscale. An optional `--state-file`
 provides a read-only inventory of existing routes. Read the
 [security and rollback notes](GATE3_BETA.md) before using a service.
@@ -89,6 +88,8 @@ specific upstream tools to approved clients.
 - [Sandboxed stdio and Streamable HTTP upstream setup](docs/UPSTREAM-MCP.md)
 - [Implementation checkpoints and verification status](STATUS.md)
 
-The dashboard, extended skills management and upstream aggregation are
-under product acceptance review. The terminal monitor is outside this
-checkpoint.
+The Linux candidate also includes the authenticated `veyl-monitor`,
+bounded workspace search, read-only Git inspection, optional systemd
+lifecycle and private Tailscale Serve configuration. See the
+[Linux installation and rollback guide](docs/LINUX.md), the
+[BridgeDev comparison](docs/PARITY.md) and [release evidence](STATUS.md).

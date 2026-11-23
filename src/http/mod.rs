@@ -72,6 +72,8 @@ struct Failure {
 
 struct State {
     addr: SocketAddr,
+    #[cfg(target_os = "linux")]
+    tailnet: Option<crate::tailnet::Settings>,
     #[cfg(not(target_os = "linux"))]
     clients: Vec<Client>,
     #[cfg(target_os = "linux")]
@@ -209,6 +211,8 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         let permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let state = Arc::new(State {
             addr: actual,
+            #[cfg(target_os = "linux")]
+            tailnet: config.tailnet.clone(),
             #[cfg(not(target_os = "linux"))]
             clients: config.clients,
             #[cfg(target_os = "linux")]
@@ -335,15 +339,32 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
         .headers()
         .get(header::HOST)
         .and_then(|h| h.to_str().ok());
-    if !matches!(host, Some(h) if h == expected || h == local_alias) {
+    #[cfg(target_os = "linux")]
+    let remote = state
+        .tailnet
+        .as_ref()
+        .map(|settings| settings.authority(false));
+    #[cfg(not(target_os = "linux"))]
+    let remote: Option<String> = None;
+    if request.uri().authority().is_some()
+        || request.headers().get_all(header::HOST).iter().count() != 1
+        || request.headers().contains_key("Tailscale-Funnel-Request")
+        || !host.is_some_and(|h| h == expected || h == local_alias || remote.as_deref() == Some(h))
+    {
         return simple(StatusCode::FORBIDDEN, "Invalid Host");
     }
-    if let Some(origin) = request.headers().get(header::ORIGIN) {
-        let actual = origin.to_str().ok();
-        if !matches!(actual, Some(s) if s == format!("http://{expected}") || s == format!("http://{local_alias}"))
-        {
-            return simple(StatusCode::FORBIDDEN, "Invalid Origin");
-        }
+    let origin = if host == remote.as_deref() {
+        format!("https://{}", host.unwrap_or_default())
+    } else {
+        format!("http://{}", host.unwrap_or_default())
+    };
+    if request.headers().get_all(header::ORIGIN).iter().count() > 1
+        || request
+            .headers()
+            .get(header::ORIGIN)
+            .is_some_and(|value| value.as_bytes() != origin.as_bytes())
+    {
+        return simple(StatusCode::FORBIDDEN, "Invalid Origin");
     }
     if request
         .headers()
@@ -734,6 +755,30 @@ fn dispatch_tools(
                 );
             }
             #[cfg(target_os = "linux")]
+            if tool.inspection() {
+                let mode = client.mode.audit_mode().unwrap_or("standard");
+                let record = |phase| {
+                    state
+                        .mutations
+                        .record_runtime_mode(&client.id, name, mode, phase)
+                };
+                if !record(AuditPhase::Intent) {
+                    return Some(tool_text(true, "Audit intent unavailable"));
+                }
+                let result =
+                    crate::inspection::run(tool, args, state.policy.path(), settings, client);
+                let phase = if result["isError"] == true {
+                    AuditPhase::Failure
+                } else {
+                    AuditPhase::Success
+                };
+                return Some(if record(phase) {
+                    result
+                } else {
+                    tool_text(true, "Audit outcome unavailable")
+                });
+            }
+            #[cfg(target_os = "linux")]
             if client.mode.audit_mode().is_some() {
                 return Some(privileged_tool(
                     state, settings, client, tool, name, args, now,
@@ -960,6 +1005,12 @@ fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configu
     if matches!(tool, Tool::UpstreamsList | Tool::UpstreamsCall) {
         #[cfg(target_os = "linux")]
         return !settings.upstreams.empty() && state.mutations.available();
+        #[cfg(not(target_os = "linux"))]
+        return false;
+    }
+    if tool.inspection() {
+        #[cfg(target_os = "linux")]
+        return state.mutations.available();
         #[cfg(not(target_os = "linux"))]
         return false;
     }

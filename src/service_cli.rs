@@ -7,6 +7,9 @@ use std::io::{self, Read};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
+
+use serde_json::{Value, json};
 
 use mcp_gateway::security::linux_fs::{open_operator_dir, publish_new, reopen_regular};
 use rustix::fd::{AsFd, OwnedFd};
@@ -19,7 +22,8 @@ const UNIT: &str = "mcp-gateway.service";
 const HELP: &str = "usage: mcp-gateway service print-unit [--config PATH] [--listen IP:PORT]\n\
                    mcp-gateway service install (--dry-run | --confirm) [--config PATH] [--listen IP:PORT]\n\
                    mcp-gateway service uninstall --confirm [--dry-run] [--config PATH] [--listen IP:PORT]\n\
-                   mcp-gateway service status";
+                   mcp-gateway service <enable|disable|start|stop|restart> (--dry-run | --confirm) [--config PATH] [--listen IP:PORT]\n\
+                   mcp-gateway service <status|diagnostics|validate>";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args.iter().any(|arg| arg == "--help") {
@@ -32,8 +36,8 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         .filter(|path| valid_path(path))
         .ok_or("HOME must be an absolute directory")?;
     let target = home.join(".config/systemd/user").join(UNIT);
-    if action == "status" && args.len() == 1 {
-        return status(&target);
+    if matches!(action, "status" | "diagnostics") && args.len() == 1 {
+        return status(&target, action == "diagnostics");
     }
 
     let mut dry_run = false;
@@ -43,10 +47,20 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     let mut args = args[1..].iter();
     while let Some(key) = args.next() {
         match key.to_str() {
-            Some("--dry-run") if matches!(action, "install" | "uninstall") && !dry_run => {
+            Some("--dry-run")
+                if matches!(
+                    action,
+                    "install" | "uninstall" | "enable" | "disable" | "start" | "stop" | "restart"
+                ) && !dry_run =>
+            {
                 dry_run = true;
             }
-            Some("--confirm") if matches!(action, "install" | "uninstall") && !confirm => {
+            Some("--confirm")
+                if matches!(
+                    action,
+                    "install" | "uninstall" | "enable" | "disable" | "start" | "stop" | "restart"
+                ) && !confirm =>
+            {
                 confirm = true;
             }
             Some("--config") if config.is_none() => {
@@ -60,10 +74,20 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     }
     if !matches!(
         (action, dry_run, confirm),
-        ("print-unit", false, false)
+        ("print-unit" | "validate", false, false)
+            | (
+                "enable" | "disable" | "start" | "stop" | "restart",
+                false,
+                true
+            )
             | ("install", true, false)
             | ("install", false, true)
             | ("uninstall", _, true)
+            | (
+                "enable" | "disable" | "start" | "stop" | "restart",
+                true,
+                false
+            )
     ) {
         return Err(HELP.into());
     }
@@ -75,6 +99,29 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         .map_err(|_| "Expected a fixed IPv4 loopback listen address")?;
     let executable = env::current_exe().map_err(|_| "Gateway executable unavailable")?;
     let unit = render(&executable, &config, address)?;
+    if action == "validate" {
+        verify_approvals(&PolicyFile::preview(&config)?)?;
+        println!("Configuration valid for {}", address);
+        return Ok(());
+    }
+    if matches!(action, "enable" | "disable" | "start" | "stop" | "restart") {
+        if matches!(action, "enable" | "start" | "restart") {
+            if dry_run {
+                verify_approvals(&PolicyFile::preview(&config)?)?;
+            } else {
+                let policy = PolicyFile::lock(&config, false)?;
+                verify_approvals(&policy.snapshot()?)?;
+            }
+        }
+        if dry_run {
+            println!(
+                "SERVICE_PLAN action={action} destination={} activation=none",
+                target.display()
+            );
+            return Ok(());
+        }
+        return lifecycle(action, &target, unit.as_bytes());
+    }
     if action == "uninstall" {
         return if dry_run {
             println!(
@@ -103,6 +150,13 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             verify_approvals(&policy.snapshot()?)?;
             let dir = unit_directory(&home)
                 .map_err(|error| format!("User unit directory unavailable: {error}"))?;
+            if owned_unit(&target, unit.as_bytes(), false).is_ok_and(|found| found) {
+                println!(
+                    "SERVICE_UNIT=UNCHANGED destination={} activation=none",
+                    target.display()
+                );
+                return Ok(());
+            }
             publish_new(&dir, OsStr::new(UNIT), unit.as_bytes())
                 .map_err(|error| format!("User unit was not installed: {error}"))?;
             println!(
@@ -186,7 +240,21 @@ fn uninstall(path: &Path, expected: &[u8]) -> Result<(), String> {
     if rustix::process::geteuid().is_root() {
         return Err("Service uninstallation requires the unprivileged gateway owner".into());
     }
-    let result = remove_owned_unit(path, expected)
+    if let Ok(properties) = query_unit()
+        && properties["FragmentPath"]
+            .as_str()
+            .is_some_and(|fragment| Path::new(fragment) == path)
+        && (!matches!(
+            properties["ActiveState"].as_str(),
+            Some("inactive" | "failed")
+        ) || matches!(
+            properties["UnitFileState"].as_str(),
+            Some("enabled" | "enabled-runtime" | "linked" | "linked-runtime")
+        ))
+    {
+        return Err("Stop and disable the Veyl unit before uninstalling it".into());
+    }
+    let result = owned_unit(path, expected, true)
         .map_err(|error| format!("User unit was not removed: {error}"))?;
     let state = if result { "REMOVED" } else { "ABSENT" };
     println!(
@@ -196,7 +264,7 @@ fn uninstall(path: &Path, expected: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn remove_owned_unit(path: &Path, expected: &[u8]) -> io::Result<bool> {
+fn owned_unit(path: &Path, expected: &[u8], remove: bool) -> io::Result<bool> {
     let refuse = || io::Error::other("unit does not match the generated configuration");
     let directory = match open_operator_dir(path.parent().ok_or_else(refuse)?) {
         Ok(directory) => directory,
@@ -240,17 +308,64 @@ fn remove_owned_unit(path: &Path, expected: &[u8]) -> io::Result<bool> {
     let legacy = std::str::from_utf8(expected)
         .map_err(|_| refuse())?
         .replace("ProtectSystem=full\n", "");
-    if (content != expected && content != legacy.as_bytes())
+    if (content != expected && !(remove && content == legacy.as_bytes()))
         || identity(&metadata) != identity(&current)
     {
         return Err(refuse());
     }
-    fs::unlinkat(&directory, UNIT, AtFlags::empty())?;
-    fs::fsync(&directory)?;
+    if remove {
+        fs::unlinkat(&directory, UNIT, AtFlags::empty())?;
+        fs::fsync(&directory)?;
+    }
     Ok(true)
 }
 
-fn status(path: &Path) -> Result<(), String> {
+fn manager(args: &[&str]) -> Result<String, String> {
+    let mut command = Command::new("/usr/bin/systemctl");
+    command
+        .args(["--user", "--no-pager", "--no-ask-password"])
+        .args(args);
+    let (status, bytes) = crate::linux_command::capture(
+        &mut command,
+        32_768,
+        Duration::from_secs(if args[0] == "show" { 2 } else { 27 }),
+    )
+    .map_err(|error| format!("User systemd manager unavailable: {error}"))?;
+    if !status.success() {
+        return Err(format!(
+            "User systemd rejected {} ({status}). Inspect service diagnostics.",
+            args[0]
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| "Invalid systemd reply".into())
+}
+
+fn query_unit() -> Result<Value, String> {
+    let properties = "LoadState,ActiveState,SubState,UnitFileState,FragmentPath,DropInPaths,MainPID,Result,NRestarts,MemoryCurrent,TasksCurrent";
+    let output = manager(&["show", "--property", properties, UNIT])?;
+    let properties: Vec<_> = properties.split(',').collect();
+    let fields = output
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .filter(|(key, _)| properties.contains(key))
+        .map(|(key, value)| (key.to_owned(), json!(value)))
+        .collect();
+    Ok(Value::Object(fields))
+}
+
+pub(crate) fn health() -> Value {
+    let result = query_unit();
+    match result {
+        Ok(mut status) => {
+            status.as_object_mut().unwrap().remove("FragmentPath");
+            status.as_object_mut().unwrap().remove("DropInPaths");
+            status
+        }
+        Err(_) => json!({"LoadState":"manager-unavailable"}),
+    }
+}
+
+fn status(path: &Path, diagnostics: bool) -> Result<(), String> {
     let present = match path.symlink_metadata() {
         Ok(meta) if meta.is_file() => "present",
         Ok(_) => "unexpected-file-type",
@@ -258,24 +373,49 @@ fn status(path: &Path) -> Result<(), String> {
         Err(_) => return Err("Cannot inspect user unit path".into()),
     };
     println!("unit_file={present} destination={}", path.display());
+    if diagnostics {
+        println!("{}", serde_json::to_string_pretty(&health()).unwrap());
+        return Ok(());
+    }
     if present == "missing" {
         return Ok(());
     }
-    let output = Command::new("/usr/bin/systemctl")
-        .args([
-            "--user",
-            "--no-pager",
-            "show",
-            "--property=LoadState,ActiveState,SubState",
-            UNIT,
-        ])
-        .output()
-        .map_err(|_| "User systemd manager query unavailable")?;
-    if !output.status.success() {
-        return Err("User systemd manager query failed".into());
+    let fields = query_unit()?;
+    for key in ["LoadState", "ActiveState", "SubState", "UnitFileState"] {
+        println!("{key}={}", fields[key].as_str().unwrap_or_default());
     }
-    print!("{}", String::from_utf8_lossy(&output.stdout));
     Ok(())
+}
+
+fn unit_matches(properties: &Value, path: &Path) -> bool {
+    properties["LoadState"] == "loaded"
+        && properties["DropInPaths"] == ""
+        && properties["FragmentPath"]
+            .as_str()
+            .is_some_and(|fragment| Path::new(fragment) == path)
+}
+
+fn lifecycle(action: &str, target: &Path, expected: &[u8]) -> Result<(), String> {
+    if rustix::process::geteuid().is_root() {
+        return Err("Use the existing unprivileged Veyl operator".into());
+    }
+    if !owned_unit(target, expected, false).map_err(|error| error.to_string())? {
+        return Err("Install the Veyl user unit first".into());
+    }
+    let loaded = query_unit()?;
+    if loaded["LoadState"] != "not-found" && !unit_matches(&loaded, target) {
+        return Err("The user manager has a different or overridden service unit".into());
+    }
+    // Only reload to discover a newly installed file. Reject a shadowing
+    // unit or effective drop-in before submitting any lifecycle operation.
+    if loaded["LoadState"] == "not-found" {
+        manager(&["daemon-reload"])?;
+    }
+    if !unit_matches(&query_unit()?, target) {
+        return Err("The user manager did not load the expected Veyl unit".into());
+    }
+    manager(&[action, UNIT])?;
+    status(target, false)
 }
 
 #[cfg(test)]
