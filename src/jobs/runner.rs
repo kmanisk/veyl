@@ -35,6 +35,7 @@ pub(super) struct Launch {
     pub scoped: bool,
     pub yolo: bool,
     pub isolated: bool,
+    pub broad: Option<super::broad::Broad>,
     pub sandbox_roots: Vec<RootIdentity>,
 }
 
@@ -73,6 +74,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
             || receipt.max_output_bytes != launch.profile.max_output_bytes
             || receipt.yolo != launch.yolo
             || receipt.isolated != launch.isolated
+            || receipt.broad != launch.broad
             || receipt.sandbox_roots != launch.sandbox_roots
         {
             return Err(invalid());
@@ -98,7 +100,21 @@ pub(crate) fn run_worker() -> io::Result<()> {
         let start = Instant::now();
         let mut sandbox;
         let mut standard;
-        let command = if launch.isolated {
+        let command = if let Some(broad) = &launch.broad {
+            if !launch.isolated || receipt.full {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            }
+            sandbox = match broad.command(
+                launch.root.path(),
+                &launch.profile.executable,
+                &launch.profile.args,
+                true,
+            ) {
+                Ok(sandbox) => sandbox,
+                Err(_) => return finish(&job, &mut audit, receipt, State::Failed),
+            };
+            &mut sandbox.command
+        } else if launch.isolated {
             sandbox = match super::sandbox::Sandbox::for_job(
                 &launch.root,
                 &cwd,

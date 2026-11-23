@@ -40,7 +40,8 @@ impl Scopes {
         }
 
         let scopes = Self {
-            executable: std::env::current_exe().ok()?,
+            // Keep subsequent scope launches bound to the running gateway inode.
+            executable: PathBuf::from(format!("/proc/{}/exe", std::process::id())),
             runtime,
         };
         let id = random_hex().ok()?;

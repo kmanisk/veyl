@@ -554,7 +554,9 @@ fn dispatch_tools(
             }
             #[cfg(target_os = "linux")]
             if client.mode.audit_mode().is_some() {
-                return Some(privileged_tool(state, client, tool, name, args, now));
+                return Some(privileged_tool(
+                    state, settings, client, tool, name, args, now,
+                ));
             }
             #[cfg(target_os = "linux")]
             if tool == Tool::ReadFile {
@@ -582,6 +584,7 @@ fn dispatch_tools(
                         JobPolicy {
                             yolo: false,
                             full: false,
+                            broad: None,
                             workspace_mounts: settings.managed.then_some(&[]),
                         },
                     ));
@@ -609,6 +612,7 @@ fn dispatch_tools(
 #[cfg(target_os = "linux")]
 fn privileged_tool(
     state: &State,
+    settings: &Configuration,
     client: &Client,
     tool: Tool,
     name: &str,
@@ -618,9 +622,6 @@ fn privileged_tool(
     let Some(mode) = client.mode.audit_mode() else {
         return tool_text(true, "Privileged execution mode unavailable");
     };
-    if client.mode == ExecutionMode::BroadYolo {
-        return tool_text(true, "Broad YOLO runtime unavailable");
-    }
     let full = client.mode == ExecutionMode::Full;
     if !state
         .mutations
@@ -630,23 +631,40 @@ fn privileged_tool(
     }
     let result = if tool.action().is_job() {
         match (state.jobs.as_ref(), client.job_root.as_ref()) {
-            (Some(jobs), Some(root)) => Some(jobs.call(
-                tool,
-                args,
-                &client.id,
-                root,
-                JobPolicy {
-                    yolo: !full,
-                    full,
-                    workspace_mounts: (!full).then_some(&client.job_extra_roots),
-                },
-            )),
-            _ => None,
+            (Some(jobs), Some(root)) => {
+                let broad = if client.mode == ExecutionMode::BroadYolo
+                    && matches!(tool.action(), Action::StartJob | Action::RunShortJob)
+                {
+                    crate::jobs::broad::Broad::prepare(state.policy.path(), settings).map(Some)
+                } else {
+                    Ok(None)
+                };
+                match broad {
+                    Ok(broad) => jobs.call(
+                        tool,
+                        args,
+                        &client.id,
+                        root,
+                        JobPolicy {
+                            yolo: !full,
+                            full,
+                            broad: broad.as_ref(),
+                            workspace_mounts: (!full && broad.is_none())
+                                .then_some(&client.job_extra_roots),
+                        },
+                    ),
+                    Err(reason) => tool_text(true, &format!("Broad job denied: {reason}")),
+                }
+            }
+            _ => tool_text(true, "Jobs unavailable"),
         }
+    } else if client.mode == ExecutionMode::BroadYolo {
+        tool_text(true, "Broad direct file tools unavailable")
     } else {
-        client_file_tool(state, client, tool, args, now)
-    }
-    .unwrap_or_else(|| tool_text(true, "Operation unavailable or outside an approved scope"));
+        client_file_tool(state, client, tool, args, now).unwrap_or_else(|| {
+            tool_text(true, "Operation unavailable or outside an approved scope")
+        })
+    };
 
     let phase = if result["isError"].as_bool() == Some(true) {
         AuditPhase::Failure
@@ -751,7 +769,7 @@ fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configu
             return false;
         }
     }
-    if client.mode == ExecutionMode::BroadYolo {
+    if client.mode == ExecutionMode::BroadYolo && !tool.action().is_job() {
         return false;
     }
     if tool == Tool::ReadFile {

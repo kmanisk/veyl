@@ -37,6 +37,7 @@ const SHORT_TIMEOUT: u64 = 2;
 pub(crate) struct JobPolicy<'a> {
     pub yolo: bool,
     pub full: bool,
+    pub broad: Option<&'a broad::Broad>,
     /// Some (including an empty slice) requires kernel isolation.
     pub workspace_mounts: Option<&'a [JobRoot]>,
 }
@@ -125,7 +126,9 @@ fn record(
             stdout_bytes: receipt.stdout_bytes,
             stderr_bytes: receipt.stderr_bytes,
             yolo: receipt.yolo,
-            effective_mode: if receipt.full {
+            effective_mode: if receipt.broad.is_some() {
+                "broad_yolo"
+            } else if receipt.full {
                 "full"
             } else if receipt.yolo {
                 "legacy_scoped_yolo"

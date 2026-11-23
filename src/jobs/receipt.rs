@@ -85,6 +85,8 @@ pub(super) struct Receipt {
     pub full: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub isolated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broad: Option<super::broad::Broad>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sandbox_roots: Vec<super::config::RootIdentity>,
 }

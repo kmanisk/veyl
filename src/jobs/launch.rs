@@ -36,12 +36,16 @@ impl Jobs {
         for root in &sandbox_roots {
             root.handle()?;
         }
-        if policy.workspace_mounts.is_some() {
-            super::sandbox::probe()?;
+        if policy.broad.is_some() || policy.workspace_mounts.is_some() {
             super::sandbox::validate_executable(&profile.executable)?;
         }
         let root = root.identity();
         root.handle()?;
+        if let Some(plan) = policy.broad {
+            plan.validate()?;
+        } else if policy.workspace_mounts.is_some() {
+            super::sandbox::probe()?;
+        }
         let _transaction = self.store.lock(false)?;
         let ids = self.store.jobs()?;
         if ids.len() >= HISTORY_LIMIT {
@@ -86,7 +90,8 @@ impl Jobs {
             resource_ceilings_enforced: false,
             yolo: policy.yolo,
             full: policy.full,
-            isolated: policy.workspace_mounts.is_some(),
+            isolated: policy.workspace_mounts.is_some() || policy.broad.is_some(),
+            broad: policy.broad.cloned(),
             sandbox_roots: sandbox_roots.clone(),
         };
         let job = self.store.create(&receipt.job_id)?;
@@ -116,6 +121,7 @@ impl Jobs {
             scoped: self.scopes.is_some(),
             yolo: receipt.yolo,
             isolated: receipt.isolated,
+            broad: receipt.broad.clone(),
             sandbox_roots,
         };
         if start_runner(launch, lease, self.scopes.as_ref()).is_err() {

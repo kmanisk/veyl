@@ -45,6 +45,25 @@ passed through real Bubblewrap preflight, as did all migration
 controls. Broad workload cases 06–12 remain gated until C connects
 the supervisor. Logs: `target/gate3d/sandbox-verified/`.
 
+
+Checkpoint B: `d4d67a970ddef964d240f64175fa6f1b412fa173`.
+
+## C — Supervised broad networking
+
+The signed receipt now binds the admitted broad mount policy. The
+gateway checks state before publishing the job, and the runner checks
+state again just before launching Bubblewrap. The broad child shares
+host IP networking and retains the private mount, PID, user and IPC
+namespaces. Seccomp still rejects kernel file handles, io_uring and
+host Unix-domain socket creation. Existing scoped modes keep both
+network namespace isolation and socket denial.
+
+Session 67661 passed 36/36 across Broad Gateway, Modes, Durable Jobs
+and Managed Jobs Cleanup. Real MCP jobs proved off-root file writes,
+state and home masking, loopback networking, NoNewPrivileges and
+descriptor isolation. Logs: `target/gate3d/execution/`. Direct broad
+file operations remain gated for checkpoint D.
+
 ---
 
 # Gate 3c status

@@ -71,7 +71,7 @@ impl Broad {
 
     /// Runner-side validation uses the admitted paths and checks state aliases
     /// again immediately before the mount namespace is assembled.
-    fn validate(&self) -> io::Result<()> {
+    pub(super) fn validate(&self) -> io::Result<()> {
         if !visible(&self.state)
             || self.home == self.state
             || self.state.starts_with(&self.home) && !visible(&self.home)
