@@ -71,6 +71,34 @@ protected-object parity tests. The next task is to implement a constrained
 host mount graph, validate protected inode uniqueness before admission and
 prove both access and containment in a gateway-launched job.
 
+The state layout diagnostic was committed in
+`16811129324a77e4d9aa6e5cae9cb285aa48d7fe`.
+
+## Verified service file lifecycle and Serve planning
+
+`service uninstall --confirm` removes only a private, singly linked file
+matching the gateway-generated unit for the supplied configuration and
+listener. It accepts the old generated unit shape and refuses changed
+units. `--confirm --dry-run` previews removal. Both operations preserve
+gateway data. The user unit now includes `ProtectSystem=full`.
+A missing unit reports its status without querying a user manager.
+`serve plan` validates an MCP loopback target and can read an optional
+Serve snapshot while omitting upstream URL values. It reports route
+collisions. It does not call Tailscale or apply a plan.
+
+A disposable HOME probe passed unit installation, verification,
+modified-unit refusal, removal, absence, and data retention. It also
+confirmed snapshot preservation, loopback validation and redaction.
+Files: `src/service_cli.rs`, `src/serve_plan.rs`, `src/main.rs`,
+`README.md` and `STATUS.md`. See `target/gate3c/service-probe.log`.
+
+The locked service/network suite passed 11/12, exit 1. Case 05 still
+expects a dashboard response on the MCP listener. Service preparation
+passed 9/10 in the trusted sandbox and 10/10 with the user systemd
+environment. The sandbox regression is the test that needs an XDG user
+runtime directory. Durable jobs passed 9/9. Session 43114 exited 1.
+No production service or Tailscale setting was changed.
+
 ## Private GitHub publication
 
 No Git remote existed at startup. The GitHub connector returned 404 for

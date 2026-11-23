@@ -12,6 +12,8 @@ mod protected_cli;
 mod protected_paths;
 mod protocol;
 #[cfg(target_os = "linux")]
+mod serve_plan;
+#[cfg(target_os = "linux")]
 mod service_cli;
 #[cfg(target_os = "linux")]
 mod state_cli;
@@ -55,7 +57,7 @@ fn run() -> Result<(), String> {
             println!(
                 "mcp-gateway --root DIR | http --listen 127.0.0.1:PORT --config PATH
 \
-                      mcp-gateway yolo --help | audit --help | service --help | protected-paths --help | state --help"
+                      mcp-gateway yolo --help | audit --help | service --help | protected-paths --help | state --help | serve --help"
             );
             return Ok(());
         }
@@ -84,6 +86,10 @@ fn run() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "state") {
         return state_cli::run(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "serve") {
+        return serve_plan::run(&args[1..]);
     }
     if args.first().is_some_and(|arg| arg == "http") {
         return http::run(args.into_iter().skip(1).collect());

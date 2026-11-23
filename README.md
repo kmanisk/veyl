@@ -65,10 +65,16 @@ previously recorded prefix.
 ```sh
 mcp-gateway service print-unit --config "$config"
 mcp-gateway service install --dry-run --config "$config"
+mcp-gateway service uninstall --confirm --dry-run --config "$config"
+mcp-gateway serve plan --config "$config"
 ```
 
 The service workflow prepares a systemd user unit. Installing a unit file is
-explicit. Service activation is a separate operator action. Read the
+explicit. Uninstall removes only a matching gateway unit file and leaves
+credentials, audit and jobs in place. Unit activation and daemon reload are
+separate operator actions. `serve plan` previews an MCP loopback route
+without contacting or changing Tailscale. An optional `--state-file`
+provides a read-only inventory of existing routes. Read the
 [security and rollback notes](GATE3_BETA.md) before using a service.
 
 The dashboard, skills, upstream MCP servers and terminal monitor remain

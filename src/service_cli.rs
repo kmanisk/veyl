@@ -2,14 +2,15 @@
 
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::io;
+use std::fs::File;
+use std::io::{self, Read};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-use mcp_gateway::security::linux_fs::{open_operator_dir, publish_new};
+use mcp_gateway::security::linux_fs::{open_operator_dir, publish_new, reopen_regular};
 use rustix::fd::{AsFd, OwnedFd};
-use rustix::fs::{self, Mode, OFlags};
+use rustix::fs::{self, AtFlags, FileType, Mode, OFlags};
 use rustix::io::Errno;
 
 use crate::http::operator::{PolicyFile, verify_approvals};
@@ -17,6 +18,7 @@ use crate::http::operator::{PolicyFile, verify_approvals};
 const UNIT: &str = "mcp-gateway.service";
 const HELP: &str = "usage: mcp-gateway service print-unit [--config PATH] [--listen IP:PORT]\n\
                    mcp-gateway service install (--dry-run | --confirm) [--config PATH] [--listen IP:PORT]\n\
+                   mcp-gateway service uninstall --confirm [--dry-run] [--config PATH] [--listen IP:PORT]\n\
                    mcp-gateway service status";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
@@ -34,14 +36,19 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         return status(&target);
     }
 
-    let mut plan = None;
+    let mut dry_run = false;
+    let mut confirm = false;
     let mut config = None;
     let mut listen = None;
     let mut args = args[1..].iter();
     while let Some(key) = args.next() {
         match key.to_str() {
-            Some("--dry-run") if action == "install" && plan.is_none() => plan = Some(false),
-            Some("--confirm") if action == "install" && plan.is_none() => plan = Some(true),
+            Some("--dry-run") if matches!(action, "install" | "uninstall") && !dry_run => {
+                dry_run = true;
+            }
+            Some("--confirm") if matches!(action, "install" | "uninstall") && !confirm => {
+                confirm = true;
+            }
             Some("--config") if config.is_none() => {
                 config = Some(PathBuf::from(args.next().ok_or(HELP)?))
             }
@@ -51,7 +58,13 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             _ => return Err(HELP.into()),
         }
     }
-    if !(action == "print-unit" || action == "install" && plan.is_some()) {
+    if !matches!(
+        (action, dry_run, confirm),
+        ("print-unit", false, false)
+            | ("install", true, false)
+            | ("install", false, true)
+            | ("uninstall", _, true)
+    ) {
         return Err(HELP.into());
     }
 
@@ -62,16 +75,27 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         .map_err(|_| "Expected a fixed IPv4 loopback listen address")?;
     let executable = env::current_exe().map_err(|_| "Gateway executable unavailable")?;
     let unit = render(&executable, &config, address)?;
-    match plan {
-        None => print!("{unit}"),
-        Some(false) => {
+    if action == "uninstall" {
+        return if dry_run {
+            println!(
+                "SERVICE_PLAN action=uninstall destination={} activation=none data=preserved",
+                target.display()
+            );
+            Ok(())
+        } else {
+            uninstall(&target, unit.as_bytes())
+        };
+    }
+    match (action, dry_run) {
+        ("print-unit", _) => print!("{unit}"),
+        (_, true) => {
             println!(
                 "SERVICE_PLAN destination={} activation=none",
                 target.display()
             );
             print!("{unit}");
         }
-        Some(true) => {
+        (_, false) => {
             if rustix::process::geteuid().is_root() {
                 return Err("Service installation requires the unprivileged gateway owner".into());
             }
@@ -100,7 +124,7 @@ fn render(executable: &Path, config: &Path, address: SocketAddrV4) -> Result<Str
         "[Unit]\nDescription=Local Rust MCP gateway\nStartLimitIntervalSec=60\nStartLimitBurst=3\n\n\
          [Service]\nType=simple\nExecStart={executable} http --listen {address} --config {config}\n\
          Restart=on-failure\nRestartSec=2s\nTimeoutStopSec=20s\nKillMode=process\n\
-         MemoryMax=512M\nTasksMax=128\nUMask=0077\nNoNewPrivileges=yes\n\
+         MemoryMax=512M\nTasksMax=128\nUMask=0077\nNoNewPrivileges=yes\nProtectSystem=full\n\
          UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH RUST_LOG\nStandardOutput=journal\nStandardError=journal\n\n\
          [Install]\nWantedBy=default.target\n"
     ))
@@ -158,6 +182,74 @@ fn unit_directory(home: &Path) -> io::Result<OwnedFd> {
     Ok(directory)
 }
 
+fn uninstall(path: &Path, expected: &[u8]) -> Result<(), String> {
+    if rustix::process::geteuid().is_root() {
+        return Err("Service uninstallation requires the unprivileged gateway owner".into());
+    }
+    let result = remove_owned_unit(path, expected)
+        .map_err(|error| format!("User unit was not removed: {error}"))?;
+    let state = if result { "REMOVED" } else { "ABSENT" };
+    println!(
+        "SERVICE_UNIT={state} destination={} activation=none data=preserved",
+        path.display()
+    );
+    Ok(())
+}
+
+fn remove_owned_unit(path: &Path, expected: &[u8]) -> io::Result<bool> {
+    let refuse = || io::Error::other("unit does not match the generated configuration");
+    let directory = match open_operator_dir(path.parent().ok_or_else(refuse)?) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    checked(&directory)?;
+    let handle = match fs::openat(
+        &directory,
+        UNIT,
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(handle) => handle,
+        Err(Errno::NOENT) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = fs::fstat(&handle)?;
+    if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile
+        || metadata.st_uid != rustix::process::geteuid().as_raw()
+        || metadata.st_mode & 0o7777 != 0o600
+        || metadata.st_nlink != 1
+    {
+        return Err(refuse());
+    }
+
+    let mut content = Vec::new();
+    File::from(reopen_regular(handle, OFlags::RDONLY)?)
+        .take(expected.len() as u64 + 1)
+        .read_to_end(&mut content)?;
+    let current = fs::statat(&directory, UNIT, AtFlags::SYMLINK_NOFOLLOW)?;
+    let identity = |meta: &fs::Stat| {
+        (
+            meta.st_dev,
+            meta.st_ino,
+            meta.st_ctime,
+            meta.st_ctime_nsec,
+            meta.st_nlink,
+        )
+    };
+    let legacy = std::str::from_utf8(expected)
+        .map_err(|_| refuse())?
+        .replace("ProtectSystem=full\n", "");
+    if (content != expected && content != legacy.as_bytes())
+        || identity(&metadata) != identity(&current)
+    {
+        return Err(refuse());
+    }
+    fs::unlinkat(&directory, UNIT, AtFlags::empty())?;
+    fs::fsync(&directory)?;
+    Ok(true)
+}
+
 fn status(path: &Path) -> Result<(), String> {
     let present = match path.symlink_metadata() {
         Ok(meta) if meta.is_file() => "present",
@@ -166,6 +258,9 @@ fn status(path: &Path) -> Result<(), String> {
         Err(_) => return Err("Cannot inspect user unit path".into()),
     };
     println!("unit_file={present} destination={}", path.display());
+    if present == "missing" {
+        return Ok(());
+    }
     let output = Command::new("/usr/bin/systemctl")
         .args([
             "--user",
