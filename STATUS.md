@@ -1,3 +1,89 @@
+# Gate 3c status
+
+## Verified baseline
+
+- Development branch `milestone3/broad-yolo` was at
+  `5eb25fb17b4948f92e4ef81c4d966b697280fc0e` at startup.
+- Committed the carried Gate 3b evidence as
+  `05e0948c433cfce118ffd311344944d914a9977f`. The new `gate3b-partial`
+  tag points to that documentation checkpoint.
+- The trusted harness selected 24 of 28 pinned suites. All 28 SHA-256
+  pins matched before and after the baseline. The required selection ran
+  225 cases, and the four future suites account for 58 cases. Logs:
+  `target/gate3c/baseline.log` and `target/gate3c/baseline/`.
+- The initial sandbox result was 214/225 (exit 1). The correct audit
+  hook build passed 13/13. The service preparation suite was 8/10 in
+  the verifier sandbox and 10/10 in the original user systemd environment.
+  Together, the baseline was 216/225. The nine implementation reds
+  were mode 04, permanent-permissions 17, and broad-gateway 02–08.
+
+## Independent acceptance issues
+
+`acceptance_pass3_broad_gateway/locked_broad_gateway.py` cases 01 and 02
+invoke identical broad activation for the same configuration shape with
+opposite expected exit codes. The same conflict exists in
+`acceptance_pass3_permanent_permissions/locked_permanent_permissions.py`
+cases 16 and 17. All three positive suites currently place credentials,
+audit and jobs alongside their workspaces. They do not provide a single
+dedicated gateway state root. Broad-gateway 04 and 08 submit an echo job,
+and 10 connects the test harness itself to the peer. These cases cannot
+independently prove the named kernel or network behavior.
+
+AGY follow-up: use an intentionally invalid layout or synthetic alias
+for each negative activation case. Use a distinct valid dedicated state
+directory for positive activation. The job probes should verify real exit
+receipts and observe both an allowed workspace operation and the requested
+containment property. The gateway binary and locked tests remain independent.
+
+The dashboard suite starts a single MCP listener and targets administrative
+routes on it. Its listener discovery needs a separate admin endpoint before
+it can verify the required transport boundary. The service/network suite
+case 05 also expects a dashboard response on the MCP listener.
+
+## Verified state-layout diagnostic
+
+`mcp-gateway state check --state-root PATH --config PATH` is read-only.
+It checks private ownership, mode, required-entry containment and recursively
+detects hardlinks, symlinks and nested mount crossings without printing
+state contents. It reports broad activation unavailable even on a valid
+layout. The command runs against a quiescent state tree and is a preflight
+inspection rather than a runtime mount attestation.
+
+Reproduce the local check with
+`python3 -I -B target/gate3c/state-probe.py target/debug/mcp-gateway`.
+The valid layout, no mutation, hardlink, symlink, permissions, split
+state, malformed configuration and redaction cases passed. Formatting,
+Clippy and all 36 Rust tests passed. Files: `src/main.rs`,
+`src/state_cli.rs`, `README.md`, and `STATUS.md`.
+
+For a future operator-driven migration, stop admissions and wait for
+detached work to finish. Keep the old config and audit state together as
+a rollback copy. Prepare a new dedicated mode-0700 directory, preserve
+existing audit segments, metadata, job receipts and keys, and update
+the copied config's audit and job paths. Run `state check` on the proposed
+copy before starting it. No host migration was performed.
+
+The accepted Model A covers sandbox jobs, direct file tools and pre-existing
+visible aliases. Model B covers independently compromised same-UID host
+processes outside the sandbox. The latter remains outside the broad-mode
+threat model. Broad activation is still denied pending runtime mount and
+protected-object parity tests. The next task is to implement a constrained
+host mount graph, validate protected inode uniqueness before admission and
+prove both access and containment in a gateway-launched job.
+
+## Private GitHub publication
+
+No Git remote existed at startup. The GitHub connector returned 404 for
+`kmanisk/rust-mcp-gateway`. HTTPS connectivity to the GitHub API worked.
+The configured `gh` account is `kmanisk`, but its Secret Service collection
+is locked. Independent attempts to retrieve or validate authorization
+hung. No repository creation or push was attempted. Initial redacted
+Gitleaks scan found no leaks across the 17 commits in the initial push
+set. Re-scan final candidate refs before publishing. There is no project
+license file in the inspected refs.
+
+---
+
 # Gate 3b status
 
 Branch `milestone3/broad-yolo` starts at
