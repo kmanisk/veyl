@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use mcp_gateway::security::audit::AuditSink;
+use mcp_gateway::security::audit::{AuditPhase, AuditSink};
 use mcp_gateway::security::linux_fs::{open_operator_dir, reopen_regular};
 use mcp_gateway::security::policy::ExecutionMode;
 use rustix::fd::OwnedFd;
@@ -292,6 +292,61 @@ impl PolicyFile {
         result
     }
 
+    /// Publish an audited configuration edit with admission closed until both writes succeed.
+    pub(crate) fn commit_edit(
+        &self,
+        document: &Value,
+        marker: &str,
+        record: impl Fn(AuditPhase) -> io::Result<()>,
+    ) -> Result<(), String> {
+        let pending = self.pending_client()?;
+        if pending.as_deref().is_some_and(|prior| prior != marker) {
+            return Err("Repeat the original local command to recover interrupted policy".into());
+        }
+        let mut candidate =
+            serde_json::to_vec_pretty(document).map_err(|_| "Cannot encode policy")?;
+        candidate.push(b'\n');
+        if candidate.len() > 65_536 {
+            return Err("Credential configuration exceeds size limit".into());
+        }
+        parse_clients(&self.path, &candidate)?;
+        record(AuditPhase::Intent).map_err(|_| "Cannot persist authorization intent")?;
+        if pending.is_none() {
+            self.begin(marker)
+                .map_err(|_| "Cannot persist policy transaction marker")?;
+        }
+        if self.replace(&candidate).is_err() {
+            let _ = record(AuditPhase::Uncertain);
+            return Err("Policy update requires local command recovery".into());
+        }
+        record(AuditPhase::Success).map_err(|_| "Policy update requires local command recovery")?;
+        self.finish()
+            .map_err(|_| "Policy update requires local command recovery")?;
+        Ok(())
+    }
+
+    pub(super) fn write_pairing(&self, bytes: &[u8]) -> io::Result<()> {
+        self.write_named(&self.pairing_name(), bytes)
+    }
+
+    pub(super) fn read_pairing(&self) -> io::Result<String> {
+        let mut value = String::new();
+        File::from(open_private(&self.directory, &self.pairing_name())?)
+            .take(128)
+            .read_to_string(&mut value)?;
+        Ok(value)
+    }
+
+    pub(super) fn consume_pairing(&self) -> io::Result<()> {
+        fs::unlinkat(&self.directory, self.pairing_name(), AtFlags::empty())?;
+        fs::fsync(&self.directory)?;
+        Ok(())
+    }
+
+    fn pairing_name(&self) -> OsString {
+        companion(self.path.file_name().unwrap_or_default(), ".dashboard-pair")
+    }
+
     pub(crate) fn finish(&self) -> io::Result<()> {
         fs::unlinkat(&self.directory, &self.pending, AtFlags::empty())?;
         fs::fsync(&self.directory)?;
@@ -337,8 +392,10 @@ pub(crate) fn policy_path(config: &Path, path: &Path) -> bool {
             && path.file_name().is_some_and(|name| {
                 let config_name = config.file_name().unwrap_or_default();
                 name == companion(config_name, ".policy-lock")
+                    || name == companion(config_name, ".dashboard-pair")
                     || name == companion(config_name, ".policy-pending")
                     || name.as_encoded_bytes().starts_with(b".mcp-policy-")
+                    || name.as_encoded_bytes().starts_with(b".mcp-upstream-")
             })
 }
 
@@ -357,6 +414,8 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "protected_paths",
         "skills_dir",
         "skills_disabled",
+        "admin_listen",
+        "mcp_servers",
     ];
     const CLIENT: &[&str] = &[
         "id",
@@ -369,6 +428,8 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "yolo_shared_roots",
         "yolo_revision",
         "skills",
+        "allowed_servers",
+        "allowed_server_tools",
     ];
     let allowed = |value: &Value, fields: &[&str]| {
         value

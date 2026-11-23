@@ -292,10 +292,37 @@ impl AuditSink {
         phase: AuditPhase,
         unix_seconds: u64,
     ) -> io::Result<()> {
+        self.record_skill_change_for(operation, name, None, phase, unix_seconds)
+    }
+
+    pub fn record_skill_change_for(
+        &self,
+        operation: &str,
+        name: &str,
+        client: Option<&str>,
+        phase: AuditPhase,
+        unix_seconds: u64,
+    ) -> io::Result<()> {
         self.0.append(json!({
-            "principal": "local_operator", "tool": "skills_admin",
+            "principal": "local_operator", "tool": "skills_admin", "target_client": client,
             "phase": phase.label(), "unix_seconds": unix_seconds,
             "operation": operation, "skill": name,
+        }))
+    }
+
+    pub fn record_upstream_change(
+        &self,
+        operation: &str,
+        server: &str,
+        client: Option<&str>,
+        tool: Option<&str>,
+        phase: AuditPhase,
+        unix_seconds: u64,
+    ) -> io::Result<()> {
+        self.0.append(json!({
+            "principal":"local_operator", "tool":"upstream_admin",
+            "phase":phase.label(), "unix_seconds":unix_seconds, "operation":operation,
+            "server":server, "target_client":client, "target_tool":tool,
         }))
     }
 
@@ -315,6 +342,24 @@ impl AuditSink {
 
     pub fn inspect(path: &Path, include_records: bool) -> io::Result<Value> {
         Self::inspection_json(Ledger::inspect_path(path, include_records)?)
+    }
+
+    /// Keep only a fixed number of verified events for local inspection.
+    pub fn recent(path: &Path) -> io::Result<Vec<Value>> {
+        let mut events = std::collections::VecDeque::with_capacity(40);
+        Ledger::inspect_transitions(path, |event| {
+            if events.len() == 40 {
+                events.pop_front();
+            }
+            events.push_back(json!({
+                "time": event["unix_seconds"],
+                "client": event["principal"],
+                "tool": event["tool"],
+                "phase": event["phase"],
+                "mode": event["effective_mode"],
+            }));
+        })?;
+        Ok(events.into())
     }
 
     fn inspection_json(result: ledger::Inspection) -> io::Result<Value> {

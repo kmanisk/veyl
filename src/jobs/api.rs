@@ -109,7 +109,7 @@ impl Jobs {
         Ok(status)
     }
 
-    fn owned_tool(&self, tool: Tool, id: &str, owner: &str) -> io::Result<Value> {
+    pub(crate) fn owned_tool(&self, tool: Tool, id: &str, owner: &str) -> io::Result<Value> {
         let _transaction = self.store.lock(false)?;
         let job = self.store.job(id)?;
         let mut receipt = self.owned_receipt(&job, owner)?;
@@ -155,7 +155,7 @@ impl Jobs {
         }
     }
 
-    fn list(&self, owner: &str, cursor: &str) -> io::Result<Value> {
+    pub(crate) fn list(&self, owner: &str, cursor: &str) -> io::Result<Value> {
         let _transaction = self.store.lock(false)?;
         let mut receipts = Vec::new();
         let mut next = None;

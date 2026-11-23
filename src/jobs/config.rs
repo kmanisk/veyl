@@ -97,6 +97,10 @@ struct JobDocument {
     _skills_dir: Option<PathBuf>,
     #[serde(default, rename = "skills_disabled")]
     _skills_disabled: Option<Vec<String>>,
+    #[serde(default, rename = "admin_listen")]
+    _admin_listen: Option<String>,
+    #[serde(default, rename = "mcp_servers")]
+    _mcp_servers: Option<serde_json::Value>,
     job_state_dir: PathBuf,
     #[serde(deserialize_with = "unique_profiles")]
     job_profiles: BTreeMap<String, Profile>,
@@ -117,6 +121,10 @@ struct JobClient {
     _tools: Vec<String>,
     #[serde(default, rename = "skills")]
     _skills: Option<Vec<String>>,
+    #[serde(default, rename = "allowed_servers")]
+    _allowed_servers: Option<Vec<String>>,
+    #[serde(default, rename = "allowed_server_tools")]
+    _allowed_server_tools: Option<serde_json::Value>,
     #[serde(default, rename = "mode")]
     _mode: Option<String>,
     #[serde(default, rename = "yolo_roots")]

@@ -858,3 +858,78 @@ deliberately disabled with an expired credential until locally edited.
   `target/gate3/release.log` and `target/gate3/release-cli.log`.
 - Final independent pin check matched all 16 files. Packaging created
   only ignored artifacts. This receipt is documentation-only.
+
+## Local dashboard, skills and upstream MCP
+
+The execution-mode baseline is `9d792001d82959ae33ef216358507fb20b473d56`.
+AGY independently accepted its 229 required cases. The separately preserved
+Linux x86_64 beta in `dist/gate3d-beta/` is built from that baseline.
+The complete archive is `dist/mcp-gateway-gate3d-linux-x86_64.tar.gz`
+(1,171,899 bytes), SHA-256
+`c7e0a7052a43187b2af20193e925d8fef936e8ddde62785ad6914e1f0ae80feb`.
+The packaged executable SHA-256 is
+`a9d3f06cea85c16d953bd35d3d70642e99d54d9212f4db909945fa6d4aee9eb7`.
+Extraction, the included checksum manifest and four runtime smoke probes
+passed. The product candidate uses the regular build output and has no
+release archive.
+
+The candidate enables a separate loopback admin listener, authenticated
+browser sessions, job views and cancellation, audited skill import and
+grants, and upstream registration, discovery and forwarding. Stdio
+upstreams use a fresh Bubblewrap sandbox. Streamable HTTP supports JSON
+and SSE. TLS verifies the registered hostname and supports a dedicated
+owner-only credential and trust bundle. See the three operator guides
+in `docs/` for configuration and rollback.
+
+Verification on the local candidate:
+
+| Check | Result |
+| --- | --- |
+| Gate 3d inherited | 229/229 |
+| Dashboard with isolated Brave | 15/15 |
+| Skills | 15/15 |
+| External MCP | 16/16 |
+| Service and networking | 12/12 |
+| Total registered | 287/287 across 28 suites |
+| Additional product probes | 4/4 |
+| Rust tests | 36 passed |
+| Harness regression and hardening | 37/37 and 6/6 |
+
+All 28 pins match before and after. The browser suite was run with only
+the installed Brave runtime and a synthetic launcher added read-only to
+the offline verifier environment. The unaugmented runner cannot find
+Brave. The audit suite used the separate hook-enabled build. Normal
+release hook exclusion, formatter, Clippy, offline builds, whitespace
+checks and project-local cargo-audit passed. A separate readable-browser
+probe confirmed the real cookie attributes, protected content and desktop
+and mobile layout. Three disposable source mutations were detected:
+reused pairing token, skipped CSRF validation and skipped per-tool grants.
+
+The actual Codex app-server negotiated with Veyl, discovered a namespaced
+tool and forwarded a call through the disposable provider. Antigravity
+registered Veyl and reached authenticated discovery in an isolated
+profile. Its model session asked for account authentication, so a
+Gemini-driven tool call remains unverified.
+
+Local verification is separate from independent acceptance of the new
+management, HTTPS and credential paths. AGY's expanded security acceptance
+and BridgeDev's package review are pending. GitHub metadata inspection
+as the authenticated owner could not resolve `kmanisk/veyl`. Publication
+is pending independent review. The older execution-mode beta and its
+checksums stay separate from the product candidate.
+
+Verification entry points and saved logs:
+
+- `cargo fmt --all --check`, `cargo clippy --offline --locked --all-targets -- -D warnings`,
+  `cargo test --offline --locked`, `cargo build --release --offline --locked` and
+  `python3 -B tests/product_features.py`.
+- `target/gate3d/product-final.log`, `target/gate3d/product-final/pins-before.tsv`
+  and `target/gate3d/product-final/pins-after.tsv` contain full suite receipts.
+- `target/gate3d/product-final-toolchain.log`, `product-cargo-audit.log`,
+  `product-cargo-tree.diff`, `product-browser-probe.log`,
+  `product-codex-client.log`, `product-agy-client.log` and
+  `product-mutations.log` are local evidence under `target/gate3d/`.
+
+Next independent task: review the exact source commit and separately
+validate the preserved Gate 3d archive. Exercise authenticated Gemini
+forwarding in an approved account before approving a full product release.

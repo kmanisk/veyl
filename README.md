@@ -1,4 +1,4 @@
-# Rust MCP Gateway
+# Veyl · Rust MCP Gateway
 
 A local MCP server with per-client tool grants, bounded file access, supervised
 jobs, and a tamper-evident audit ledger. The HTTP server listens on loopback
@@ -54,7 +54,7 @@ mcp-gateway audit verify --config "$config"
 Broad network-enabled YOLO uses a dedicated private state layout.
 `yolo set --mode yolo` is the explicit opt-in. `yolo enable` still selects
 scoped, offline YOLO. See the [broad mode and migration guide](docs/BROAD-YOLO.md).
-The Gate 3d release archive remains gated on independent acceptance.
+AGY independently accepted 229 of 229 required cases for the separate Gate 3d execution-mode beta at commit `9d79200`.
 
 ## State and service
 
@@ -78,5 +78,17 @@ without contacting or changing Tailscale. An optional `--state-file`
 provides a read-only inventory of existing routes. Read the
 [security and rollback notes](GATE3_BETA.md) before using a service.
 
-The gateway supports read-only [instruction packages](docs/SKILLS.md).
-The dashboard, upstream MCP servers and terminal monitor remain pending. See [checkpoint results and known gaps](STATUS.md).
+## Local management and upstreams
+
+Enable the optional [loopback dashboard](docs/DASHBOARD.md) to inspect
+clients, jobs, resource usage, audit events, skills and external MCP
+servers. Manage skills without executing package contents and expose
+specific upstream tools to approved clients.
+
+- [Skill import and per-client grants](docs/SKILLS.md)
+- [Sandboxed stdio and Streamable HTTP upstream setup](docs/UPSTREAM-MCP.md)
+- [Implementation checkpoints and verification status](STATUS.md)
+
+The dashboard, extended skills management and upstream aggregation are
+under product acceptance review. The terminal monitor is outside this
+checkpoint.

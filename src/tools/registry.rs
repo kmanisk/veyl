@@ -21,10 +21,12 @@ pub(crate) enum Tool {
     ListJobs,
     SkillsList,
     SkillsRead,
+    UpstreamsList,
+    UpstreamsCall,
 }
 
 impl Tool {
-    pub(crate) const ALL: [Self; 13] = [
+    pub(crate) const ALL: [Self; 15] = [
         Self::ReadFile,
         Self::WriteFile,
         Self::ApplyPatch,
@@ -38,6 +40,8 @@ impl Tool {
         Self::ListJobs,
         Self::SkillsList,
         Self::SkillsRead,
+        Self::UpstreamsList,
+        Self::UpstreamsCall,
     ];
 
     pub(crate) fn parse(name: &str) -> Option<Self> {
@@ -55,6 +59,8 @@ impl Tool {
             "list_jobs" => Some(Self::ListJobs),
             "skills_list" => Some(Self::SkillsList),
             "skills_read" => Some(Self::SkillsRead),
+            "mcp_servers_list" => Some(Self::UpstreamsList),
+            "mcp_servers_call" => Some(Self::UpstreamsCall),
             _ => None,
         }
     }
@@ -72,6 +78,8 @@ impl Tool {
             Self::ListJobs => Action::ListJobs,
             Self::SkillsList => Action::ListSkills,
             Self::SkillsRead => Action::ReadSkill,
+            Self::UpstreamsList => Action::ListUpstreams,
+            Self::UpstreamsCall => Action::CallUpstream,
         }
     }
 
@@ -136,6 +144,17 @@ impl Tool {
                 "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}},
                     "required": ["name"], "additionalProperties": false},
                 "annotations": {"readOnlyHint": true, "destructiveHint": false}
+            }),
+            Self::UpstreamsList => json!({
+                "name": "mcp_servers_list",
+                "description": "List granted upstream MCP servers",
+                "inputSchema": {"type":"object","additionalProperties":false}
+            }),
+            Self::UpstreamsCall => json!({
+                "name": "mcp_servers_call",
+                "description": "Invoke a discovered and granted namespaced upstream tool",
+                "inputSchema": {"type":"object","properties":{"name":{"type":"string"},"arguments":{"type":"object"}},
+                    "required":["name"],"additionalProperties":false}
             }),
             _ => self.job_schema(),
         }

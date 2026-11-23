@@ -233,3 +233,15 @@ operations. The receipt key and private state rely on that UID and the
 operator-controlled paths. Audit chaining and independently verified
 power-loss behavior remain separate gates. See [the Phase A gate](PASS2_JOBS_GATE.md)
 for validation and open acceptance checks.
+
+## Product management extension
+
+The MCP listener continues to accept bearer-authenticated requests on
+`/mcp`. The optional Linux admin listener has a separate loopback socket,
+session state and connection budget. Embedded static assets render the
+operator UX. Skill and upstream changes share policy locking, atomic
+replacement and an audit intent/outcome protocol across the CLI and
+authenticated admin API. Credential verifiers are excluded from status
+DTOs. See [dashboard](docs/DASHBOARD.md), [skills](docs/SKILLS.md) and
+[upstream transports](docs/UPSTREAM-MCP.md) for configuration and security
+boundaries.

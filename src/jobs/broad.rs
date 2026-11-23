@@ -49,6 +49,9 @@ impl Broad {
             readonly: BTreeSet::new(),
         };
         plan.masked.insert(plan.state.clone());
+        if let Some(skills) = &settings.skills {
+            plan.masked.insert(skills.path().to_owned());
+        }
         for name in OPTIONAL_DEFAULTS {
             plan.masked.insert(plan.home.join(name));
         }

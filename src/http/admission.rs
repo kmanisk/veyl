@@ -33,6 +33,8 @@ pub struct Client {
     #[cfg(target_os = "linux")]
     pub(crate) skills: std::collections::BTreeSet<String>,
     #[cfg(target_os = "linux")]
+    pub(crate) upstreams: crate::upstream::Grants,
+    #[cfg(target_os = "linux")]
     pub yolo_revision: Option<String>,
     #[cfg(target_os = "linux")]
     pub extra_roots: Vec<MutationRoot>,
@@ -50,11 +52,15 @@ pub struct Configuration {
     pub clients: Vec<Client>,
     pub audit_log: Option<PathBuf>,
     #[cfg(target_os = "linux")]
+    pub(super) admin_listen: Option<std::net::SocketAddr>,
+    #[cfg(target_os = "linux")]
     pub runtime_settings: Value,
     #[cfg(target_os = "linux")]
     pub(crate) protected_paths: crate::protected_paths::Rules,
     #[cfg(target_os = "linux")]
     pub(crate) skills: Option<crate::skills::Skills>,
+    #[cfg(target_os = "linux")]
+    pub(crate) upstreams: crate::upstream::Catalog,
     #[cfg(target_os = "linux")]
     pub managed: bool,
     #[cfg(target_os = "linux")]
@@ -83,6 +89,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         return Err("credential config requires an absolute path".into());
     }
     let document = parse_document(bytes)?;
+    #[cfg(target_os = "linux")]
+    let upstreams = crate::upstream::Catalog::parse(&document)?;
     let audit_log = document
         .get("audit_log")
         .map(|value| {
@@ -292,6 +300,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         } else {
             Vec::new()
         };
+        #[cfg(target_os = "linux")]
+        let upstream_grants = crate::upstream::Grants::parse(entry, &upstreams)?;
         clients.push(Client {
             id: id.to_string(),
             digest,
@@ -301,6 +311,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             mode: mode.into(),
             #[cfg(target_os = "linux")]
             skills: crate::skills::parse_names(entry.get("skills"))?,
+            #[cfg(target_os = "linux")]
+            upstreams: upstream_grants,
             #[cfg(target_os = "linux")]
             yolo_revision,
             #[cfg(target_os = "linux")]
@@ -328,6 +340,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         static_fields.remove("policy_version");
         static_fields.remove("protected_paths");
         static_fields.remove("skills_disabled");
+        static_fields.remove("mcp_servers");
     }
     #[cfg(target_os = "linux")]
     let protected_paths = crate::protected_paths::Rules::parse(&document)?;
@@ -338,6 +351,11 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             .map_err(|error| error.to_string())?,
         clients,
         audit_log,
+        #[cfg(target_os = "linux")]
+        admin_listen: document
+            .get("admin_listen")
+            .map(super::dashboard::parse_listen)
+            .transpose()?,
         #[cfg(target_os = "linux")]
         runtime_settings,
         #[cfg(target_os = "linux")]
@@ -350,6 +368,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         protected_paths,
         #[cfg(target_os = "linux")]
         skills: None,
+        #[cfg(target_os = "linux")]
+        upstreams,
     };
     #[cfg(target_os = "linux")]
     for kind in [

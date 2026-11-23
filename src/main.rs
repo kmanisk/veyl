@@ -24,6 +24,8 @@ mod state_cli;
 mod tools;
 mod transport;
 #[cfg(target_os = "linux")]
+mod upstream;
+#[cfg(target_os = "linux")]
 mod yolo_cli;
 
 use std::io;
@@ -61,7 +63,7 @@ fn run() -> Result<(), String> {
             println!(
                 "mcp-gateway --root DIR | http --listen 127.0.0.1:PORT --config PATH
 \
-                      mcp-gateway yolo --help | audit --help | service --help | protected-paths --help | state --help | serve --help | skills --help"
+                      mcp-gateway yolo --help | audit --help | service --help | protected-paths --help | state --help | serve --help | skills --help | dashboard --help | mcp-servers --help"
             );
             return Ok(());
         }
@@ -94,6 +96,22 @@ fn run() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "serve") {
         return serve_plan::run(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--mcp-upstream-worker")
+    {
+        return jobs::upstream_worker(&args[1..])
+            .map_err(|_| "Upstream runtime could not enter its sandbox".into());
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "mcp-servers") {
+        return upstream::admin::run(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "dashboard") {
+        return http::dashboard::run(&args[1..]);
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "skills") {

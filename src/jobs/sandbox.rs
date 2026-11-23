@@ -327,3 +327,70 @@ pub(super) fn unsupported() -> io::Error {
         "required Linux execution isolation unavailable",
     )
 }
+
+/// The upstream worker is a separate single-threaded process. It can pass
+/// selected read-only input descriptors without leaking them to other jobs.
+pub(crate) fn upstream_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
+    use mcp_gateway::security::linux_fs::open_absolute_dir;
+    use rustix::fs::{self as fd_fs, FileType, Mode, OFlags};
+    use std::os::unix::process::CommandExt;
+
+    fn open_source(path: &Path) -> io::Result<OwnedFd> {
+        let dir = open_absolute_dir(path.parent().ok_or_else(unsupported)?)?;
+        let file = fd_fs::openat(
+            &dir,
+            path.file_name().ok_or_else(unsupported)?,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        let metadata = fd_fs::fstat(&file)?;
+        if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile
+            || metadata.st_nlink != 1
+            || metadata.st_mode & 0o6022 != 0
+            || ![0, rustix::process::geteuid().as_raw()].contains(&metadata.st_uid)
+        {
+            return Err(unsupported());
+        }
+        Ok(file)
+    }
+
+    let (program, args) = args.split_first().ok_or_else(unsupported)?;
+    let program = Path::new(program);
+    let canonical = program.canonicalize()?;
+    check_inherited_fds()?;
+    rustix::thread::set_no_new_privs(true)?;
+    let mut sandbox = Sandbox::new()?;
+    sandbox.command.args([
+        "--new-session",
+        "--chdir",
+        "/tmp",
+        "--setenv",
+        "HOME",
+        "/tmp",
+    ]);
+    let executable = if canonical.starts_with(BIN) {
+        canonical.as_os_str()
+    } else {
+        if program != canonical {
+            return Err(unsupported());
+        }
+        sandbox.pass("--ro-bind-fd", open_source(program)?)?;
+        sandbox.command.arg("/upstream/server");
+        OsStr::new("/upstream/server")
+    };
+    let mut args = args.to_vec();
+    if canonical
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.starts_with("python"))
+        && let Some(script) = args.first_mut()
+        && Path::new(script).is_absolute()
+        && Path::new(script).extension() == Some(OsStr::new("py"))
+    {
+        sandbox.pass("--ro-bind-fd", open_source(Path::new(script))?)?;
+        sandbox.command.arg("/upstream/server.py");
+        *script = "/upstream/server.py".into();
+    }
+    sandbox.command.arg("--").arg(executable).args(args);
+    Err(sandbox.command.exec())
+}

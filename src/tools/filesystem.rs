@@ -32,6 +32,10 @@ pub(crate) struct MutationRoot {
 }
 
 impl MutationRoot {
+    pub(crate) fn directory(&self) -> &OwnedFd {
+        &self.directory
+    }
+
     pub(crate) fn open(path: &Path) -> std::io::Result<Self> {
         Ok(Self {
             path: path.to_path_buf(),

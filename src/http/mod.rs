@@ -3,6 +3,8 @@
 
 pub(crate) mod admission;
 #[cfg(target_os = "linux")]
+pub(crate) mod dashboard;
+#[cfg(target_os = "linux")]
 pub(crate) mod operator;
 #[cfg(target_os = "linux")]
 pub(crate) mod scope;
@@ -79,6 +81,12 @@ struct State {
     jobs: Option<Jobs>,
     sessions: Mutex<HashMap<String, Session>>,
     failures: Mutex<HashMap<IpAddr, Failure>>,
+    #[cfg(target_os = "linux")]
+    admin: Option<dashboard::Admin>,
+    #[cfg(target_os = "linux")]
+    diagnostic_only: bool,
+    #[cfg(target_os = "linux")]
+    mcp_connections: Arc<Semaphore>,
 }
 
 pub fn run(args: Vec<OsString>) -> Result<(), String> {
@@ -117,16 +125,27 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         audit_log,
         #[cfg(target_os = "linux")]
         config.audit_limits,
-    )?;
+    );
     #[cfg(target_os = "linux")]
-    let degraded = mutations.read_only();
+    let (mutations, diagnostic_only) = match mutations {
+        Ok(mutations) => (mutations, false),
+        Err(_) if config.admin_listen.is_some() => {
+            eprintln!("Gateway diagnostic mode: audit ledger unavailable");
+            (MutationAudit::open(&path, None, config.audit_limits)?, true)
+        }
+        Err(error) => return Err(error),
+    };
+    #[cfg(not(target_os = "linux"))]
+    let mutations = mutations?;
+    #[cfg(target_os = "linux")]
+    let degraded = mutations.read_only() || diagnostic_only;
     #[cfg(not(target_os = "linux"))]
     let degraded = false;
     if has_mutation_grants && !mutations.available() && !degraded {
         return Err("Mutation grants require a private, available audit log".into());
     }
     #[cfg(target_os = "linux")]
-    {
+    if !diagnostic_only {
         operator::verify_approvals(&config)?;
         mutations.recover(&config.clients)?;
     }
@@ -146,7 +165,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         .transpose()?;
 
     #[cfg(target_os = "linux")]
-    if config.managed {
+    if config.managed && !diagnostic_only {
         operator::require_completed_legacy_jobs(&config)?;
     }
 
@@ -168,6 +187,26 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         let actual = listener
             .local_addr()
             .map_err(|_| "cannot inspect bound listener")?;
+        #[cfg(target_os = "linux")]
+        let admin_listener = match config.admin_listen {
+            Some(addr) => Some(
+                TcpListener::bind(addr)
+                    .await
+                    .map_err(|_| "Cannot bind admin listener")?,
+            ),
+            None => None,
+        };
+        #[cfg(target_os = "linux")]
+        let admin = admin_listener
+            .as_ref()
+            .map(|listener| {
+                listener
+                    .local_addr()
+                    .map(|addr| dashboard::Admin::new(addr, path))
+            })
+            .transpose()
+            .map_err(|_| "Cannot get admin listener address")?;
+        let permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let state = Arc::new(State {
             addr: actual,
             #[cfg(not(target_os = "linux"))]
@@ -179,10 +218,21 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             jobs,
             sessions: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
+            #[cfg(target_os = "linux")]
+            admin,
+            #[cfg(target_os = "linux")]
+            diagnostic_only,
+            #[cfg(target_os = "linux")]
+            mcp_connections: Arc::clone(&permits),
         });
         // No token, hash, root, request content, or auth configuration is logged.
+        #[cfg(target_os = "linux")]
+        if let Some(admin) = &state.admin {
+            eprintln!("ADMIN_HTTP_LISTEN={}", admin.addr);
+        }
         eprintln!("MCP_HTTP_LISTEN={actual}");
-        let permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+        #[cfg(target_os = "linux")]
+        let admin_permits = Arc::new(Semaphore::new(8));
         let (shutdown, _) = watch::channel(false);
         let mut connections = JoinSet::new();
         loop {
@@ -191,13 +241,25 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
                 if term.poll_recv(cx).is_ready() || interrupt.poll_recv(cx).is_ready() {
                     return Poll::Ready(None);
                 }
-                listener.poll_accept(cx).map(Some)
+                #[cfg(target_os = "linux")]
+                if let Some(admin) = &admin_listener
+                    && let Poll::Ready(event) = admin.poll_accept(cx)
+                {
+                    return Poll::Ready(Some((true, event)));
+                }
+                listener.poll_accept(cx).map(|event| Some((false, event)))
             })
             .await;
-            let Some(event) = event else { break };
+            let Some((is_admin, event)) = event else {
+                break;
+            };
             let (stream, peer) = event.map_err(|_| "loopback accept failed")?;
             while connections.try_join_next().is_some() {}
-            let Ok(permit) = permits.clone().try_acquire_owned() else {
+            #[cfg(target_os = "linux")]
+            let selected = if is_admin { &admin_permits } else { &permits };
+            #[cfg(not(target_os = "linux"))]
+            let selected = &permits;
+            let Ok(permit) = selected.clone().try_acquire_owned() else {
                 drop(stream);
                 continue;
             };
@@ -207,15 +269,26 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
                 let service = service_fn(move |request| {
                     let state = state.clone();
                     async move {
-                        let result =
-                            tokio::time::timeout(HTTP_TIMEOUT, serve(request, state, peer.ip()))
-                                .await;
+                        let result = tokio::time::timeout(HTTP_TIMEOUT, async {
+                            #[cfg(target_os = "linux")]
+                            if is_admin {
+                                return dashboard::serve(request, state).await;
+                            }
+                            serve(request, state, peer.ip()).await
+                        })
+                        .await;
                         Ok::<_, Infallible>(result.unwrap_or_else(|_| {
                             simple(StatusCode::REQUEST_TIMEOUT, "Request timed out")
                         }))
                     }
                 });
-                let builder = http1::Builder::new();
+                let mut builder = http1::Builder::new();
+                if is_admin {
+                    builder
+                        .timer(hyper_util::rt::TokioTimer::new())
+                        .header_read_timeout(Duration::from_secs(5))
+                        .keep_alive(false);
+                }
                 let mut connection =
                     std::pin::pin!(builder.serve_connection(TokioIo::new(stream), service));
                 let mut changed = std::pin::pin!(stopping.changed());
@@ -251,6 +324,10 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
 async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> Reply {
     if request.uri().path() != "/mcp" {
         return simple(StatusCode::NOT_FOUND, "Not found");
+    }
+    #[cfg(target_os = "linux")]
+    if state.diagnostic_only {
+        return simple(StatusCode::SERVICE_UNAVAILABLE, "Gateway audit unavailable");
     }
     let expected = format!("127.0.0.1:{}", state.addr.port());
     let local_alias = format!("localhost:{}", state.addr.port());
@@ -356,7 +433,9 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
         .get("Mcp-Session-Id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let body = match tokio::time::timeout(HTTP_TIMEOUT, bounded_body(request.into_body())).await {
+    let body = match tokio::time::timeout(HTTP_TIMEOUT, bounded_body(request.into_body(), MAX_BODY))
+        .await
+    {
         Ok(Ok(body)) => body,
         Ok(Err(StatusCode::PAYLOAD_TOO_LARGE)) => {
             return simple(StatusCode::PAYLOAD_TOO_LARGE, "Request too large");
@@ -487,18 +566,120 @@ fn dispatch_tools(
             {
                 return Vec::new();
             }
-            Tool::ALL
+            let mut tools: Vec<_> = Tool::ALL
                 .into_iter()
                 .filter(|tool| {
                     authorized(client, tool.action(), state, audited, unix_seconds())
                         && tool_available(*tool, client, state, settings)
                 })
                 .map(Tool::schema)
-                .collect()
+                .collect();
+            #[cfg(target_os = "linux")]
+            if state.mutations.available()
+                && authorized(client, Action::CallUpstream, state, audited, unix_seconds())
+                && !client.upstreams.servers.is_empty()
+            {
+                let mode = client.mode.audit_mode().unwrap_or("standard");
+                let record = |phase| {
+                    state.mutations.record_runtime_mode(
+                        &client.id,
+                        "upstream_discovery",
+                        mode,
+                        phase,
+                    )
+                };
+                if record(AuditPhase::Intent) {
+                    let found = settings
+                        .upstreams
+                        .discover(state.policy.path(), &client.upstreams);
+                    if record(AuditPhase::Success) {
+                        tools.extend(found);
+                    }
+                }
+            }
+            tools
         },
         |_, name, args| {
             let tool = Tool::parse(name);
             let now = unix_seconds();
+            #[cfg(target_os = "linux")]
+            if tool == Some(Tool::UpstreamsList) {
+                if !state.mutations.available()
+                    || !authorized(
+                        client,
+                        Action::ListUpstreams,
+                        state,
+                        audit("policy.checked"),
+                        now,
+                    )
+                    || args.is_some_and(|value| {
+                        !value.as_object().is_some_and(serde_json::Map::is_empty)
+                    })
+                {
+                    return Some(tool_text(
+                        true,
+                        "Upstream access denied or invalid arguments",
+                    ));
+                }
+                let listing = settings.upstreams.listing(Some(&client.upstreams));
+                return Some(tool_text(
+                    false,
+                    &serde_json::json!({"servers":listing}).to_string(),
+                ));
+            }
+            #[cfg(target_os = "linux")]
+            if tool == Some(Tool::UpstreamsCall) || (tool.is_none() && !settings.upstreams.empty())
+            {
+                if !state.mutations.available()
+                    || !authorized(
+                        client,
+                        Action::CallUpstream,
+                        state,
+                        audit("policy.checked"),
+                        now,
+                    )
+                {
+                    return Some(tool_text(true, "Upstream access denied"));
+                }
+                let (name, args) = if tool == Some(Tool::UpstreamsCall) {
+                    let Some(args) = args
+                        .and_then(Value::as_object)
+                        .filter(|a| a.keys().all(|k| matches!(k.as_str(), "name" | "arguments")))
+                    else {
+                        return Some(tool_text(true, "Invalid upstream tool arguments"));
+                    };
+                    let Some(name) = args.get("name").and_then(Value::as_str) else {
+                        return Some(tool_text(true, "Expected a namespaced upstream tool name"));
+                    };
+                    (name, args.get("arguments"))
+                } else {
+                    (name, args)
+                };
+                let mode = client.mode.audit_mode().unwrap_or("standard");
+                return Some(
+                    settings
+                        .upstreams
+                        .call(
+                            state.policy.path(),
+                            &client.upstreams,
+                            name,
+                            args,
+                            |tool, intent, successful| {
+                                let phase = if intent {
+                                    AuditPhase::Intent
+                                } else if successful {
+                                    AuditPhase::Success
+                                } else {
+                                    AuditPhase::Failure
+                                };
+                                state
+                                    .mutations
+                                    .record_runtime_mode(&client.id, tool, mode, phase)
+                            },
+                        )
+                        .unwrap_or_else(|reason| tool_text(true, reason)),
+                );
+            }
             let permitted = tool.is_some_and(|tool| {
                 authorized(client, tool.action(), state, audit("policy.checked"), now)
             });
@@ -776,6 +957,12 @@ fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configu
             return false;
         }
     }
+    if matches!(tool, Tool::UpstreamsList | Tool::UpstreamsCall) {
+        #[cfg(target_os = "linux")]
+        return !settings.upstreams.empty() && state.mutations.available();
+        #[cfg(not(target_os = "linux"))]
+        return false;
+    }
     if tool == Tool::ReadFile {
         return true;
     }
@@ -829,12 +1016,12 @@ fn mutation_available(client: &Client, mutations: &MutationAudit) -> bool {
     }
 }
 
-async fn bounded_body(mut body: Incoming) -> Result<Vec<u8>, StatusCode> {
+async fn bounded_body(mut body: Incoming, limit: usize) -> Result<Vec<u8>, StatusCode> {
     let mut data = Vec::new();
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|_| StatusCode::BAD_REQUEST)?;
         if let Ok(chunk) = frame.into_data() {
-            if chunk.len() > MAX_BODY.saturating_sub(data.len()) {
+            if chunk.len() > limit.saturating_sub(data.len()) {
                 return Err(StatusCode::PAYLOAD_TOO_LARGE);
             }
             data.extend_from_slice(&chunk);

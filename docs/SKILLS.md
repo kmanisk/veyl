@@ -39,3 +39,28 @@ per-client grants. An interrupted local update must be completed by
 repeating the same command. Skills never execute, alter the authorization
 mode, or grant new tools. A configured `skills_run` declaration has no
 runtime capability.
+
+## Operator management
+
+```sh
+mcp-gateway skills import /absolute/my-package --config "$config"
+mcp-gateway skills list --config "$config"
+mcp-gateway skills read my-package --config "$config"
+mcp-gateway skills grant dev my-package --config "$config"
+mcp-gateway skills revoke dev my-package --config "$config"
+mcp-gateway skills disable my-package --config "$config"
+```
+
+Import validates and atomically publishes the single bounded `SKILL.md`
+document. It refuses an existing destination and leaves executable or
+auxiliary sources in the original folder. The folder name must match the
+manifest name. An imported skill requires an existing client grant before
+the client can read it through MCP. The catalog includes validation errors
+for malformed, unreadable or linked manifests. The dashboard offers the
+same operations after pairing. After an interrupted publication, repeat
+the original local command with the original document to complete audit
+reconciliation.
+
+Import, enablement and grants never add a tool grant or execute a script.
+Broad YOLO masks the configured skill store, including direct file tools.
+FULL retains its ordinary host-user access.

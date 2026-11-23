@@ -17,6 +17,8 @@ pub enum Action {
     ApplyPatch,
     ListSkills,
     ReadSkill,
+    ListUpstreams,
+    CallUpstream,
     RunCommand,
     RunShortJob,
     StartJob,
@@ -143,7 +145,9 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
         | Action::WriteFile
         | Action::ApplyPatch
         | Action::ListSkills
-        | Action::ReadSkill => Ok(()),
+        | Action::ReadSkill
+        | Action::ListUpstreams
+        | Action::CallUpstream => Ok(()),
         _ => {
             // No trust decision can be upgraded merely because the caller
             // requested YOLO. A signed local operator lease is not yet wired.

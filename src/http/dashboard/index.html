@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veyl</title>
+<link rel="stylesheet" href="/dashboard/style.css">
+<script src="/dashboard/app.js" defer></script>
+</head>
+<body>
+<header class="masthead">
+  <div class="brand">V<span>eyl</span></div>
+  <div class="header-controls" id="controls" hidden>
+    <button id="refresh" type="button">Refresh</button>
+    <button id="logout" type="button">Sign out</button>
+  </div>
+</header>
+<main>
+  <p id="notice" class="notice" role="status">Connecting to the gateway…</p>
+  <form id="pair" class="pair" hidden>
+    <h1>Pair this browser</h1>
+    <p>Generate a one-time code with <code>mcp-gateway dashboard pair --config PATH</code>.</p>
+    <label for="pairing-code">Pairing code</label>
+    <input id="pairing-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+    <button type="submit">Pair browser</button>
+  </form>
+  <div id="dashboard" class="dashboard" hidden>
+    <nav aria-label="Dashboard">
+      <a href="#health">Health</a>
+      <a href="#clients">Clients</a>
+      <a href="#jobs">Jobs</a>
+      <a href="#audit">Audit</a>
+      <a id="skills-nav" href="#skills" hidden>Skills</a>
+      <a href="#servers">Upstream MCP</a>
+    </nav>
+    <section class="content">
+      <h1 id="health">Gateway health</h1>
+      <dl id="metrics" class="metrics"></dl>
+      <section aria-labelledby="clients" class="panel">
+        <h2 id="clients">Clients</h2>
+        <div class="table">
+          <table>
+            <thead><tr><th scope="col">Client</th><th scope="col">Mode</th><th scope="col">Sessions</th><th scope="col">Grants</th></tr></thead>
+            <tbody id="client-rows"></tbody>
+          </table>
+        </div>
+        <p id="client-empty" hidden>No clients configured.</p>
+      </section>
+      <section aria-labelledby="jobs" class="panel">
+        <h2 id="jobs">Jobs</h2>
+        <div class="row">
+          <label for="job-client">Client</label>
+          <select id="job-client"></select>
+          <button id="more-jobs" type="button" hidden>Next page</button>
+        </div>
+        <ul id="job-rows"></ul>
+        <details id="logs" hidden><summary>Job logs</summary><pre id="output"></pre></details>
+      </section>
+      <section id="skill-panel" aria-labelledby="skills" class="panel" hidden>
+        <h2 id="skills">Skills</h2>
+        <form id="import-skill" class="row">
+          <label for="skill-source">Local skill folder</label>
+          <input id="skill-source" placeholder="/absolute/path/skill-name" required>
+          <button type="submit">Import</button>
+        </form>
+        <label for="skill-client">Client for grants</label>
+        <select id="skill-client"></select>
+        <ul id="skill-rows"></ul>
+        <pre id="skill-document" hidden></pre>
+      </section>
+      <section aria-labelledby="servers" class="panel">
+        <h2 id="servers">Upstream MCP</h2>
+        <ul id="server-rows"></ul>
+        <details>
+          <summary>Add an upstream server</summary>
+          <form id="server-add" class="config-form">
+            <label>Server ID <input name="id" required pattern="[a-z0-9_-]{1,24}"></label>
+            <label>Transport <select name="action" id="server-transport"><option value="add-http">HTTP / HTTPS</option><option value="add-stdio">Sandboxed stdio</option></select></label>
+            <div id="server-http-fields">
+              <label>Endpoint URL <input name="url" type="url" placeholder="http://127.0.0.1:9000/mcp"></label>
+              <label>Connect IP for HTTPS <input name="connect_ip" placeholder="192.0.2.10"></label>
+            </div>
+            <div id="server-stdio-fields" hidden>
+              <label>Absolute executable path <input name="command"></label>
+              <label>Arguments as a JSON array <input name="argv" value="[]"></label>
+            </div>
+            <button type="submit">Add server</button>
+          </form>
+        </details>
+        <details>
+          <summary>Manage client tool grants</summary>
+          <form id="server-grant" class="config-form">
+            <label>Client <select name="client" id="server-client" required></select></label>
+            <label>Server <select name="id" id="server-grant-server" required></select></label>
+            <label>Upstream tool name <input name="tool" required></label>
+            <label>Action <select name="action"><option>grant</option><option>revoke</option></select></label>
+            <button type="submit">Update grant</button>
+          </form>
+        </details>
+      </section>
+      <section aria-labelledby="audit" class="panel">
+        <h2 id="audit">Recent audit events</h2>
+        <div class="table">
+          <table>
+            <thead><tr><th scope="col">Time</th><th scope="col">Operation</th><th scope="col">Client</th><th scope="col">Phase</th></tr></thead>
+            <tbody id="audit-rows"></tbody>
+          </table>
+        </div>
+        <p id="audit-empty" hidden>No audit events recorded.</p>
+      </section>
+    </section>
+  </div>
+</main>
+</body>
+</html>

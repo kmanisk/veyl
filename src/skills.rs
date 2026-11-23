@@ -57,6 +57,10 @@ impl Skills {
         }))
     }
 
+    pub(crate) fn path(&self) -> &Path {
+        self.root.path()
+    }
+
     pub(crate) fn read(&self, name: &str) -> Result<Skill, &'static str> {
         if !valid_name(name) {
             return Err("Invalid skill name");
@@ -66,6 +70,90 @@ impl Skills {
             .read(&format!("{name}/SKILL.md"))
             .map_err(|_| "Skill unavailable")?;
         Skill::parse(name, document)
+    }
+
+    pub(crate) fn catalog(&self) -> Result<Vec<Value>, String> {
+        let mut catalog = Vec::new();
+        for entry in rustix::fs::Dir::read_from(self.root.directory())
+            .map_err(|_| "Skills directory unavailable")?
+        {
+            let entry = entry.map_err(|_| "Skills directory unavailable")?;
+            let Ok(name) = entry.file_name().to_str() else {
+                continue;
+            };
+            if !valid_name(name) {
+                continue;
+            }
+            if catalog.len() == MAX_SKILLS {
+                return Err("Skills directory exceeds the discovery limit".into());
+            }
+            let enabled = !self.disabled.contains(name);
+            catalog.push(match self.read(name) {
+                Ok(skill) => json!({
+                    "name": name, "enabled": enabled, "description": skill.description,
+                    "version": skill.version, "validation_error": null
+                }),
+                Err(error) => json!({"name": name, "enabled": enabled, "validation_error": error}),
+            });
+        }
+        catalog.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+        Ok(catalog)
+    }
+
+    pub(crate) fn present(&self, name: &str) -> std::io::Result<bool> {
+        match rustix::fs::statat(
+            self.root.directory(),
+            name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(_) => Ok(true),
+            Err(rustix::io::Errno::NOENT) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub(crate) fn sync(&self) -> std::io::Result<()> {
+        Ok(rustix::fs::fsync(self.root.directory())?)
+    }
+
+    pub(crate) fn import(&self, name: &str, document: &str) -> std::io::Result<()> {
+        use mcp_gateway::security::linux_fs::{open_beneath_dir, publish_new};
+        use rustix::fs::{self, AtFlags, Mode, RenameFlags};
+        use std::ffi::OsStr;
+        self.catalog()
+            .map_err(std::io::Error::other)
+            .and_then(|entries| {
+                if entries.len() == MAX_SKILLS {
+                    Err(std::io::Error::other("Skills directory is full"))
+                } else {
+                    Ok(())
+                }
+            })?;
+        let root = self.root.directory();
+        let stage = format!(".import-{}", crate::http::operator::revision()?);
+        fs::mkdirat(root, stage.as_str(), Mode::RWXU)?;
+        let result = (|| {
+            let dir = open_beneath_dir(root, Path::new(&stage))?;
+            if let Err(error) = publish_new(&dir, OsStr::new("SKILL.md"), document.as_bytes())
+                .and_then(|()| {
+                    Ok(fs::renameat_with(
+                        root,
+                        stage.as_str(),
+                        root,
+                        name,
+                        RenameFlags::NOREPLACE,
+                    )?)
+                })
+            {
+                let _ = fs::unlinkat(&dir, "SKILL.md", AtFlags::empty());
+                return Err(error);
+            }
+            Ok(fs::fsync(root)?)
+        })();
+        if result.is_err() {
+            let _ = fs::unlinkat(root, stage.as_str(), AtFlags::REMOVEDIR);
+        }
+        result
     }
 
     pub(crate) fn call(
@@ -118,13 +206,13 @@ impl Skills {
 }
 
 pub(crate) struct Skill {
-    document: String,
+    pub(crate) document: String,
     description: String,
     version: Option<String>,
 }
 
 impl Skill {
-    fn parse(name: &str, document: String) -> Result<Self, &'static str> {
+    pub(crate) fn parse(name: &str, document: String) -> Result<Self, &'static str> {
         const INVALID: &str = "Invalid skill metadata";
         let mut lines = document.lines();
         if lines.next() != Some("---") {

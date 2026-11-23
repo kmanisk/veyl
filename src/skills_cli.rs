@@ -1,103 +1,187 @@
-//! Operator-only administration of skill availability.
+//! Shared operator actions for the CLI and authenticated dashboard.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::Path;
 
 use mcp_gateway::security::audit::{AuditPhase, AuditSink};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::http::admission::{parse_clients, parse_document};
 use crate::http::operator::{PolicyFile, verify_approvals};
-use crate::skills::valid_name;
+use crate::skills::{Skill, valid_name};
+use crate::tools::MutationRoot;
 
-const HELP: &str = "usage: mcp-gateway skills <enable|disable> NAME --config PATH";
+const HELP: &str = "usage: mcp-gateway skills list | read NAME | import /absolute/SKILL_FOLDER | enable NAME | disable NAME | grant CLIENT NAME | revoke CLIENT NAME (append --config PATH)";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args == ["--help"] {
         println!("{HELP}");
         return Ok(());
     }
-    let [operation, name, key, path] = args else {
+    let [params @ .., key, path] = args else {
         return Err(HELP.into());
     };
-    let operation = operation
-        .to_str()
-        .filter(|action| matches!(*action, "enable" | "disable"))
-        .ok_or(HELP)?;
-    let name = name.to_str().filter(|name| valid_name(name)).ok_or(HELP)?;
-    if key != "--config" || rustix::process::geteuid().is_root() {
+    if key != "--config" {
         return Err(HELP.into());
     }
-    let path = PathBuf::from(path);
-    let policy = PolicyFile::lock(&path, true)?;
-    let pending = policy.pending_client()?;
-    let marker = format!("skills:{operation}:{name}");
-    if pending.as_deref().is_some_and(|prior| prior != marker) {
-        return Err(
-            "Interrupted policy update requires repeating the original local command".into(),
-        );
-    }
-    let bytes = policy.bytes()?;
-    let settings = parse_clients(&path, &bytes)?;
-    verify_approvals(&settings)?;
-    let mut skills = settings.skills.ok_or("No configured skills directory")?;
-    let changed = if operation == "enable" {
-        skills.read(name)?;
-        skills.disabled.remove(name)
+    let params = params
+        .iter()
+        .map(|arg| arg.to_str().ok_or(HELP))
+        .collect::<Result<Vec<_>, _>>()?;
+    let result = manage(Path::new(path), &params)?;
+    if let Some(document) = result["document"].as_str() {
+        print!("{document}");
     } else {
-        if !skills.disabled.contains(name)
-            && !settings
-                .clients
-                .iter()
-                .any(|client| client.skills.contains(name))
-        {
-            skills.read(name)?;
-        }
-        skills.disabled.insert(name.into())
+        println!("{result}");
+    }
+    Ok(())
+}
+
+pub(crate) fn manage(path: &Path, params: &[&str]) -> Result<Value, String> {
+    if rustix::process::geteuid().is_root() {
+        return Err("Use the local unprivileged operator identity".into());
+    }
+    let exclusive = !matches!(params, ["list"] | ["read", _]);
+    let policy = PolicyFile::lock(path, exclusive)?;
+    let bytes = policy.bytes()?;
+    let settings = parse_clients(path, &bytes)?;
+    verify_approvals(&settings)?;
+    let skills = settings
+        .skills
+        .as_ref()
+        .ok_or("No configured skills directory")?;
+    let pending = policy.pending_client()?;
+    let marker = format!("skills:{:x}", Sha256::digest(json!(params).to_string()));
+    if pending.as_deref().is_some_and(|prior| prior != marker) {
+        return Err("Repeat the original local command to recover interrupted policy".into());
+    }
+    match params {
+        ["list"] => return Ok(json!({"skills": skills.catalog()?})),
+        ["read", name] => return Ok(json!({"name":name,"document":skills.read(name)?.document})),
+        _ => {}
+    }
+    let ledger = settings
+        .audit_log
+        .as_deref()
+        .ok_or("Skill changes require audit logging")?;
+    let audit = AuditSink::open_with_limits(ledger, settings.audit_limits)
+        .map_err(|_| "Skill changes require a healthy audit ledger")?;
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     };
-    if changed || pending.is_some() {
-        let mut document = parse_document(&bytes)?;
-        document["skills_disabled"] = serde_json::json!(skills.disabled);
-        let mut candidate =
-            serde_json::to_vec_pretty(&document).map_err(|_| "Cannot encode policy")?;
-        candidate.push(b'\n');
-        if candidate.len() > 65_536 {
-            return Err("Credential configuration exceeds size limit".into());
+
+    if let ["import", source] = params {
+        let directory = Path::new(source);
+        let name = directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| valid_name(name))
+            .ok_or("Expected a directory named for the skill")?;
+        let document = MutationRoot::open_owned(directory)
+            .and_then(|source| {
+                source
+                    .read("SKILL.md")
+                    .map_err(|_| std::io::Error::other("Skill document unavailable"))
+            })
+            .map_err(|_| "Cannot safely read the skill source")?;
+        let skill = Skill::parse(name, document)?;
+        let exists = skills
+            .present(name)
+            .map_err(|_| "Cannot inspect destination skill")?;
+        if exists && pending.is_none() {
+            return Err("Skill already exists".into());
         }
-        parse_clients(&path, &candidate)?;
-        let ledger = settings
-            .audit_log
-            .as_deref()
-            .ok_or("Skill changes require audit logging")?;
-        let audit = AuditSink::open_with_limits(ledger, settings.audit_limits)
-            .map_err(|_| "Skill changes require a healthy audit ledger")?;
-        let record = |phase| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            audit.record_skill_change(operation, name, phase, now)
-        };
-        record(AuditPhase::Intent).map_err(|_| "Cannot persist skill authorization intent")?;
+        let record = |phase| audit.record_skill_change("import", name, phase, now());
+        record(AuditPhase::Intent).map_err(|_| "Cannot persist skill import intent")?;
         if pending.is_none() {
             policy
                 .begin(&marker)
-                .map_err(|_| "Cannot persist policy transaction marker")?;
+                .map_err(|_| "Cannot persist skill transaction marker")?;
         }
-        if policy.replace(&candidate).is_err() {
+        let result = if exists {
+            if skills.read(name)?.document != skill.document {
+                return Err("Interrupted import requires its original document".into());
+            }
+            skills.sync()
+        } else {
+            skills.import(name, &skill.document)
+        };
+        if result.is_err() {
+            if matches!(skills.present(name), Ok(false)) {
+                record(AuditPhase::Failure).map_err(|_| "Skill import requires local recovery")?;
+                policy
+                    .finish()
+                    .map_err(|_| "Skill import requires local recovery")?;
+                return Err("Cannot publish skill".into());
+            }
             let _ = record(AuditPhase::Uncertain);
-            return Err("Skill update requires local command recovery".into());
+            return Err("Skill import requires local recovery".into());
         }
-        record(AuditPhase::Success).map_err(|_| "Skill update requires local command recovery")?;
+        record(AuditPhase::Success).map_err(|_| "Skill import requires local recovery")?;
         policy
             .finish()
-            .map_err(|_| "Skill update requires local command recovery")?;
+            .map_err(|_| "Skill import requires local recovery")?;
+        return Ok(json!({"name":name,"imported":true}));
     }
-    let state = if operation == "enable" {
-        "enabled"
-    } else {
-        "disabled"
+
+    let mut document = parse_document(&bytes)?;
+    let (op, name, target) = match params {
+        [op @ ("enable" | "disable"), name] => {
+            let mut disabled = skills.disabled.clone();
+            if *op == "enable" {
+                skills.read(name)?;
+                disabled.remove(*name);
+            } else {
+                if !disabled.contains(*name)
+                    && !settings
+                        .clients
+                        .iter()
+                        .any(|client| client.skills.contains(*name))
+                {
+                    skills.read(name)?;
+                }
+                disabled.insert((*name).into());
+            }
+            document["skills_disabled"] = json!(disabled);
+            (*op, *name, None)
+        }
+        [op @ ("grant" | "revoke"), id, name] => {
+            let client = settings
+                .clients
+                .iter()
+                .find(|client| client.id == *id)
+                .ok_or("Unknown client")?;
+            let mut names = client.skills.clone();
+            if *op == "grant" {
+                skills.read(name)?;
+                names.insert((*name).into());
+            } else {
+                names.remove(*name);
+            }
+            let entry = document["clients"]
+                .as_array_mut()
+                .and_then(|entries| entries.iter_mut().find(|entry| entry["id"] == *id))
+                .ok_or("Unknown client")?;
+            entry["skills"] = json!(names);
+            (*op, *name, Some(*id))
+        }
+        _ => return Err(HELP.into()),
     };
-    println!("skill={name} state={state}");
-    Ok(())
+    if !valid_name(name) {
+        return Err("Invalid skill name".into());
+    }
+    policy.commit_edit(&document, &marker, |phase| {
+        audit.record_skill_change_for(op, name, target, phase, now())
+    })?;
+    let state = match op {
+        "enable" => "enabled",
+        "disable" => "disabled",
+        "grant" => "granted",
+        _ => "revoked",
+    };
+    Ok(json!({"name":name,"state":state,"client":target}))
 }
