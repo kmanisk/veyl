@@ -1,5 +1,6 @@
 //! Read-only inventory of a candidate broad execution state directory.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -50,7 +51,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     let result = check(&root, &config);
     match result {
         Ok(()) => {
-            println!("layout=valid broad_yolo=unavailable");
+            println!("layout=valid broad_yolo=requires_sandbox_preflight");
             Ok(())
         }
         Err(reason) => {
@@ -103,6 +104,7 @@ impl Layout {
             remaining: MAX_ENTRIES,
             files: 0,
             hardlinks: 0,
+            objects: None,
         };
         inventory.directory(&root, 0)?;
         Ok(Self {
@@ -194,6 +196,7 @@ struct Inventory {
     remaining: usize,
     files: usize,
     hardlinks: usize,
+    objects: Option<BTreeSet<[u64; 2]>>,
 }
 
 impl Inventory {
@@ -205,6 +208,9 @@ impl Inventory {
             .is_some_and(|uid| before.st_uid != uid || before.st_mode & 0o7777 != 0o700)
         {
             return Err("State directories must be owned by the gateway user and mode 0700".into());
+        }
+        if let Some(objects) = &mut self.objects {
+            objects.insert([before.st_dev, before.st_ino]);
         }
         if depth >= MAX_DEPTH {
             return Err("State directory exceeds inspection depth".into());
@@ -243,6 +249,9 @@ impl Inventory {
                     self.directory(&child, depth + 1)?;
                 }
                 FileType::RegularFile if self.uid.is_none() || metadata.st_mode & 0o7177 == 0 => {
+                    if let Some(objects) = &mut self.objects {
+                        objects.insert([metadata.st_dev, metadata.st_ino]);
+                    }
                     self.files += 1;
                     self.hardlinks += usize::from(metadata.st_nlink != 1);
                 }
@@ -264,6 +273,7 @@ pub(crate) fn verify_private_aliases(path: &Path) -> io::Result<()> {
         remaining: MAX_ENTRIES,
         files: 0,
         hardlinks: 0,
+        objects: None,
     };
     inventory.directory(&root, 0).map_err(io::Error::other)?;
     if inventory.hardlinks != 0 {
@@ -272,6 +282,39 @@ pub(crate) fn verify_private_aliases(path: &Path) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+pub(crate) fn protected_objects(path: &Path) -> io::Result<BTreeSet<[u64; 2]>> {
+    let file = fs::open(
+        path,
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let stat = fs::fstat(&file)?;
+    if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile {
+        if stat.st_nlink != 1 {
+            return Err(io::Error::other("Protected file has a hardlink alias"));
+        }
+        return Ok(BTreeSet::from([[stat.st_dev, stat.st_ino]]));
+    }
+    let root = open_absolute_dir(path)?;
+    if !same_identity(file, &root)? {
+        return Err(io::Error::other(
+            "Protected directory changed during admission",
+        ));
+    }
+    let mut inventory = Inventory {
+        uid: None,
+        remaining: MAX_ENTRIES,
+        files: 0,
+        hardlinks: 0,
+        objects: Some(BTreeSet::new()),
+    };
+    inventory.directory(&root, 0).map_err(io::Error::other)?;
+    if inventory.hardlinks != 0 {
+        return Err(io::Error::other("Protected directory has a hardlink alias"));
+    }
+    Ok(inventory.objects.unwrap_or_default())
 }
 
 fn changed(stat: &Stat) -> (i64, i64) {

@@ -1,5 +1,6 @@
 //! Handle-relative mutation paths and file snapshots.
 
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read};
@@ -27,6 +28,7 @@ pub(crate) struct MutationRoot {
     path: PathBuf,
     directory: OwnedFd,
     host_parent: bool,
+    protected: Option<BTreeSet<[u64; 2]>>,
 }
 
 impl MutationRoot {
@@ -35,6 +37,7 @@ impl MutationRoot {
             path: path.to_path_buf(),
             directory: open_absolute_dir(path)?,
             host_parent: false,
+            protected: None,
         })
     }
 
@@ -60,6 +63,27 @@ impl MutationRoot {
         })
     }
 
+    pub(crate) fn open_broad_parent(
+        path: &Path,
+        protected: BTreeSet<[u64; 2]>,
+    ) -> io::Result<Self> {
+        let root = Self {
+            protected: Some(protected),
+            ..Self::open_host_parent(path)?
+        };
+        let metadata = fs::fstat(&root.directory)?;
+        if root.is_protected(&metadata) {
+            return Err(io::Error::other("Protected directory identity"));
+        }
+        Ok(root)
+    }
+
+    fn is_protected(&self, metadata: &Stat) -> bool {
+        self.protected
+            .as_ref()
+            .is_some_and(|entries| entries.contains(&directory_identity(metadata)))
+    }
+
     pub(super) fn is_host_parent(&self) -> bool {
         self.host_parent
     }
@@ -82,6 +106,9 @@ impl MutationRoot {
         )
         .map_err(|_| UNAVAILABLE)?;
         let stat = fs::fstat(&handle).map_err(|_| UNAVAILABLE)?;
+        if self.is_protected(&stat) {
+            return Err("Protected file identity");
+        }
         if stat.st_nlink != 1 || FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
             return Err("Expected a singly-linked regular file");
         }
@@ -216,7 +243,7 @@ impl Target<'_> {
         let current = open_beneath_dir(&root, self.relative_parent).map_err(|_| changed())?;
         let current = fs::fstat(current).map_err(|_| changed())?;
         let opened = fs::fstat(&self.directory).map_err(|_| changed())?;
-        if !same_inode(&current, &opened) {
+        if self.root.is_protected(&opened) || !same_inode(&current, &opened) {
             return Err(changed());
         }
         Ok(())
@@ -224,6 +251,12 @@ impl Target<'_> {
 
     pub(super) fn metadata(&self) -> Result<Option<Stat>, MutationError> {
         match fs::statat(&self.directory, self.name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat)
+                if self.root.is_protected(&stat)
+                    || self.root.protected.is_some() && stat.st_nlink != 1 =>
+            {
+                Err(Rejected("Protected or multiply-linked file identity"))
+            }
             Ok(stat) if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile => {
                 Ok(Some(stat))
             }
@@ -243,7 +276,7 @@ impl Target<'_> {
         )
         .map_err(|_| Rejected("Cannot safely open target file"))?;
         let actual = fs::fstat(&file).map_err(|_| Rejected("Cannot inspect target file"))?;
-        if !same_snapshot(expected, &actual) {
+        if self.root.is_protected(&actual) || !same_snapshot(expected, &actual) {
             return Err(Rejected("Target changed during the operation"));
         }
         let file = reopen_regular(&file, OFlags::RDONLY | OFlags::NONBLOCK)

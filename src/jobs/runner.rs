@@ -104,8 +104,10 @@ pub(crate) fn run_worker() -> io::Result<()> {
             if !launch.isolated || receipt.full {
                 return finish(&job, &mut audit, receipt, State::Failed);
             }
+            let workspace = rustix::fs::fstat(&cwd)?;
             sandbox = match broad.command(
                 launch.root.path(),
+                [workspace.st_dev, workspace.st_ino],
                 &launch.profile.executable,
                 &launch.profile.args,
                 true,

@@ -64,6 +64,28 @@ state and home masking, loopback networking, NoNewPrivileges and
 descriptor isolation. Logs: `target/gate3d/execution/`. Direct broad
 file operations remain gated for checkpoint D.
 
+
+Checkpoint C: `4f7e6cddc1ed5d3e23980ade117d68876865bc86`.
+
+## D — Protected objects and durable mode parity
+
+Broad reads, writes and patches use the same protection plan as
+jobs, with checks against pinned parent and resolved object identities.
+The job's working directory is checked against the admitted descriptor.
+Private namespace projection also protects ancestors of masked paths,
+so moving an ancestor is confined to the job's namespace.
+
+Session 20597 passed 49/49 targeted locked cases. Supplemental sessions
+63223 and 28406 passed the real MCP and runtime probes: direct off-root
+read/write/patch, restart persistence, denial of protected and read-only
+objects, hardlink rejection before publishing a receipt, and cancellation.
+Real jobs verified empty state tmpfs, mountpoint EBUSY, namespace-local
+ancestor rename, persistent path write denial, TLS and UDP loopback,
+NoNewPrivileges, zero effective capabilities, and rejection of filesystem
+and abstract Unix sockets. An isolated bind-alias probe rejected the
+aliased state before activation. See `target/gate3d/runtime-final.log`
+and `bind-alias.log`. Next: full regression and release-gate evaluation.
+
 ---
 
 # Gate 3c status

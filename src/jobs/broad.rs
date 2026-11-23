@@ -65,8 +65,55 @@ impl Broad {
                 .insert(rule.path.clone());
             }
         }
+        for client in &settings.clients {
+            let hooks = client.root.join(".git/hooks");
+            if metadata(&hooks)
+                .map_err(|error| error.to_string())?
+                .is_some()
+            {
+                plan.readonly.insert(hooks);
+            }
+        }
         plan.validate().map_err(|error| error.to_string())?;
         Ok(plan)
+    }
+
+    pub(crate) fn file_parent(
+        &self,
+        path: &Path,
+        write: bool,
+    ) -> io::Result<crate::tools::MutationRoot> {
+        if !visible(path)
+            || self.is_masked(path)
+            || (write
+                && (SYSTEM.iter().any(|root| path.starts_with(root))
+                    || self
+                        .readonly
+                        .iter()
+                        .any(|readonly| path.starts_with(readonly))))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Protected or unavailable path",
+            ));
+        }
+        let mut protected = BTreeSet::new();
+        for candidate in self
+            .masked
+            .iter()
+            .chain(self.readonly.iter().filter(|_| write))
+        {
+            if !visible(candidate) || self.hidden_by_parent(candidate) {
+                continue;
+            }
+            if metadata(candidate)?.is_some() {
+                protected.extend(crate::state_cli::protected_objects(candidate)?);
+            }
+        }
+        crate::tools::MutationRoot::open_broad_parent(
+            path.parent().ok_or_else(unsupported)?,
+            protected,
+        )
     }
 
     /// Runner-side validation uses the admitted paths and checks state aliases
@@ -77,6 +124,9 @@ impl Broad {
             || self.state.starts_with(&self.home) && !visible(&self.home)
         {
             return Err(unsupported());
+        }
+        if visible(&self.home) {
+            open_absolute_dir(&self.home)?;
         }
         if self.readonly.iter().any(|readonly| {
             self.masked
@@ -137,6 +187,7 @@ impl Broad {
     pub(super) fn command(
         &self,
         cwd: &Path,
+        identity: [u64; 2],
         executable: &str,
         args: &[String],
         network: bool,
@@ -147,21 +198,36 @@ impl Broad {
             return Err(unsupported());
         }
         let mut sandbox = Sandbox::broad(network)?;
+        let mut entries = 0;
         for name in WRITABLE.iter().chain(SYSTEM) {
             let path = Path::new(name);
             if let Some(meta) = metadata(path)? {
                 if !meta.is_dir() || meta.file_type().is_symlink() {
                     return Err(unsupported());
                 }
-                sandbox.pass(
+                if self.needs_projection(path) {
                     if SYSTEM.contains(name) {
-                        "--ro-bind-fd"
-                    } else {
-                        "--bind-fd"
-                    },
-                    open_absolute_dir(path)?,
-                )?;
-                sandbox.command.arg(path);
+                        return Err(io::Error::other(
+                            "Cannot project a protected subtree in a system mount",
+                        ));
+                    }
+                    // None of the real ancestors of a hidden tree may be
+                    // writable in the sandbox. Bind only safe sibling trees
+                    // onto this private directory. Otherwise a second broad
+                    // job could rename a state ancestor while we are mounting.
+                    sandbox.command.arg("--tmpfs").arg(path);
+                    self.project(path, &mut sandbox, &mut entries)?;
+                } else {
+                    sandbox.pass(
+                        if SYSTEM.contains(name) {
+                            "--ro-bind-fd"
+                        } else {
+                            "--bind-fd"
+                        },
+                        open_absolute_dir(path)?,
+                    )?;
+                    sandbox.command.arg(path);
+                }
             }
         }
         if Path::new("/etc/resolv.conf").is_symlink() {
@@ -175,13 +241,12 @@ impl Broad {
         let mut guard = Guard {
             masked: BTreeSet::new(),
             readonly: BTreeSet::new(),
+            cwd: identity,
             host_mount: fs::read_link("/proc/self/ns/mnt")?,
             host_pid: fs::read_link("/proc/self/ns/pid")?,
         };
 
         if visible(&self.home) && self.home.is_dir() {
-            sandbox.command.arg("--tmpfs").arg(&self.home);
-            self.project(&self.home, &mut sandbox, &mut 0)?;
             sandbox.command.args(["--setenv", "HOME"]).arg(&self.home);
         }
         for path in &self.masked {
@@ -220,8 +285,9 @@ impl Broad {
     }
 
     pub(crate) fn probe(&self, cwd: &Path) -> io::Result<()> {
+        let meta = fs::metadata(cwd)?;
         let status = self
-            .command(cwd, "/usr/bin/true", &[], false)?
+            .command(cwd, [meta.dev(), meta.ino()], "/usr/bin/true", &[], false)?
             .command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -246,15 +312,10 @@ impl Broad {
                 continue;
             }
             let kind = entry.file_type()?;
-            if self
-                .masked
-                .iter()
-                .chain(&self.readonly)
-                .any(|target| target.starts_with(&child))
-            {
+            if self.needs_projection(&child) {
                 if !kind.is_dir() {
                     return Err(io::Error::other(
-                        "A protected HOME ancestor must be a real directory",
+                        "A protected ancestor must be a real directory",
                     ));
                 }
                 sandbox.command.arg("--dir").arg(&child);
@@ -278,6 +339,20 @@ impl Broad {
             }
         }
         Ok(())
+    }
+
+    fn needs_projection(&self, path: &Path) -> bool {
+        path == self.home
+            || (self.home.starts_with(path) && visible(&self.home))
+            || self
+                .masked
+                .iter()
+                .any(|mask| mask.starts_with(path) && mask != path)
+            || (path.starts_with(&self.home)
+                && self
+                    .readonly
+                    .iter()
+                    .any(|target| target.starts_with(path) && target != path))
     }
 
     fn is_masked(&self, path: &Path) -> bool {
@@ -330,6 +405,7 @@ fn metadata(path: &Path) -> io::Result<Option<fs::Metadata>> {
 
 #[derive(Deserialize, Serialize)]
 struct Guard {
+    cwd: [u64; 2],
     masked: BTreeSet<PathBuf>,
     readonly: BTreeSet<PathBuf>,
     host_mount: PathBuf,
@@ -351,6 +427,10 @@ pub(crate) fn exec(args: &[std::ffi::OsString]) -> io::Result<()> {
         || fs::read_link("/proc/self/ns/mnt")? == plan.host_mount
         || fs::read_link("/proc/self/ns/pid")? == plan.host_pid
     {
+        return Err(unsupported());
+    }
+    let cwd = fs::metadata(".")?;
+    if [cwd.dev(), cwd.ino()] != plan.cwd {
         return Err(unsupported());
     }
     let status = fs::read_to_string("/proc/self/status")?;

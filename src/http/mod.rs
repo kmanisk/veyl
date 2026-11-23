@@ -561,7 +561,7 @@ fn dispatch_tools(
             #[cfg(target_os = "linux")]
             if tool == Tool::ReadFile {
                 return Some(
-                    client_file_tool(state, client, tool, args, now)
+                    client_file_tool(state, settings, client, tool, args, now)
                         .unwrap_or_else(|| tool_text(true, "Operation outside an approved scope")),
                 );
             }
@@ -658,10 +658,8 @@ fn privileged_tool(
             }
             _ => tool_text(true, "Jobs unavailable"),
         }
-    } else if client.mode == ExecutionMode::BroadYolo {
-        tool_text(true, "Broad direct file tools unavailable")
     } else {
-        client_file_tool(state, client, tool, args, now).unwrap_or_else(|| {
+        client_file_tool(state, settings, client, tool, args, now).unwrap_or_else(|| {
             tool_text(true, "Operation unavailable or outside an approved scope")
         })
     };
@@ -686,6 +684,7 @@ fn privileged_tool(
 #[cfg(target_os = "linux")]
 fn client_file_tool(
     state: &State,
+    settings: &Configuration,
     client: &Client,
     tool: Tool,
     args: Option<&Value>,
@@ -702,12 +701,20 @@ fn client_file_tool(
     let yolo = client.mode == ExecutionMode::PersistentYolo;
     let full_root;
     let absolute;
-    let (root, relative) = if client.mode == ExecutionMode::Full {
+    let (root, relative) = if matches!(client.mode, ExecutionMode::Full | ExecutionMode::BroadYolo)
+    {
         if raw_path.is_empty() || raw_path.ends_with('/') {
             return None;
         }
         absolute = client.root.join(path);
-        full_root = crate::tools::MutationRoot::open_host_parent(absolute.parent()?).ok()?;
+        full_root = if client.mode == ExecutionMode::BroadYolo {
+            crate::jobs::broad::Broad::prepare(state.policy.path(), settings)
+                .ok()?
+                .file_parent(&absolute, tool != Tool::ReadFile)
+                .ok()?
+        } else {
+            crate::tools::MutationRoot::open_host_parent(absolute.parent()?).ok()?
+        };
         (&full_root, Path::new(absolute.file_name()?))
     } else if path.is_absolute() {
         if !yolo {
@@ -755,7 +762,7 @@ fn client_file_tool(
         root,
         &client.id,
         now,
-        yolo,
+        yolo || client.mode == ExecutionMode::BroadYolo,
     ))
 }
 
@@ -768,9 +775,6 @@ fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configu
             let _ = settings;
             return false;
         }
-    }
-    if client.mode == ExecutionMode::BroadYolo && !tool.action().is_job() {
-        return false;
     }
     if tool == Tool::ReadFile {
         return true;
