@@ -108,12 +108,129 @@ profiles for every job grant. Session 79112 exited 0 with 70/70,
 including Suite F 15/15. Clippy passed. Logs and pin comparisons are
 in `target/gate3b/protected-v2/`. Two supplemental local checks verified
 audit intent/outcome, mandatory-path rejection, alias rejection, stale
-identity, exact command recovery and rollback on audit failure. The
+identity, exact command recovery and unchanged policy on audit failure. The
 Suite F remote check is a no-op and its audit assertion is tautological.
 The local probes do not constitute independent acceptance.
 
 Next: record the verified same-UID architecture blocker and finish
 regressions of the independently shippable checkpoints.
+
+
+Checkpoint 2 commit and current implementation HEAD:
+`5eb25fb17b4948f92e4ef81c4d966b697280fc0e`.
+
+## Checkpoint 3 — Broad YOLO remains fail-closed
+
+The disposable directory-mask probe used a 0700 synthetic state directory,
+a separate mount namespace, a host network namespace, Bubblewrap
+`--new-session --cap-drop ALL --die-with-parent`, zero effective
+capabilities and NoNewPrivs 1. Direct accesses and symlink aliases
+returned ENOENT. Renaming the mounted directory returned EBUSY.
+A same-UID process outside the sandbox then created a hardlink in an
+exposed directory after the startup check. The sandbox read the original
+protected inode through the alias. After an atomic host-side replacement,
+a second alias exposed the new contents. The direct path stayed masked.
+Reproduce using `/usr/bin/python3 -I -B target/gate3b/mask-probe.py`.
+Evidence is in `target/gate3b/architecture/directory-mask.log`.
+
+A preflight link count check cannot close this race. A 0700 directory
+sharing the execution UID cannot exclude that UID under normal DAC.
+Existing subordinate UID ranges are delegated to the same operator and
+do not by themselves provide independent control-plane ownership from
+host code running as that operator. FULL intentionally exposes same-UID
+state. Broad activation, state migration, the `state check` command,
+Git-hook protections, runtime mount enforcement for the new rules and
+a gateway-launched broad socket probe remain pending. There was no
+broad-mode fallback. No checkpoint 3 source changes were committed.
+
+Next engineering task is to agree and verify a control-plane storage
+boundary independently owned from the broad job UID. The operator
+path and job launcher must authenticate the boundary. Protected links,
+replace/rename, mounts, inherited descriptors and daemon-mediated
+access need positive and negative runtime tests. Isolation of
+localhost applications and abstract Unix sockets needs a separate
+network policy if required. Host networking would keep both reachable
+subject to application authentication and local policy.
+
+AGY review request: add a positive-control fixture that proves the
+gateway launched a genuinely broad job with off-root access and
+controlled networking, then exercises protected directories, pre- and
+post-admission aliases, atomic replacement, mount aliases, and direct
+file-tool protections. Keep Suite D's synthetic evidence distinct.
+Suite F 10 and 12 require genuine remote-denial and audit assertions
+before they can independently establish those guarantees.
+
+## Final verification of completed checkpoints
+
+All 24 pins match before and after. The 22 selected suites contain
+195 cases. Trusted sandbox: 192 passed, 3 failed, exit 1. Mode 04
+stops at the explicit broad activation denial. Service Preparation 07
+and 09 require the user systemd runtime and bus. They pass in AGY's
+original environment, where the unchanged suite passed 10/10, exit 0.
+The combined result is 194/195. Dashboard and service/network
+integration are hash-checked only.
+
+Suite A 8/8, Suite F 15/15, inherited Milestone 2 78/78, audit chain
+13/13, scoped YOLO 11/11, migration 14/14, jobs cleanup 8/8, Suite D
+8/8 synthetic, persistence 8/8, audit anchors 17/17. See
+`target/gate3b/final/acceptance.tsv` for every suite and exact digest,
+`acceptance.log` for process IDs and per-suite exits, and
+`pins-before.tsv` and `pins-after.tsv` for the raw pin verification.
+
+Formatting, Clippy with denied warnings, offline debug and release
+builds, 36 Rust tests, Git whitespace, clean-clone release, 37 harness
+tests, six hardening checks and project-local cargo-audit all exited 0.
+The dependency trees matched and there were no dependency changes.
+The normal release string scan returned no hook match, grep exit 1.
+The supplementary crash probe used the separate audit hook binary
+until SIGKILL at the ready marker. The release then recovered the
+unpublished off-root FULL stage after revocation and verified its
+cleanup events and audit chain. The release CLI probe verified reset,
+FULL confirmation, broad rejection, rule persistence, bind-alias
+denial, append-compatible anchors and a disposable systemd unit.
+Whole-ledger rewriting remains possible for the audit owner or FULL.
+Retain audit anchors beyond that UID's control to detect rewriting.
+
+Four disposable mutations compiled and were detected. Suite A 03–05
+detected FULL remaining scoped. Suite F 08 detected a false success
+for mandatory removal. Migration 03 and 04 detected legacy enable
+redirected to FULL, an expansion surrogate because broad is absent.
+Modes 04 caught networking enabled in the shared offline launcher via
+its legacy negative control. Modes 02 did not catch the latter under
+the trusted runner's offline network namespace. The separate real
+Standard job probe detected it with a controlled TCP peer. Broad
+masking, NNP, networking, hardlink and direct file-policy mutations
+could not reach an unimplemented mode. See `mutations.log` and
+`mutant-*.log` under `target/gate3b/final/`.
+
+Matched release measurements, baseline → current, with five confirmed
+running synthetic jobs and one idle sample per mode:
+
+| Mode | Idle RSS KiB | Five-job gateway RSS KiB | Startup ms | Shutdown ms | Median admission ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Standard | 4160 → 4204 | 4436 → 4476 | 1.109 → 1.217 | 0.933 → 1.251 | 9.142 → 3.424 |
+| Legacy | 4184 → 4224 | 4328 → 4372 | 1.385 → 1.100 | 1.174 → 0.921 | 9.234 → 9.081 |
+| FULL | 4204 → 4112 | 4336 → 4248 | 1.339 → 1.330 | 1.207 → 1.001 | 3.331 → 3.558 |
+
+Idle CPU was zero ticks per five seconds throughout. Broad YOLO
+latency is unavailable. The single-run differences do not establish
+a performance improvement.
+
+The runnable, partial Linux build is `target/release/mcp-gateway`
+(2,746,240 bytes), SHA-256
+`5451bdc6fcbe73de49b3ae6d6350695fa3874f928df63e6c9ad5a1d0bda35809`.
+A clean local clone at the same HEAD produced a byte-identical binary.
+The Gate 3b beta archive was gated on zero mandatory failures.
+No installation, activation, deployment, merge or push occurred.
+
+Tracked execution sessions, all finished: 71383 baseline (exit 1),
+96084 FULL suites (0), 64288 first protected-path run (1), 79112 fixed
+protected-path run (0), 97288 Rust verification followed by the
+trusted acceptance matrix (combined exit 1), 11403 harness tests (0),
+17326 hardening (0), 98923 clean clone (0), 68659 mutations (0), and
+24405 performance (0). Exact Codex usage was unavailable. Only this
+final STATUS update is pending in the worktree. Production changes are
+committed through checkpoint 2.
 
 ---
 
