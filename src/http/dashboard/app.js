@@ -93,7 +93,22 @@ async function refresh() {
   serverClient.replaceChildren();
   for (const client of state.clients) add(serverClient, "option", client.id).value = client.id;
   if (state.clients.some(client => client.id === previousServerClient)) serverClient.value = previousServerClient;
-  const tasks = [loadJobs(), loadAudit(), loadServers()];
+  const tasks = [loadServers()];
+  byId("job-controls").hidden = !state.jobs_configured;
+  if (state.jobs_configured) {
+    tasks.push(loadJobs());
+  } else {
+    byId("job-rows").replaceChildren();
+    add(byId("job-rows"), "li", "Job supervision is unavailable.");
+    byId("logs").hidden = true;
+  }
+  if (state.audit === "verified") {
+    tasks.push(loadAudit());
+  } else {
+    table("audit-rows", []);
+    byId("audit-empty").hidden = false;
+    byId("audit-empty").textContent = state.audit ? "Audit ledger unavailable." : "Audit ledger is unconfigured.";
+  }
   byId("skill-panel").hidden = !state.skills_configured;
   byId("skills-nav").hidden = !state.skills_configured;
   if (state.skills_configured) {
@@ -237,6 +252,7 @@ byId("server-grant").addEventListener("submit", event => {
 async function loadAudit() {
   const { events } = await request("audit");
   byId("audit-empty").hidden = events.length !== 0;
+  byId("audit-empty").textContent = "No audit events recorded.";
   table("audit-rows", events.toReversed().map(event => [
     event.time == null ? "—" : new Date(event.time * 1000).toLocaleString(),
     event.tool ?? "—", event.client ?? "—", event.phase ?? "—"
@@ -263,4 +279,4 @@ byId("logout").addEventListener("click", async () => {
     notice.textContent = "Signed out.";
   } catch (error) { notice.textContent = error.message; }
 });
-refresh().catch(error => notice.textContent = csrf ? error.message : "");
+refresh().catch(error => notice.textContent = byId("pair").hidden ? error.message : "");

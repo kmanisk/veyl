@@ -891,7 +891,7 @@ Verification on the local candidate:
 | External MCP | 16/16 |
 | Service and networking | 12/12 |
 | Total registered | 287/287 across 28 suites |
-| Additional product probes | 4/4 |
+| Additional product probes | 5/5 |
 | Rust tests | 36 passed |
 | Harness regression and hardening | 37/37 and 6/6 |
 
@@ -900,9 +900,10 @@ the installed Brave runtime and a synthetic launcher added read-only to
 the offline verifier environment. The unaugmented runner cannot find
 Brave. The audit suite used the separate hook-enabled build. Normal
 release hook exclusion, formatter, Clippy, offline builds, whitespace
-checks and project-local cargo-audit passed. A separate readable-browser
+checks and project-local cargo-audit passed. An offline release built from a fresh clone. A separate readable-browser
 probe confirmed the real cookie attributes, protected content and desktop
-and mobile layout. Three disposable source mutations were detected:
+and mobile layout. A paired session listed, inspected and canceled a real
+durable job and received a denial for the wrong job owner. Three disposable source mutations were detected:
 reused pairing token, skipped CSRF validation and skipped per-tool grants.
 
 The actual Codex app-server negotiated with Veyl, discovered a namespaced
@@ -923,9 +924,9 @@ Verification entry points and saved logs:
 - `cargo fmt --all --check`, `cargo clippy --offline --locked --all-targets -- -D warnings`,
   `cargo test --offline --locked`, `cargo build --release --offline --locked` and
   `python3 -B tests/product_features.py`.
-- `target/gate3d/product-final.log`, `target/gate3d/product-final/pins-before.tsv`
-  and `target/gate3d/product-final/pins-after.tsv` contain full suite receipts.
-- `target/gate3d/product-final-toolchain.log`, `product-cargo-audit.log`,
+- `target/gate3d/product-delivery.log`, `target/gate3d/product-delivery/pins-before.tsv`
+  and `target/gate3d/product-delivery/pins-after.tsv` contain full suite receipts.
+- `target/gate3d/product-delivery-toolchain.log`, `product-cargo-audit.log`,
   `product-cargo-tree.diff`, `product-browser-probe.log`,
   `product-codex-client.log`, `product-agy-client.log` and
   `product-mutations.log` are local evidence under `target/gate3d/`.

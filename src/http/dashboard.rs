@@ -473,6 +473,7 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
                 .parse::<u64>()
                 .ok()
         });
+    let jobs_configured = state.jobs.is_some();
     let listener = state.addr;
     let active_tcp = super::MAX_CONNECTIONS - state.mcp_connections.available_permits();
     with_policy(admin, move |settings| {
@@ -496,7 +497,7 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
         Ok(json!({
             "clients": clients, "sessions": connected, "connections": active_tcp, "cpu_percent": cpu_percent, "rss_kib": rss_kib,
             "csrf": csrf, "listener": listener.to_string(), "audit": audit,
-            "job_state_dir": settings.job_state_path(), "audit_log": settings.audit_log,
+            "jobs_configured": jobs_configured, "job_state_dir": settings.job_state_path(), "audit_log": settings.audit_log,
             "version": env!("CARGO_PKG_VERSION"), "skills_configured": settings.skills.is_some(),
         }))
     }).await

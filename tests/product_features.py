@@ -195,6 +195,36 @@ class ProductFeatures(unittest.TestCase):
         self.assertEqual(self.request(self.admin, "POST", "/api/dashboard/skills", revoke, **headers)[0], 200)
         self.assertTrue(self.call("skills_read", {"name": "example-skill"}, session)["isError"])
 
+    def test_admin_reads_and_cancels_real_job(self):
+        state = self.base / "jobs"
+        state.mkdir(mode=0o700)
+        self.doc["job_state_dir"] = str(state)
+        self.doc["policy_version"] = 2
+        self.doc["job_profiles"] = {"sleep": {
+            "executable": "/usr/bin/sleep", "args": ["10"],
+            "timeout_seconds": 12, "max_output_bytes": 4096,
+        }}
+        self.doc["clients"][0]["tools"].append("job_start")
+        self.write_config()
+        self.start()
+        session = self.connect()
+        headers = self.pair()
+        result = self.call("job_start", {"profile": "sleep"}, session)
+        self.assertFalse(result.get("isError", False), result)
+        job = json.loads(result["content"][0]["text"])["job_id"]
+        status, _, body = self.request(self.admin, "GET", "/api/dashboard/jobs?client=primary", **headers)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["jobs"][0]["job_id"], job)
+        path = f"/api/dashboard/jobs/{job}/logs"
+        self.assertEqual(self.request(self.admin, "GET", path + "?client=secondary", **headers)[0], 404)
+        status, _, body = self.request(self.admin, "GET", path + "?client=primary", **headers)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["job_id"], job)
+        request = {"client": "primary", "job_id": job, "confirm": True}
+        status, _, body = self.request(self.admin, "POST", "/api/dashboard/jobs/cancel", request, **headers)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["state"], "canceled")
+
     def test_upstream_sandbox_and_per_tool_grants(self):
         probe = self.base / "probe.py"
         probe.write_text(STDIO_PEER)
