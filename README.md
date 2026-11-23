@@ -30,6 +30,7 @@ Keep bearer values outside source, command arguments, and logs. See the
 | --- | --- | --- |
 | Managed Standard | Client root and explicit grants | Workspace sandbox, offline |
 | Legacy scoped YOLO | Approved roots and explicit grants | Bubblewrap, approved roots, offline |
+| Broad YOLO | Granted host-user file access with protected state | Bubblewrap, protected mounts, host IP networking |
 | FULL | Host-user access through granted tools | Supervised host execution using the gateway UID |
 | Disabled | Denied | Denied |
 
@@ -50,10 +51,10 @@ mcp-gateway state check --state-root "$state" --config "$config"
 mcp-gateway audit verify --config "$config"
 ```
 
-Broad network-enabled YOLO remains gated. `yolo enable` selects scoped,
-offline YOLO. The state checker inventories a proposed private layout, and the
-protected-path CLI records desired rules for later enforcement. Neither command
-starts a job or moves existing state.
+Broad network-enabled YOLO uses a dedicated private state layout.
+`yolo set --mode yolo` is the explicit opt-in. `yolo enable` still selects
+scoped, offline YOLO. See the [broad mode and migration guide](docs/BROAD-YOLO.md).
+The Gate 3d release archive remains gated on independent acceptance.
 
 ## State and service
 

@@ -707,3 +707,13 @@ command, and replay of a revoked configuration when the file-identity
 comparison was removed. Each mutant compiled and its intended test exited
 one. The disposable source was restored and compared with the real
 worktree.
+
+
+## Gate 3d broad YOLO implementation
+
+The broad activation, guarded supervisor, runtime filesystem and direct
+file-tool parity are implemented. The completed beta archive remains
+gated on Permanent Permissions 17, whose split-state fixture conflicts
+with mandatory dedicated-state containment. See [STATUS.md](STATUS.md)
+for the pinned run evidence and [the broad mode guide](docs/BROAD-YOLO.md)
+for the threat model, tested usage, state migration and rollback.

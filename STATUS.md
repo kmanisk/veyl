@@ -86,6 +86,83 @@ and abstract Unix sockets. An isolated bind-alias probe rejected the
 aliased state before activation. See `target/gate3d/runtime-final.log`
 and `bind-alias.log`. Next: full regression and release-gate evaluation.
 
+
+Checkpoint D source: `1f59507d42c33a9a2859ab2d9c25d1873d2144d1`.
+
+## E — Regression, security and release decision
+
+Required acceptance ran 24 suites and 229 cases. All 28 SHA-256 pins
+matched before and after. The default pinned run improved from 218/229
+to 227/229. The service preparation suite passed all 10 cases after
+providing a private XDG runtime directory inside the same network-disabled
+verifier. With that result the final tally is **228/229**. The only
+remaining scenario is Permanent Permissions 17. Its locked positive
+fixture puts `cfg`, `audit`, and `jobs` alongside all client workspaces.
+No directory can contain that fixture's required state while excluding
+those workspaces. Broad Gateway 14 independently verifies persistence
+across restart for a compliant layout. All 14 broad-gateway cases, all
+five mode cases and all 13 hook-enabled audit cases passed. The exact
+pins, counts and return codes are in `target/gate3d/acceptance.tsv`.
+
+Rust formatting, Clippy with warnings denied, locked offline debug and
+release builds, 36 Rust tests, Git whitespace, cargo-audit, 37 harness
+tests and six harness hardening checks passed. Cargo manifests are
+unchanged. The release binary has no audit hook string. A clean offline
+clone at the source checkpoint produced an identical binary.
+
+The runtime regressions used actual authenticated jobs and synthetic
+state. Standard and legacy scoped YOLO stayed offline, broad jobs
+reached controlled TCP, UDP and HTTPS endpoints, and FULL ran only a
+harmless unprivileged command. Broad direct operations and persistence
+continued to pass after restart. Existing audit anchor and detached
+job recovery tests passed. Broad job `880c54b8f44eb7e2bc85c35ddb738831`
+was canceled. Job `36f9981e921aecfb06af0a5c806ab8ff` verified a
+namespace-local ancestor rename. Job `3ca34d474bc235fa0edce3435df0bc5e`
+verified mountpoint EBUSY, empty state tmpfs, NoNewPrivileges, zero
+effective capabilities, and filesystem and abstract socket denial.
+See `target/gate3d/binary-smoke.log`.
+
+Ten compiled mutation scenarios ran in disposable sources. Eight
+standalone mutants were detected: removing the state mask, masking
+only a file, skipping link counts, blocking broad networking, enabling
+scoped networking, bypassing file-tool policy, making legacy activation
+broad and executing after a mandatory sandbox failure. Dropping the
+explicit NoNewPrivileges setting and guard survived because Bubblewrap
+still sets it. Dropping mount verification with a correctly assembled
+plan also survived. A paired, real runtime overmount fault demonstrated
+that the guard changes the result: it refused to run with exit 2,
+whereas the same job returned exit 0 and observed the synthetic state
+when that guard was simultaneously disabled. See `mutations.log`
+and `mutant-*.log` in `target/gate3d/`.
+
+| Mode | Idle RSS KiB, 3c → 3d | Five-job RSS KiB | Median job admission ms |
+| --- | ---: | ---: | ---: |
+| Standard | 4300 → 4360 | 4540 → 4628 | 4.481 → 10.326 |
+| Legacy scoped YOLO | 4228 → 4448 | 4368 → 4588 | 11.992 → 10.749 |
+| FULL | 4308 → 4448 | 4448 → 4592 | 3.643 → 3.730 |
+| Broad YOLO | — → 4452 | — → 4612 | — → 6.584 |
+
+All idle samples were zero ticks per five seconds. See
+`target/gate3d/performance-final.log` for the single-run measurements.
+
+The verified local build is `target/release/mcp-gateway`, 3,047,232
+bytes, SHA-256 `a9d3f06cea85c16d953bd35d3d70642e99d54d9212f4db909945fa6d4aee9eb7`.
+The complete beta archive and extraction smoke are gated on 229/229.
+No services, production configuration, credentials, or external
+repositories were changed.
+
+Tracked sessions: baseline 50143 and final suite 97296 exited 1.
+Build 55742, harness 22627, resumed mutation sweep 79454, paired
+fault 49554, runtime 28406, binary smoke 88600, and performance 5970
+exited 0. Supplemental service environment verification is in
+`target/gate3d/service-env.log`. Exact token usage was unavailable.
+
+Next: AGY independently corrects Permanent Permissions 17 to keep
+config, audit and jobs beneath a mode-0700 state root disjoint from
+workspaces. Rerun all 24 required suites with the audit hook build
+and private service runtime, then package the beta and hand the
+commit to AGY and BridgeDev for double verification.
+
 ---
 
 # Gate 3c status
