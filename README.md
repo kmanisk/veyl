@@ -77,5 +77,5 @@ without contacting or changing Tailscale. An optional `--state-file`
 provides a read-only inventory of existing routes. Read the
 [security and rollback notes](GATE3_BETA.md) before using a service.
 
-The dashboard, skills, upstream MCP servers and terminal monitor remain
-pending. See [checkpoint results and known gaps](STATUS.md).
+The gateway supports read-only [instruction packages](docs/SKILLS.md).
+The dashboard, upstream MCP servers and terminal monitor remain pending. See [checkpoint results and known gaps](STATUS.md).

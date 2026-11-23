@@ -44,7 +44,7 @@ use crate::tools::registry::{Tool, tool_text};
 
 #[cfg(not(target_os = "linux"))]
 use admission::load_clients;
-use admission::{Client, authenticate};
+use admission::{Client, Configuration, authenticate};
 #[cfg(target_os = "linux")]
 use mcp_gateway::security::audit::AuditPhase;
 
@@ -440,7 +440,7 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
                 payload,
                 &state,
                 &current.clients[index],
-                current.managed,
+                &current,
             )
         })
         .await
@@ -452,7 +452,7 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
             ),
         };
     }
-    dispatch_tools(&mut session.protocol, payload, &state, client, false)
+    dispatch_tools(&mut session.protocol, payload, &state, client, &settings)
 }
 
 fn dispatch_tools(
@@ -460,10 +460,10 @@ fn dispatch_tools(
     payload: Value,
     state: &State,
     client: &Client,
-    managed: bool,
+    settings: &Configuration,
 ) -> Reply {
     #[cfg(not(target_os = "linux"))]
-    let _ = managed;
+    let _ = settings;
     let response = protocol.dispatch_with_tools(
         payload,
         || {
@@ -491,7 +491,7 @@ fn dispatch_tools(
                 .into_iter()
                 .filter(|tool| {
                     authorized(client, tool.action(), state, audited, unix_seconds())
-                        && tool_available(*tool, client, state)
+                        && tool_available(*tool, client, state, settings)
                 })
                 .map(Tool::schema)
                 .collect()
@@ -526,6 +526,33 @@ fn dispatch_tools(
             }
             let tool = tool?;
             #[cfg(target_os = "linux")]
+            if matches!(tool, Tool::SkillsList | Tool::SkillsRead) {
+                let store = settings.skills.as_ref()?;
+                let mode = client.mode.audit_mode().unwrap_or("standard");
+                if !state
+                    .mutations
+                    .record_runtime_mode(&client.id, name, mode, AuditPhase::Intent)
+                {
+                    return Some(tool_text(true, "Audit intent unavailable"));
+                }
+                let reply = store.call(tool, args, &client.skills);
+                let phase = if reply["isError"] == true {
+                    AuditPhase::Failure
+                } else {
+                    AuditPhase::Success
+                };
+                return Some(
+                    if state
+                        .mutations
+                        .record_runtime_mode(&client.id, name, mode, phase)
+                    {
+                        reply
+                    } else {
+                        tool_text(true, "Audit outcome unavailable")
+                    },
+                );
+            }
+            #[cfg(target_os = "linux")]
             if client.mode.audit_mode().is_some() {
                 return Some(privileged_tool(state, client, tool, name, args, now));
             }
@@ -555,7 +582,7 @@ fn dispatch_tools(
                         JobPolicy {
                             yolo: false,
                             full: false,
-                            workspace_mounts: managed.then_some(&[]),
+                            workspace_mounts: settings.managed.then_some(&[]),
                         },
                     ));
                 }
@@ -711,7 +738,16 @@ fn client_file_tool(
     ))
 }
 
-fn tool_available(tool: Tool, client: &Client, state: &State) -> bool {
+fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configuration) -> bool {
+    if matches!(tool, Tool::SkillsList | Tool::SkillsRead) {
+        #[cfg(target_os = "linux")]
+        return settings.skills.is_some() && state.mutations.available();
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = settings;
+            return false;
+        }
+    }
     if tool == Tool::ReadFile {
         return true;
     }

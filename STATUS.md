@@ -99,6 +99,29 @@ environment. The sandbox regression is the test that needs an XDG user
 runtime directory. Durable jobs passed 9/9. Session 43114 exited 1.
 No production service or Tailscale setting was changed.
 
+Service file lifecycle and Serve planning were committed as
+`802055659b1f6b0850c6625e14342651a3c671eb`. The read-only parity
+study was committed as `4d3473b6535975259880c0fee50f67fa2db7d55f`.
+
+## Verified instruction packages
+
+The Linux gateway reads bounded, descriptor-confined Markdown packages
+from an absolute operator-owned directory. Metadata is validated before
+discovery and reading. Existing tool authorization and separate named
+grants gate visibility. The local CLI uses the durable policy
+transaction and audit ledger for enable and disable. Local calls
+proved revocation and restoration on a live authenticated session.
+Malformed and symlink-aliased packages were rejected even with a named
+grant. The `skills_run` declaration does not expose a callable tool.
+
+The locked skills suite passed 15/15 (exit 0). The same seven-suite
+run had 76/77 because mode case 04 remains blocked. Session 15383
+exited 1. The supplemental live-session probe and Clippy passed.
+See `target/gate3c/skills.log`, `skills-probe.log`, and
+`docs/SKILLS.md`. The administration listener remains independently
+blocked by the dashboard contract. Upstream provider lifecycle and
+the separate monitor remain pending.
+
 ## Private GitHub publication
 
 No Git remote existed at startup. The GitHub connector returned 404 for

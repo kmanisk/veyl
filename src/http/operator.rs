@@ -351,6 +351,8 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "max_audit_dir_bytes",
         "policy_version",
         "protected_paths",
+        "skills_dir",
+        "skills_disabled",
     ];
     const CLIENT: &[&str] = &[
         "id",
@@ -362,6 +364,7 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "yolo_roots",
         "yolo_shared_roots",
         "yolo_revision",
+        "skills",
     ];
     let allowed = |value: &Value, fields: &[&str]| {
         value

@@ -14,7 +14,7 @@ capabilities and does not imply API, security, or drop-in compatibility.
 | System inspection | Partial. Audit status, user-unit status, and private-state checks exist. Host-wide metrics and inspection tools have no current acceptance contract. |
 | Local dashboard | Planned. Separate loopback administration and pairing need independent acceptance. |
 | MCP server management | Planned. Upstream discovery and forwarding need grants, transport isolation, and cleanup. |
-| Skills | Planned. Instructions will have separate read grants and cannot authorize execution modes. |
+| Skills | Implemented. Non-executable packages use separate client grants and do not authorize execution modes. |
 | Service and ingress | Partial. The user-unit file lifecycle and read-only Serve planning are implemented. Live ingress and host installation are outside this release. |
 | Root command execution | Outside scope. |
 | Windows and Termux | Outside the current Linux verification scope. |

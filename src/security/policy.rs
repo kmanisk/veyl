@@ -15,6 +15,8 @@ pub enum Action {
     ReadFile,
     WriteFile,
     ApplyPatch,
+    ListSkills,
+    ReadSkill,
     RunCommand,
     RunShortJob,
     StartJob,
@@ -134,7 +136,12 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
 
     match input.action {
         action if action.is_job() && input.mode != ExecutionMode::YoloRequested => Ok(()),
-        Action::ReadFile | Action::ListTools | Action::WriteFile | Action::ApplyPatch => Ok(()),
+        Action::ReadFile
+        | Action::ListTools
+        | Action::WriteFile
+        | Action::ApplyPatch
+        | Action::ListSkills
+        | Action::ReadSkill => Ok(()),
         _ => {
             // No trust decision can be upgraded merely because the caller
             // requested YOLO. A signed local operator lease is not yet wired.

@@ -38,6 +38,16 @@ impl MutationRoot {
         })
     }
 
+    pub(crate) fn open_owned(path: &Path) -> io::Result<Self> {
+        let root = Self::open(path)?;
+        let metadata = fs::fstat(&root.directory)?;
+        if metadata.st_uid != rustix::process::geteuid().as_raw() || metadata.st_mode & 0o7022 != 0
+        {
+            return Err(io::Error::other("Expected an operator-owned directory"));
+        }
+        Ok(root)
+    }
+
     pub(crate) fn open_host_parent(path: &Path) -> io::Result<Self> {
         if rustix::process::geteuid().is_root() {
             return Err(io::Error::other(

@@ -285,6 +285,20 @@ impl AuditSink {
         }))
     }
 
+    pub fn record_skill_change(
+        &self,
+        operation: &str,
+        name: &str,
+        phase: AuditPhase,
+        unix_seconds: u64,
+    ) -> io::Result<()> {
+        self.0.append(json!({
+            "principal": "local_operator", "tool": "skills_admin",
+            "phase": phase.label(), "unix_seconds": unix_seconds,
+            "operation": operation, "skill": name,
+        }))
+    }
+
     pub fn pending_stages(&self) -> io::Result<Vec<(String, StageProof)>> {
         Ok(self.0.inspection(true)?.stages)
     }

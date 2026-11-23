@@ -31,6 +31,8 @@ pub struct Client {
     pub actions: Vec<Action>,
     pub mode: ExecutionMode,
     #[cfg(target_os = "linux")]
+    pub(crate) skills: std::collections::BTreeSet<String>,
+    #[cfg(target_os = "linux")]
     pub yolo_revision: Option<String>,
     #[cfg(target_os = "linux")]
     pub extra_roots: Vec<MutationRoot>,
@@ -51,6 +53,8 @@ pub struct Configuration {
     pub runtime_settings: Value,
     #[cfg(target_os = "linux")]
     pub(crate) protected_paths: crate::protected_paths::Rules,
+    #[cfg(target_os = "linux")]
+    pub(crate) skills: Option<crate::skills::Skills>,
     #[cfg(target_os = "linux")]
     pub managed: bool,
     #[cfg(target_os = "linux")]
@@ -206,11 +210,23 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             .ok_or("client tools must be an array")?;
         let mut actions = Vec::new();
         let mut names = HashSet::new();
+        let mut seen_instruction_run = false;
         for tool in allowed {
-            let tool = tool
-                .as_str()
-                .and_then(Tool::parse)
-                .ok_or("unsupported tool grant")?;
+            let label = tool.as_str().ok_or("unsupported tool grant")?;
+            // The instruction package format defines no executable entry point.
+            if label == "skills_run" && document.get("skills_dir").is_some() {
+                if seen_instruction_run {
+                    return Err("duplicate tool grant".into());
+                }
+                seen_instruction_run = true;
+                continue;
+            }
+            let tool = Tool::parse(label).ok_or("unsupported tool grant")?;
+            if matches!(tool, Tool::SkillsList | Tool::SkillsRead)
+                && (!cfg!(target_os = "linux") || document.get("skills_dir").is_none())
+            {
+                return Err("Skill tools require a configured Linux skills directory".into());
+            }
             if !names.insert(tool) {
                 return Err("duplicate tool grant".into());
             }
@@ -284,6 +300,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             actions,
             mode: mode.into(),
             #[cfg(target_os = "linux")]
+            skills: crate::skills::parse_names(entry.get("skills"))?,
+            #[cfg(target_os = "linux")]
             yolo_revision,
             #[cfg(target_os = "linux")]
             extra_roots,
@@ -309,10 +327,12 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         static_fields.remove("clients");
         static_fields.remove("policy_version");
         static_fields.remove("protected_paths");
+        static_fields.remove("skills_disabled");
     }
     #[cfg(target_os = "linux")]
     let protected_paths = crate::protected_paths::Rules::parse(&document)?;
-    let settings = Configuration {
+    #[allow(unused_mut)]
+    let mut settings = Configuration {
         #[cfg(target_os = "linux")]
         audit_limits: mcp_gateway::security::audit::AuditLimits::from_config(&document)
             .map_err(|error| error.to_string())?,
@@ -328,6 +348,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         reserved_job_state,
         #[cfg(target_os = "linux")]
         protected_paths,
+        #[cfg(target_os = "linux")]
+        skills: None,
     };
     #[cfg(target_os = "linux")]
     for kind in [
@@ -337,6 +359,10 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         for rule in settings.protected_paths.selected(kind) {
             crate::protected_paths::check_conflicts(path, &settings, &rule.path, kind)?;
         }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        settings.skills = crate::skills::Skills::load(path, &document, &settings)?;
     }
     Ok(settings)
 }

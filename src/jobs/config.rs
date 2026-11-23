@@ -93,6 +93,10 @@ struct JobDocument {
     _max_audit_dir_bytes: Option<u64>,
     #[serde(default, rename = "protected_paths")]
     _protected_paths: Option<serde_json::Value>,
+    #[serde(default, rename = "skills_dir")]
+    _skills_dir: Option<PathBuf>,
+    #[serde(default, rename = "skills_disabled")]
+    _skills_disabled: Option<Vec<String>>,
     job_state_dir: PathBuf,
     #[serde(deserialize_with = "unique_profiles")]
     job_profiles: BTreeMap<String, Profile>,
@@ -111,6 +115,8 @@ struct JobClient {
     _root: String,
     #[serde(rename = "tools")]
     _tools: Vec<String>,
+    #[serde(default, rename = "skills")]
+    _skills: Option<Vec<String>>,
     #[serde(default, rename = "mode")]
     _mode: Option<String>,
     #[serde(default, rename = "yolo_roots")]

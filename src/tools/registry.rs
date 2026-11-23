@@ -19,10 +19,12 @@ pub(crate) enum Tool {
     CancelJob,
     JobCancel,
     ListJobs,
+    SkillsList,
+    SkillsRead,
 }
 
 impl Tool {
-    pub(crate) const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 13] = [
         Self::ReadFile,
         Self::WriteFile,
         Self::ApplyPatch,
@@ -34,6 +36,8 @@ impl Tool {
         Self::CancelJob,
         Self::JobCancel,
         Self::ListJobs,
+        Self::SkillsList,
+        Self::SkillsRead,
     ];
 
     pub(crate) fn parse(name: &str) -> Option<Self> {
@@ -49,6 +53,8 @@ impl Tool {
             "cancel_job" => Some(Self::CancelJob),
             "job_cancel" => Some(Self::JobCancel),
             "list_jobs" => Some(Self::ListJobs),
+            "skills_list" => Some(Self::SkillsList),
+            "skills_read" => Some(Self::SkillsRead),
             _ => None,
         }
     }
@@ -64,6 +70,8 @@ impl Tool {
             Self::JobLogs => Action::JobLogs,
             Self::CancelJob | Self::JobCancel => Action::CancelJob,
             Self::ListJobs => Action::ListJobs,
+            Self::SkillsList => Action::ListSkills,
+            Self::SkillsRead => Action::ReadSkill,
         }
     }
 
@@ -115,6 +123,19 @@ impl Tool {
                     "additionalProperties": false
                 },
                 "annotations": { "readOnlyHint": false, "destructiveHint": true }
+            }),
+            Self::SkillsList => json!({
+                "name": "skills_list",
+                "description": "List authorized, enabled instruction packages",
+                "inputSchema": {"type": "object", "additionalProperties": false},
+                "annotations": {"readOnlyHint": true, "destructiveHint": false}
+            }),
+            Self::SkillsRead => json!({
+                "name": "skills_read",
+                "description": "Read an authorized instruction package without executing it",
+                "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}},
+                    "required": ["name"], "additionalProperties": false},
+                "annotations": {"readOnlyHint": true, "destructiveHint": false}
             }),
             _ => self.job_schema(),
         }
