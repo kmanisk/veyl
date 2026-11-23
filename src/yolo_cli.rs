@@ -107,7 +107,8 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         require_completed_legacy_jobs(&settings)?;
     }
     if command == "broad_yolo" {
-        crate::state_cli::Layout::admission(&path, &settings)
+        crate::jobs::broad::Broad::prepare(&path, &settings)
+            .and_then(|plan| plan.probe(&client.root).map_err(|error| error.to_string()))
             .map_err(|reason| format!("Broad YOLO isolation is unavailable: {reason}"))?;
     }
     if command == "enable"

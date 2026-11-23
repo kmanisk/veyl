@@ -1,6 +1,7 @@
 //! Authenticated Linux job service and runner entry points.
 
 mod api;
+pub(crate) mod broad;
 mod config;
 mod launch;
 mod logs;

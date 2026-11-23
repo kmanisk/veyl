@@ -99,6 +99,11 @@ fn run() -> Result<(), String> {
     if args.first().is_some_and(|arg| arg == "skills") {
         return skills_cli::run(&args[1..]);
     }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "--broad-exec") {
+        return jobs::broad::exec(&args[1..])
+            .map_err(|error| format!("Broad execution guard refused job: {error}"));
+    }
     if args.first().is_some_and(|arg| arg == "http") {
         return http::run(args.into_iter().skip(1).collect());
     }

@@ -24,6 +24,14 @@ pub(super) struct Sandbox {
 
 impl Sandbox {
     fn new() -> io::Result<Self> {
+        Self::profile(false, false)
+    }
+
+    pub(super) fn broad(network: bool) -> io::Result<Self> {
+        Self::profile(true, network)
+    }
+
+    fn profile(broad: bool, network: bool) -> io::Result<Self> {
         if !cfg!(target_arch = "x86_64") || rustix::process::geteuid().is_root() {
             return Err(unsupported());
         }
@@ -44,7 +52,6 @@ impl Sandbox {
             "--disable-userns",
             "--unshare-pid",
             "--unshare-ipc",
-            "--unshare-net",
             "--unshare-uts",
             "--cap-drop",
             "ALL",
@@ -56,40 +63,65 @@ impl Sandbox {
             "--setenv",
             "LC_ALL",
             "C",
-            "--ro-bind",
-            BIN,
-            BIN,
-            "--ro-bind",
-            LIB,
-            LIB,
-            "--symlink",
-            "usr/bin",
-            "/bin",
-            "--symlink",
-            "usr/lib",
-            "/lib",
             "--proc",
             "/proc",
             "--dev",
             "/dev",
-            "--dir",
-            "/tmp",
         ]);
-        let lib64 = Path::new("/usr/lib64");
-        if lib64.is_dir() && lib64.canonicalize()? != Path::new(LIB) {
+        if !network {
+            result.command.arg("--unshare-net");
+        }
+        if broad {
             result
                 .command
-                .args(["--ro-bind", "/usr/lib64", "/usr/lib64"]);
+                .arg("--new-session")
+                .arg("--assert-userns-disabled");
+        }
+        if !broad {
+            result.command.args([
+                "--ro-bind",
+                BIN,
+                BIN,
+                "--ro-bind",
+                LIB,
+                LIB,
+                "--symlink",
+                "usr/bin",
+                "/bin",
+                "--symlink",
+                "usr/lib",
+                "/lib",
+                "--dir",
+                "/tmp",
+            ]);
+        }
+        if broad {
+            result.command.args([
+                "--symlink",
+                "usr/bin",
+                "/bin",
+                "--symlink",
+                "usr/lib",
+                "/lib",
+            ]);
+        }
+        let lib64 = Path::new("/usr/lib64");
+        if lib64.is_dir() && lib64.canonicalize()? != Path::new(LIB) {
+            if !broad {
+                result
+                    .command
+                    .args(["--ro-bind", "/usr/lib64", "/usr/lib64"]);
+            }
             result.command.args(["--symlink", "usr/lib64", "/lib64"]);
         } else {
             result.command.args(["--symlink", "usr/lib", "/lib64"]);
         }
-        let filter = filter()?;
+        let filter = filter(network)?;
         result.pass("--seccomp", &filter)?;
         Ok(result)
     }
 
-    fn pass(&mut self, option: &str, handle: impl AsFd) -> io::Result<()> {
+    pub(super) fn pass(&mut self, option: &str, handle: impl AsFd) -> io::Result<()> {
         // The worker is single-threaded and performs one spawn. Only these
         // explicitly selected descriptors cross exec, and bwrap consumes them.
         let fd = dup(handle)?;
@@ -225,7 +257,7 @@ fn no_nested_mount(root: &Path) -> io::Result<()> {
 
 /// Filter x86_64 syscall numbers, including the x32 ABI bit. A private network
 /// namespace alone leaves filesystem Unix sockets available through bind mounts.
-fn filter() -> io::Result<File> {
+fn filter(network: bool) -> io::Result<File> {
     const ARCH_X86_64: u32 = 0xc000_003e;
     const KILL: u32 = 0x8000_0000;
     const DENY: u32 = 0x0005_0001; // EPERM
@@ -242,7 +274,23 @@ fn filter() -> io::Result<File> {
     emit(0x20, 0, 0, 0)?; // seccomp_data.nr
     emit(0x35, 0, 1, 0x4000_0000)?;
     emit(0x06, 0, 0, KILL)?;
-    for syscall in [41, 304, 425] {
+    if network {
+        // TCP, UDP and DNS are permitted. AF_UNIX is kept isolated from
+        // both pathname and abstract host sockets even on the host netns.
+        emit(0x15, 0, 4, 41)?;
+        emit(0x20, 0, 0, 16)?; // socket domain (argument 0)
+        emit(0x15, 0, 1, 1)?; // AF_UNIX
+        emit(0x06, 0, 0, DENY)?;
+        emit(0x06, 0, 0, ALLOW)?;
+    }
+    for syscall in (if network {
+        &[304, 425][..]
+    } else {
+        &[41, 304, 425][..]
+    })
+    .iter()
+    .copied()
+    {
         // socket, open_by_handle_at, io_uring_setup
         emit(0x15, 0, 1, syscall)?;
         emit(0x06, 0, 0, DENY)?;

@@ -99,7 +99,7 @@ impl Layout {
         }
         let root = open_absolute_dir(path).map_err(|_| "State root is missing or unsafe")?;
         let mut inventory = Inventory {
-            uid: uid.as_raw(),
+            uid: Some(uid.as_raw()),
             remaining: MAX_ENTRIES,
             files: 0,
             hardlinks: 0,
@@ -118,6 +118,10 @@ impl Layout {
         layout.validate_links()?;
         layout.verify_settings(config, settings)?;
         Ok(layout)
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
     }
 
     pub(crate) fn validate_links(&self) -> Result<(), String> {
@@ -186,7 +190,7 @@ fn same_identity(first: impl AsFd, second: impl AsFd) -> io::Result<bool> {
 }
 
 struct Inventory {
-    uid: u32,
+    uid: Option<u32>,
     remaining: usize,
     files: usize,
     hardlinks: usize,
@@ -196,7 +200,10 @@ impl Inventory {
     fn directory(&mut self, dir: &OwnedFd, depth: usize) -> Result<(), String> {
         let invalid = |_| "Cannot inspect state without following links or crossing mountpoints";
         let before = fs::fstat(dir).map_err(invalid)?;
-        if before.st_uid != self.uid || before.st_mode & 0o7777 != 0o700 {
+        if self
+            .uid
+            .is_some_and(|uid| before.st_uid != uid || before.st_mode & 0o7777 != 0o700)
+        {
             return Err("State directories must be owned by the gateway user and mode 0700".into());
         }
         if depth >= MAX_DEPTH {
@@ -221,7 +228,7 @@ impl Inventory {
             )
             .map_err(invalid)?;
             let metadata = fs::fstat(&child).map_err(invalid)?;
-            if metadata.st_uid != self.uid {
+            if self.uid.is_some_and(|uid| metadata.st_uid != uid) {
                 return Err("State entries must be owned by the gateway user".into());
             }
             match FileType::from_raw_mode(metadata.st_mode) {
@@ -235,7 +242,7 @@ impl Inventory {
                     .map_err(invalid)?;
                     self.directory(&child, depth + 1)?;
                 }
-                FileType::RegularFile if metadata.st_mode & 0o7177 == 0 => {
+                FileType::RegularFile if self.uid.is_none() || metadata.st_mode & 0o7177 == 0 => {
                     self.files += 1;
                     self.hardlinks += usize::from(metadata.st_nlink != 1);
                 }
@@ -248,6 +255,23 @@ impl Inventory {
         }
         Ok(())
     }
+}
+
+pub(crate) fn verify_private_aliases(path: &Path) -> io::Result<()> {
+    let root = open_absolute_dir(path)?;
+    let mut inventory = Inventory {
+        uid: None,
+        remaining: MAX_ENTRIES,
+        files: 0,
+        hardlinks: 0,
+    };
+    inventory.directory(&root, 0).map_err(io::Error::other)?;
+    if inventory.hardlinks != 0 {
+        return Err(io::Error::other(
+            "Protected directory contains a hardlinked file",
+        ));
+    }
+    Ok(())
 }
 
 fn changed(stat: &Stat) -> (i64, i64) {

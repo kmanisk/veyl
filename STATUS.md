@@ -26,6 +26,25 @@ and full baseline output in `target/gate3d/baseline/`.
 Next: build and verify whole-directory masking under the existing
 Bubblewrap and supervisor boundaries.
 
+
+Checkpoint A: `bafbe812e1dba31697efe11afc57b96c7f9efd28`.
+
+## B — Verified sandbox filesystem preflight
+
+Explicit activation now starts an inert process using the production
+mount assembly and execution guard. Safe host developer mounts are
+projected, HOME ancestors of protected paths are private, and final
+directory masks and read-only mounts are verified after assembly.
+The guard verifies a changed mount and PID namespace, an empty tmpfs
+at each mask, capability drop, non-root UID and NoNewPrivileges.
+The launcher refuses visible bind aliases and unexpected kernel
+filesystem mounts.
+
+Session 81155 passed 21/28. Broad activation and persistence case 14
+passed through real Bubblewrap preflight, as did all migration
+controls. Broad workload cases 06–12 remain gated until C connects
+the supervisor. Logs: `target/gate3d/sandbox-verified/`.
+
 ---
 
 # Gate 3c status
