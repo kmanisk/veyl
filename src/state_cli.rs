@@ -8,7 +8,7 @@ use mcp_gateway::security::linux_fs::open_absolute_dir;
 use rustix::fd::{AsFd, OwnedFd};
 use rustix::fs::{self, Dir, FileType, Mode, OFlags, ResolveFlags, Stat};
 
-use crate::http::admission::{parse_clients, read_config};
+use crate::http::admission::{Configuration, parse_clients, read_config};
 use crate::http::operator::verify_approvals;
 use crate::protected_paths::validate_path;
 
@@ -61,12 +61,8 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
 }
 
 fn check(root: &Path, config: &Path) -> Result<(), String> {
-    let uid = rustix::process::geteuid();
-    if uid.is_root() {
-        return Err("State verification requires the unprivileged gateway owner".into());
-    }
-    let dir = open_absolute_dir(root).map_err(|_| "State root is missing or unsafe")?;
-    let metadata = fs::fstat(&dir).map_err(|_| "Cannot inspect state root")?;
+    let layout = Layout::inspect(root)?;
+    let metadata = fs::fstat(&layout.root).map_err(|_| "Cannot inspect state root")?;
     println!(
         "state_root={} owner_uid={} mode={:04o} device={} inode={}",
         root.display(),
@@ -75,50 +71,85 @@ fn check(root: &Path, config: &Path) -> Result<(), String> {
         metadata.st_dev,
         metadata.st_ino
     );
-    let mut inventory = Inventory {
-        uid: uid.as_raw(),
-        remaining: MAX_ENTRIES,
-        files: 0,
-        hardlinks: 0,
-    };
-    inventory.directory(&dir, 0)?;
     println!(
         "regular_files={} hardlink_violations={}",
-        inventory.files, inventory.hardlinks
+        layout.inventory.files, layout.inventory.hardlinks
     );
-    if inventory.hardlinks != 0 {
-        return Err("Protected regular files must have exactly one hardlink".into());
-    }
-    let credentials = required(&dir, root, config, FileType::RegularFile)?;
-    let bytes = read_config(config)?;
-    let settings = parse_clients(config, &bytes)?;
-    let ledger = settings.audit_log.as_deref().ok_or("Missing audit_log")?;
-    let jobs = settings.job_state_path().ok_or("Missing job_state_dir")?;
-    required(&dir, root, ledger, FileType::RegularFile)?;
-    required(&dir, root, jobs, FileType::Directory)?;
-    if settings.clients.iter().any(|client| {
-        root.starts_with(&client.root)
-            || client.root.starts_with(root)
-            || client
-                .extra_roots
-                .iter()
-                .any(|scope| root.starts_with(scope.path()) || scope.path().starts_with(root))
-    }) {
-        return Err("State root must be separate from all approved workspace scopes".into());
-    }
+    layout.validate_links()?;
+    let settings = parse_clients(config, &read_config(config)?)?;
+    layout.verify_settings(config, &settings)?;
     verify_approvals(&settings)?;
-    let now = open_absolute_dir(root).map_err(|_| "State root changed during verification")?;
-    if !same_identity(&dir, now).map_err(|_| "Cannot verify state root identity")?
-        || !same_identity(
-            &credentials,
-            required(&dir, root, config, FileType::RegularFile)?,
-        )
-        .map_err(|_| "Cannot verify credential identity")?
-    {
-        return Err("State root or credential file changed during verification".into());
-    }
     println!("credentials=contained audit=contained jobs=contained");
     Ok(())
+}
+
+/// A descriptor-pinned inventory of the entire dedicated state directory.
+pub(crate) struct Layout {
+    root: OwnedFd,
+    path: PathBuf,
+    inventory: Inventory,
+}
+
+impl Layout {
+    pub(crate) fn inspect(path: &Path) -> Result<Self, String> {
+        validate_path(path)?;
+        let uid = rustix::process::geteuid();
+        if uid.is_root() {
+            return Err("State verification requires the unprivileged gateway owner".into());
+        }
+        let root = open_absolute_dir(path).map_err(|_| "State root is missing or unsafe")?;
+        let mut inventory = Inventory {
+            uid: uid.as_raw(),
+            remaining: MAX_ENTRIES,
+            files: 0,
+            hardlinks: 0,
+        };
+        inventory.directory(&root, 0)?;
+        Ok(Self {
+            root,
+            path: path.to_owned(),
+            inventory,
+        })
+    }
+
+    pub(crate) fn admission(config: &Path, settings: &Configuration) -> Result<Self, String> {
+        let root = config.parent().ok_or("Missing dedicated state root")?;
+        let layout = Self::inspect(root)?;
+        layout.validate_links()?;
+        layout.verify_settings(config, settings)?;
+        Ok(layout)
+    }
+
+    pub(crate) fn validate_links(&self) -> Result<(), String> {
+        if self.inventory.hardlinks != 0 {
+            return Err("Protected regular files must have exactly one hardlink".into());
+        }
+        Ok(())
+    }
+
+    fn verify_settings(&self, config: &Path, settings: &Configuration) -> Result<(), String> {
+        let root = &self.path;
+        let ledger = settings.audit_log.as_deref().ok_or("Missing audit_log")?;
+        let jobs = settings.job_state_path().ok_or("Missing job_state_dir")?;
+        required(&self.root, root, config, FileType::RegularFile)?;
+        required(&self.root, root, ledger, FileType::RegularFile)?;
+        required(&self.root, root, jobs, FileType::Directory)?;
+        if settings.clients.iter().any(|client| {
+            root.starts_with(&client.root)
+                || client.root.starts_with(root)
+                || client
+                    .extra_roots
+                    .iter()
+                    .any(|scope| root.starts_with(scope.path()) || scope.path().starts_with(root))
+        }) {
+            return Err("State root must be separate from all approved workspace scopes".into());
+        }
+        let now = open_absolute_dir(root).map_err(|_| "State root changed during verification")?;
+        if !same_identity(&self.root, now).map_err(|_| "Cannot verify state root identity")? {
+            return Err("State root changed during verification".into());
+        }
+        Ok(())
+    }
 }
 
 fn required(

@@ -47,6 +47,7 @@ pub enum ExecutionMode {
     Standard,
     PersistentYolo,
     Full,
+    BroadYolo,
     Disabled,
     /// Merely expressing intent is never evidence of an authorized YOLO lease.
     YoloRequested,
@@ -57,6 +58,7 @@ impl ExecutionMode {
         match self {
             Self::PersistentYolo => Some("yolo"),
             Self::Full => Some("full"),
+            Self::BroadYolo => Some("broad_yolo"),
             _ => None,
         }
     }

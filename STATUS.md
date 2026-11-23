@@ -1,3 +1,33 @@
+# Gate 3d status
+
+Base: `ca1167356d512a3fd62d30b1f782cc68752a07d6` on `milestone3/broad-yolo`.
+The 28 pins matched. Session 50143 ran the correct hook build for audit
+(13/13). Required baseline was 218/229 in the trusted namespace.
+There were ten broad-mode failures and a systemd user-manager runtime
+failure in service preparation case 07.
+
+## A — Persistent state admission
+
+Broad activation is a distinct stored `broad_yolo` approval and keeps
+`mode=yolo` in CLI status. Legacy enable still selects scoped YOLO.
+Activation verifies the entire private directory containing the config,
+audit and job state. It rejects unsafe ownership, modes, links and
+overlapping workspaces. Runtime file/job entry points remain gated
+until the dedicated launcher is verified.
+
+Targeted session 29735 passed 37/45, including Broad Gateway 01–05, 13
+and 14 and all 14 migration cases. Broad Gateway 06–12 await the
+runtime. Permanent Permissions 17 still uses separate sibling cfg,
+audit and job directories. Their common ancestor also contains the
+client workspaces, so admission correctly rejects the fixture. Its
+negative control passes. Exact output is in `target/gate3d/admission/`
+and full baseline output in `target/gate3d/baseline/`.
+
+Next: build and verify whole-directory masking under the existing
+Bubblewrap and supervisor boundaries.
+
+---
+
 # Gate 3c status
 
 ## Verified baseline

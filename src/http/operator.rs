@@ -30,6 +30,7 @@ const CREATE: OFlags = OFlags::WRONLY
 pub(crate) enum Mode {
     Standard,
     ScopedYolo,
+    BroadYolo,
     Full,
     Disabled,
 }
@@ -41,6 +42,7 @@ impl Mode {
             Some(value) => match value.as_str() {
                 Some("standard") => Ok(Self::Standard),
                 Some("yolo") => Ok(Self::ScopedYolo),
+                Some("broad_yolo") => Ok(Self::BroadYolo),
                 Some("full") => Ok(Self::Full),
                 Some("disabled") => Ok(Self::Disabled),
                 _ => Err("Invalid client authorization mode".into()),
@@ -52,6 +54,7 @@ impl Mode {
         match self {
             Self::Standard => "standard",
             Self::ScopedYolo => "yolo",
+            Self::BroadYolo => "broad_yolo",
             Self::Full => "full",
             Self::Disabled => "disabled",
         }
@@ -63,6 +66,7 @@ impl From<Mode> for ExecutionMode {
         match mode {
             Mode::Standard => Self::Standard,
             Mode::ScopedYolo => Self::PersistentYolo,
+            Mode::BroadYolo => Self::BroadYolo,
             Mode::Full => Self::Full,
             Mode::Disabled => Self::Disabled,
         }
@@ -389,9 +393,9 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
             .as_array()
             .into_iter()
             .flatten()
-            .any(|entry| entry["mode"] == "full")
+            .any(|entry| matches!(entry["mode"].as_str(), Some("full" | "broad_yolo")))
     {
-        return Err("FULL requires authorization policy version 2".into());
+        return Err("FULL and broad YOLO require authorization policy version 2".into());
     }
     if document.get("policy_version").is_none()
         && document["clients"]

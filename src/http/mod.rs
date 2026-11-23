@@ -618,6 +618,9 @@ fn privileged_tool(
     let Some(mode) = client.mode.audit_mode() else {
         return tool_text(true, "Privileged execution mode unavailable");
     };
+    if client.mode == ExecutionMode::BroadYolo {
+        return tool_text(true, "Broad YOLO runtime unavailable");
+    }
     let full = client.mode == ExecutionMode::Full;
     if !state
         .mutations
@@ -747,6 +750,9 @@ fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configu
             let _ = settings;
             return false;
         }
+    }
+    if client.mode == ExecutionMode::BroadYolo {
+        return false;
     }
     if tool == Tool::ReadFile {
         return true;

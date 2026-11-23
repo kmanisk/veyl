@@ -213,7 +213,7 @@ impl AuditSink {
             "tool": tool,
             "phase": phase.label(),
             "unix_seconds": unix_seconds,
-            "yolo": mode == "yolo",
+            "yolo": matches!(mode, "yolo" | "broad_yolo"),
             "effective_mode": if mode == "yolo" { "legacy_scoped_yolo" } else { mode },
         }))
     }
@@ -261,7 +261,7 @@ impl AuditSink {
             "previous_mode": previous,
             "requested_mode": requested,
             "policy_revision": revision,
-            "yolo": requested == "yolo",
+            "yolo": matches!(requested, "yolo" | "broad_yolo"),
         }))
     }
 

@@ -53,7 +53,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         ("set", Some("standard")) | ("standard", None) => "reset",
         ("set", Some("full")) if confirm_full => "full",
         ("set", Some("full")) => return Err("FULL requires --confirm-full".into()),
-        ("set", Some("yolo")) => return Err("Broad YOLO isolation is unavailable".into()),
+        ("set", Some("yolo")) => "broad_yolo",
         ("set", _) => return Err(USAGE.into()),
         _ => command,
     };
@@ -90,18 +90,25 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         verify_approvals(&settings)?;
     }
     let target = match command {
-        "enable" | "full" if previous == Mode::Disabled => return Err("Client is disabled".into()),
-        "enable" if previous == Mode::Full => {
+        "enable" | "full" | "broad_yolo" if previous == Mode::Disabled => {
+            return Err("Client is disabled".into());
+        }
+        "enable" if matches!(previous, Mode::Full | Mode::BroadYolo) => {
             return Err("Select Standard before enabling scoped YOLO".into());
         }
         "enable" => Mode::ScopedYolo,
         "full" => Mode::Full,
+        "broad_yolo" => Mode::BroadYolo,
         "reset" => Mode::Standard,
         "disable" if previous != Mode::Disabled => Mode::Standard,
         _ => previous,
     };
     if !settings.managed && target != previous && command != "status" {
         require_completed_legacy_jobs(&settings)?;
+    }
+    if command == "broad_yolo" {
+        crate::state_cli::Layout::admission(&path, &settings)
+            .map_err(|reason| format!("Broad YOLO isolation is unavailable: {reason}"))?;
     }
     if command == "enable"
         && settings.jobs.is_some()
@@ -134,18 +141,19 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         object.insert("mode".into(), Value::from(target.label()));
         object.remove("yolo_shared_roots");
         object.remove("yolo_revision");
-        if matches!(target, Mode::ScopedYolo | Mode::Full) {
+        if matches!(target, Mode::ScopedYolo | Mode::BroadYolo | Mode::Full) {
             object.insert("yolo_revision".into(), Value::from(revision.as_str()));
         }
         if !implicit.is_empty() {
             object.insert("yolo_shared_roots".into(), serde_json::json!(implicit));
         }
-        document["policy_version"] = if target == Mode::Full || document["policy_version"] == 2 {
-            2
-        } else {
-            1
-        }
-        .into();
+        document["policy_version"] =
+            if matches!(target, Mode::Full | Mode::BroadYolo) || document["policy_version"] == 2 {
+                2
+            } else {
+                1
+            }
+            .into();
         let mut candidate =
             serde_json::to_vec_pretty(&document).map_err(|_| "Cannot encode policy")?;
         candidate.push(b'\n');
@@ -183,12 +191,16 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         } else {
             "enabled"
         },
-        if target == Mode::ScopedYolo {
+        if matches!(target, Mode::ScopedYolo | Mode::BroadYolo) {
             "enabled"
         } else {
             "disabled"
         },
-        target.label(),
+        if target == Mode::BroadYolo {
+            "yolo"
+        } else {
+            target.label()
+        },
         if target == Mode::ScopedYolo {
             "legacy_scoped_yolo"
         } else {
