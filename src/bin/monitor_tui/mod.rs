@@ -130,6 +130,40 @@ fn row(out: &mut String, text: &str, width: usize, color: &str) {
     out.push_str(&cell(text, width));
     out.push_str("\x1b[0m\r\n");
 }
+// Inherit the terminal's live foreground/background. Accent only the
+// selection/status marker; never paint a bright or fixed background.
+fn record_row(out: &mut String, text: &str, width: usize, color: &str, selected: bool) {
+    out.push_str(if selected { "\x1b[1;36m" } else { color });
+    out.push_str(if selected {
+        "> "
+    } else if color.is_empty() {
+        "  "
+    } else {
+        "* "
+    });
+    out.push_str("\x1b[0m");
+    if selected {
+        out.push_str("\x1b[1m");
+    }
+    out.push_str(&cell(text, width.saturating_sub(2)));
+    out.push_str("\x1b[0m\r\n");
+}
+// Border glyphs are trusted literals. Data still passes through cell/safe.
+fn border(out: &mut String, width: usize, top: bool) {
+    out.push_str("\x1b[2m");
+    out.push_str(if top { "╭" } else { "╰" });
+    out.push_str(&"─".repeat(width.saturating_sub(2)));
+    out.push_str(if top { "╮" } else { "╯" });
+    out.push_str("\x1b[0m\r\n");
+}
+fn panel_line(out: &mut String, draw: impl FnOnce(&mut String)) {
+    out.push_str("\x1b[2m│\x1b[0m");
+    draw(out);
+    // All internal row renderers finish with CRLF.
+    debug_assert!(out.ends_with("\r\n"));
+    out.truncate(out.len() - 2);
+    out.push_str("\x1b[2m│\x1b[0m\r\n");
+}
 fn table_rows(value: &Value, key: &str) -> Vec<Value> {
     if let Some(rows) = value.as_array() {
         rows.clone()
@@ -207,7 +241,11 @@ impl View {
                     ),
                     (
                         format!("Audit ledger          {}", strval(&v["audit"])),
-                        "\x1b[32m",
+                        if v["audit"] == "verified" {
+                            ""
+                        } else {
+                            "\x1b[33m"
+                        },
                     ),
                 ];
                 if let Some(entries) = v["configuration"].as_object() {
@@ -242,7 +280,8 @@ impl View {
                     let color = match state.as_str() {
                         "completed" => "\x1b[32m",
                         "running" | "starting" => "\x1b[36m",
-                        "failed" | "canceled" | "uncertain" => "\x1b[31m",
+                        "failed" => "\x1b[31m",
+                        "canceled" | "uncertain" => "\x1b[33m",
                         _ => "",
                     };
                     (
@@ -272,10 +311,11 @@ impl View {
                             strval(&v["client"]),
                             phase
                         ),
-                        if phase == "failure" {
-                            "\x1b[31m"
-                        } else {
-                            "\x1b[36m"
+                        match phase.as_str() {
+                            "failure" => "\x1b[31m",
+                            "uncertain" => "\x1b[33m",
+                            "success" => "\x1b[32m",
+                            _ => "",
                         },
                     )
                 })
@@ -402,7 +442,7 @@ impl View {
     fn draw(&self, screen: &mut Screen) -> Result<(), String> {
         let (w, h) = screen.size();
         let mut out = String::from("\x1b[H\x1b[2J");
-        if h < 9 || w < 30 {
+        if h < 12 || w < 30 {
             row(&mut out, "Veyl - resize terminal; q quits", w, "\x1b[36m");
         } else {
             row(
@@ -429,7 +469,7 @@ impl View {
                     strval(&self.health["audit"])
                 ),
                 w,
-                "\x1b[90m",
+                "\x1b[2m",
             );
             let mut used = 0;
             for (position, tab) in TAB_ORDER.iter().enumerate() {
@@ -438,9 +478,9 @@ impl View {
                     break;
                 }
                 out.push_str(if *tab == self.tab {
-                    "\x1b[30;46m"
+                    "\x1b[1;4;33m"
                 } else {
-                    "\x1b[36m"
+                    "\x1b[2m"
                 });
                 out.push_str(&label);
                 out.push_str("\x1b[0m ");
@@ -474,35 +514,35 @@ impl View {
                     _ => LABELS[self.tab],
                 }
             };
-            row(&mut out, heading, w, "\x1b[7m");
+            border(&mut out, w, true);
+            let inner = w.saturating_sub(2);
+            panel_line(&mut out, |out| {
+                row(out, &format!("  {heading}"), inner, "\x1b[1;4m")
+            });
             let rows = self.rows();
-            let space = h.saturating_sub(8);
+            let space = h.saturating_sub(11);
             let start = self.selected.saturating_sub(space.saturating_sub(1));
             for i in 0..space {
                 if let Some((text, color)) = rows.get(start + i) {
-                    row(
-                        &mut out,
-                        text,
-                        w,
-                        if start + i == self.selected {
-                            "\x1b[30;46m"
-                        } else {
-                            color
-                        },
-                    );
+                    panel_line(&mut out, |out| {
+                        record_row(out, text, inner, color, start + i == self.selected)
+                    });
                 } else {
-                    row(
-                        &mut out,
-                        if i == 0 && rows.is_empty() {
-                            "No records."
-                        } else {
-                            ""
-                        },
-                        w,
-                        "",
-                    );
+                    panel_line(&mut out, |out| {
+                        row(
+                            out,
+                            if i == 0 && rows.is_empty() {
+                                "No records."
+                            } else {
+                                ""
+                            },
+                            inner,
+                            "",
+                        )
+                    });
                 }
             }
+            border(&mut out, w, false);
             let status = if let Some(id) = &self.confirm {
                 format!("Cancel {id}? y confirms / n returns")
             } else if self.editing_filter {
@@ -518,15 +558,18 @@ impl View {
                     self.selected + usize::from(!rows.is_empty())
                 )
             };
-            row(&mut out, &status, w, "\x1b[90m");
+            row(&mut out, &status, w, "\x1b[2m");
+            out.push_str("\x1b[2m");
+            out.push_str(&"─".repeat(w));
+            out.push_str("\x1b[0m\r\n");
             row(
                 &mut out,
                 "[Tab] View  [j/k] Move  [p] Client  [/] Filter  [Enter/l] Logs  [x] Cancel",
                 w,
-                "\x1b[30;47m",
+                "\x1b[39m",
             );
             // Last line intentionally has no newline (avoids terminal scrolling).
-            out.push_str("\x1b[30;47m");
+            out.push_str("\x1b[2m");
             out.push_str(&cell("[n] Next page  [Esc] Back  [r] Refresh  [q] Quit", w));
             out.push_str("\x1b[0m");
         }
@@ -712,5 +755,24 @@ mod tests {
     fn terminal_text_cannot_inject_controls_and_fits_columns() {
         assert_eq!(cell("a\x1b[31m\n", 4), "a?[3");
         assert_eq!(cell("ab", 4), "ab  ");
+    }
+    #[test]
+    fn record_colors_keep_terminal_background_and_text_readable() {
+        let mut rendered = String::new();
+        record_row(&mut rendered, "success", 12, "\x1b[32m", false);
+        assert_eq!(rendered, "\x1b[32m* \x1b[0msuccess   \x1b[0m\r\n");
+        rendered.clear();
+        record_row(&mut rendered, "selected", 12, "\x1b[31m", true);
+        assert_eq!(rendered, "\x1b[1;36m> \x1b[0m\x1b[1mselected  \x1b[0m\r\n");
+    }
+    #[test]
+    fn panel_borders_preserve_width_and_sanitize_contents() {
+        let mut rendered = String::new();
+        border(&mut rendered, 8, true);
+        panel_line(&mut rendered, |out| row(out, "a\x1b", 6, ""));
+        border(&mut rendered, 8, false);
+        assert!(rendered.contains("╭──────╮"));
+        assert!(rendered.contains("a?    "));
+        assert!(rendered.contains("╰──────╯"));
     }
 }

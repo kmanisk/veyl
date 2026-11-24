@@ -40,6 +40,10 @@ clients, / to filter jobs, Enter/l for logs, x then y to cancel a selected job,
 and q to exit. The monitor refreshes on demand while open. Scripts retain
 one-shot JSON with `veyl monitor --view health`.
 
+The terminal interface inherits the current terminal foreground and
+background. Thin, dim panel borders and footer separators organize the
+views; palette-based accents identify the active tab and status markers.
+
 The admin listener uses exact Host and browser Origin checks, a single-use
 hashed pairing verifier, an eight-hour in-memory session, SameSite=Strict and
 HttpOnly cookies scoped to the dashboard, and a session-bound CSRF token for

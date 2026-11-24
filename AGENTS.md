@@ -3,6 +3,19 @@
 Read `SPEC.md` and `HANDOFF.md` before coding. Use `agent-context system` and
 inspect existing jobs, Git status, and resource pressure before major work.
 
+## Current local checkout (2026-11-24)
+
+The active Veyl source repository is now `~/Projects/veyl` (origin
+`kmanisk/veyl`). Historical repositories, linked worktrees and the independent
+acceptance laboratory are preserved under `~/.local/share/veyl-development/`.
+In historical instructions below, resolve the old lab path to
+`~/.local/share/veyl-development/rust-mcp-gateway-lab`. The archived
+repository is not the active editing target. Keep locked suites outside the
+active repository and do not modify their contents or pins. The trusted
+harness's historical Git-directory association must be reviewed separately
+before using it to accept new commits from this independent checkout.
+The existing MCP workspace `~/Projects/veyl-workspace` remains unchanged.
+
 ## Design
 
 - Greenfield Rust project; **not** a rewrite or replacement of any BridgeDev

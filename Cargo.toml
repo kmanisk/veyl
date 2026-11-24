@@ -1,8 +1,31 @@
 [package]
-name = "mcp-gateway"
+name = "veyl"
 version = "0.2.2-alpha"
 edition = "2024"
-default-run = "mcp-gateway"
+default-run = "veyl"
+description = "A lightweight Linux MCP gateway with durable jobs, skills, and native monitoring"
+repository = "https://github.com/kmanisk/veyl"
+readme = "README.md"
+keywords = ["mcp", "linux", "gateway", "agents"]
+categories = ["command-line-utilities", "development-tools"]
+include = ["src/**", "Cargo.toml", "Cargo.lock", "README.md", "assets/veyl.svg", "LICENSE*", "docs/*.md", "tests/**", "examples/nightshift_demo/**"]
+autobins = false
+
+[lib]
+name = "mcp_gateway"
+path = "src/lib.rs"
+
+[[bin]]
+name = "veyl"
+path = "src/main.rs"
+
+[[bin]]
+name = "mcp-gateway"
+path = "src/legacy_main.rs"
+
+[[bin]]
+name = "veyl-monitor"
+path = "src/bin/veyl-monitor.rs"
 
 [features]
 test-hooks = []

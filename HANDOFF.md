@@ -1,5 +1,25 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Product packaging checkpoint
+
+The current checkout is ~/Projects/veyl. The package is named veyl,
+with native veyl and veyl-monitor install targets; mcp-gateway remains
+available for compatibility. The README documents a direct GitHub Cargo
+installation. Historical reports are now under docs/history. See STATUS.md
+for the package, install and regression receipts. Confirm a public
+software license before publishing to crates.io and keep the GitHub
+repository private unless the operator requests otherwise. Continue
+independent acceptance before promoting the alpha to a stable release.
+
+## Current checkout and terminal refinement (2026-11-24)
+
+Use `~/Projects/veyl` for all new development. See AGENTS.md for archived
+lab and historical worktree paths. The current checkout preserves the
+development branch and pending changes. The terminal monitor now has
+theme-native dim panel borders, a footer separator and an amber active tab.
+See STATUS.md for targeted verification and installed binary identity.
+The full independent acceptance of v0.2.2-alpha remains pending.
+
 ## UI/diagnostics candidate (2026-11-24)
 v0.2.2-alpha is locally installed for operator review. The latest
 STATUS.md entry records verification and rollback. AGY must independently

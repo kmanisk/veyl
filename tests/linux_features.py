@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import secrets
 import socket
@@ -782,6 +783,15 @@ class LinuxFeatures(unittest.TestCase):
             self.assertIn(b"\x1b[?1049h",result)
             self.assertIn(b"\x1b[?1049l",result)
             self.assertIn(b"SESSIONS / GRANTS",result)
+            # The live interface must inherit the terminal background. No
+            # reverse video, fixed black/white fills or RGB backgrounds.
+            styles = re.findall(rb"\x1b\[([0-9;]*)m", result)
+            self.assertTrue(styles)
+            allowed = {b"0", b"1", b"2", b"4", b"31", b"32", b"33", b"36", b"39"}
+            self.assertTrue(all(part in allowed for style in styles for part in style.split(b";")), styles)
+            self.assertIn(b"\x1b[1;4;33m",result)
+            self.assertIn("╭".encode(),result)
+            self.assertIn("╯".encode(),result)
         finally:
             os.close(terminal)
             found,status=os.waitpid(pid,os.WNOHANG)

@@ -1,5 +1,62 @@
 # Gate 3d status
 
+## 2026-11-24 — product packaging and repository cleanup
+
+Cargo package is now named `veyl`; the native executable `veyl` and
+`veyl-monitor` can be installed together without symlinks. Shared
+gateway entry code preserves the legacy mcp-gateway binary and library
+name used by existing services and acceptance suites. Historical review
+documents moved to docs/history. The concise README includes a small SVG
+brand icon and direct Cargo installation from the private GitHub main.
+Registry name lookup returned no existing veyl crate. Cargo package
+verification passed (91 source/package files, 224.8 KiB compressed);
+the package installed both requested binaries in a disposable root.
+The Rust suite passed 87 test executions (31 shared gateway unit
+tests exercised for each executable), Clippy, 16 Linux and 5 product
+probes using the native veyl binary, real browser pairing/tab navigation,
+and 6 locked three-mode cases using the legacy binary.
+Receipts: mwuuwhhx-t5tb9x, mwuuygxs-axfg3w, mwuuz1pp-knrwp2.
+No production binary, configuration, credential or service was changed.
+Registry publication requires an explicit license decision; do not assume
+approval for MIT or Apache-2.0. Independent AGY review of the alpha
+candidate and the historical full acceptance battery remain outstanding.
+
+## 2026-11-24 — repository consolidation and bordered monitor
+
+Active source: `~/Projects/veyl`, independent Git checkout of 50886a7,
+with pending changes transferred and compared to the tested source.
+Archived old source, lab, security review and disposable local test
+directory under `~/.local/share/veyl-development/`. All twelve historical
+worktrees remain registered after git worktree repair. All 28 historical
+pins match; the six-case mode suite hash is unchanged. No test oracle was
+edited. The historical trusted harness still points to the archived Git
+repository; AGY should review its association with the new checkout.
+The existing production workspace and services were left in place.
+
+Added dim Unicode panel borders and footer separator; active tabs use
+the terminal's amber accent. No fixed background or reverse video.
+Monitor Rust tests 3/3, Clippy, release build and Linux monitor probes
+2/2 passed (mwuulx7j-dyf6nq). Local monitor binary updated; build and
+installed SHA-256 match:
+bd4db867912c183599cbe5e55cc3d6ba1b3bbc590da8f39886985244c81aeb02.
+Rollback: ~/.local/share/veyl-monitor-border-rollback.775BuU/.
+Both services active; no service restart. Visual review pending.
+
+## 2026-11-24 — terminal theme refinement (operator review pending)
+
+Removed reverse-video and fixed background fills from the TUI. Body text
+inherits the terminal foreground; selection uses a bold accent marker and
+active tabs use underlining. Semantic status colors are confined to markers.
+Headers and footer use default foreground and subdued typography. No new
+dependencies or theme detection process.
+
+Monitor-only Rust tests 2/2, Clippy, release build and two Linux monitor
+integration probes passed, including a PTY assertion against fixed background
+and reverse-video escape codes. Updated the local monitor only; installed
+SHA-256 matches the build: 30293612b91291b33ae461fdc87bad7946c4ac4c0bb3bb27f544e00b1199d342.
+Both gateway services remain active. Visual review with the operator's live
+themes and independent AGY acceptance are pending. Changes are uncommitted.
+
 ## 2026-11-24 — v0.2.2-alpha UI and diagnostics candidate
 
 Base: v0.2.1-alpha, 4134b576b83b46d135ab90fad15ad78ce8176ffe.
