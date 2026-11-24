@@ -750,3 +750,18 @@ AGY owns the next independent consolidated security acceptance.
 BridgeDev then verifies the same commit and extracted package. Live
 Tailscale activation, production unit installation and private publication
 remain separate approval gates.
+
+## v0.1.1-beta independent review
+
+Review the candidate diff against `v0.1.0-beta`. The strict state checks
+still apply to the gateway state root. Pay particular attention to
+descriptor-relative desktop traversal, aliases, public credential and
+session separation, and conditional route ownership and rollback.
+Use the disposable auth, rollback, mount alias and desktop tests in
+`tests/linux_features.py`. The actual-HOME probe and consolidated
+locked results are indexed in [STATUS.md](STATUS.md).
+
+Production promotion requires AGY acceptance and BridgeDev verification
+of this candidate. Publish the private prerelease only after the
+deployment and external MCP call pass. Preserve the prior release and
+BridgeDev's port 443 route.

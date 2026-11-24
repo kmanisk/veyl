@@ -110,7 +110,10 @@ impl Broad {
                 continue;
             }
             if metadata(candidate)?.is_some() {
-                protected.extend(crate::state_cli::protected_objects(candidate)?);
+                protected.extend(crate::state_cli::protected_objects(
+                    candidate,
+                    self.masked.contains(candidate),
+                )?);
             }
         }
         crate::tools::MutationRoot::open_broad_parent(
@@ -175,9 +178,7 @@ impl Broad {
                 };
                 if path != &self.state {
                     crate::protected_paths::Rule::inspect(path, kind).map_err(io::Error::other)?;
-                    if meta.is_dir() {
-                        crate::state_cli::verify_private_aliases(path)?;
-                    }
+                    crate::state_cli::verify_private_aliases(path, kind == Kind::Optional)?;
                 }
                 no_mount_alias(path, &mounts)?;
             } else if path == &self.state {

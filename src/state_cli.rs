@@ -101,6 +101,7 @@ impl Layout {
         let root = open_absolute_dir(path).map_err(|_| "State root is missing or unsafe")?;
         let mut inventory = Inventory {
             uid: Some(uid.as_raw()),
+            masked: false,
             remaining: MAX_ENTRIES,
             files: 0,
             hardlinks: 0,
@@ -193,6 +194,7 @@ fn same_identity(first: impl AsFd, second: impl AsFd) -> io::Result<bool> {
 
 struct Inventory {
     uid: Option<u32>,
+    masked: bool,
     remaining: usize,
     files: usize,
     hardlinks: usize,
@@ -215,6 +217,11 @@ impl Inventory {
         if depth >= MAX_DEPTH {
             return Err("State directory exceeds inspection depth".into());
         }
+        let mut child_flags = OFlags::PATH | OFlags::CLOEXEC;
+        if self.uid.is_none() {
+            // Open the desktop link itself. NO_SYMLINKS still prohibits traversal.
+            child_flags |= OFlags::NOFOLLOW;
+        }
         for entry in Dir::read_from(dir).map_err(invalid)? {
             let entry = entry.map_err(invalid)?;
             let name = entry.file_name();
@@ -225,14 +232,8 @@ impl Inventory {
                 .remaining
                 .checked_sub(1)
                 .ok_or("State directory exceeds inspection entry limit")?;
-            let child = fs::openat2(
-                dir,
-                name,
-                OFlags::PATH | OFlags::CLOEXEC,
-                Mode::empty(),
-                LOCAL,
-            )
-            .map_err(invalid)?;
+            let child =
+                fs::openat2(dir, name, child_flags, Mode::empty(), LOCAL).map_err(invalid)?;
             let metadata = fs::fstat(&child).map_err(invalid)?;
             if self.uid.is_some_and(|uid| metadata.st_uid != uid) {
                 return Err("State entries must be owned by the gateway user".into());
@@ -255,6 +256,10 @@ impl Inventory {
                     self.files += 1;
                     self.hardlinks += usize::from(metadata.st_nlink != 1);
                 }
+                // The link's referent is governed by its own path and inode.
+                FileType::Symlink if self.uid.is_none() && metadata.st_nlink == 1 => {}
+                // A live desktop socket disappears with the containing mount.
+                FileType::Socket if self.masked && metadata.st_nlink == 1 => {}
                 _ => return Err("State contains an unsafe file type or permission mode".into()),
             }
         }
@@ -266,55 +271,66 @@ impl Inventory {
     }
 }
 
-pub(crate) fn verify_private_aliases(path: &Path) -> io::Result<()> {
-    let root = open_absolute_dir(path)?;
-    let mut inventory = Inventory {
-        uid: None,
-        remaining: MAX_ENTRIES,
-        files: 0,
-        hardlinks: 0,
-        objects: None,
-    };
-    inventory.directory(&root, 0).map_err(io::Error::other)?;
-    if inventory.hardlinks != 0 {
-        return Err(io::Error::other(
-            "Protected directory contains a hardlinked file",
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn protected_objects(path: &Path) -> io::Result<BTreeSet<[u64; 2]>> {
-    let file = fs::open(
-        path,
+fn protected_inventory(
+    path: &Path,
+    masked: bool,
+    collect_objects: bool,
+) -> io::Result<BTreeSet<[u64; 2]>> {
+    let parent = open_absolute_dir(path.parent().ok_or(io::ErrorKind::InvalidInput)?)?;
+    let file = fs::openat2(
+        parent,
+        path.file_name().ok_or(io::ErrorKind::InvalidInput)?,
         OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
+        LOCAL,
     )?;
     let stat = fs::fstat(&file)?;
-    if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile {
+    let kind = FileType::from_raw_mode(stat.st_mode);
+    if kind == FileType::RegularFile && !masked {
         if stat.st_nlink != 1 {
             return Err(io::Error::other("Protected file has a hardlink alias"));
         }
-        return Ok(BTreeSet::from([[stat.st_dev, stat.st_ino]]));
+        return Ok(if collect_objects {
+            BTreeSet::from([[stat.st_dev, stat.st_ino]])
+        } else {
+            BTreeSet::new()
+        });
     }
-    let root = open_absolute_dir(path)?;
-    if !same_identity(file, &root)? {
+    if kind != FileType::Directory {
+        return Err(io::Error::other("Unsupported protected path"));
+    }
+    let root = fs::openat(
+        file,
+        ".",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let mut inventory = Inventory {
+        uid: None,
+        masked,
+        remaining: MAX_ENTRIES,
+        files: 0,
+        hardlinks: 0,
+        objects: collect_objects.then(BTreeSet::new),
+    };
+    inventory.directory(&root, 0).map_err(io::Error::other)?;
+    if !same_identity(&root, open_absolute_dir(path)?)? {
         return Err(io::Error::other(
             "Protected directory changed during admission",
         ));
     }
-    let mut inventory = Inventory {
-        uid: None,
-        remaining: MAX_ENTRIES,
-        files: 0,
-        hardlinks: 0,
-        objects: Some(BTreeSet::new()),
-    };
-    inventory.directory(&root, 0).map_err(io::Error::other)?;
     if inventory.hardlinks != 0 {
         return Err(io::Error::other("Protected directory has a hardlink alias"));
     }
     Ok(inventory.objects.unwrap_or_default())
+}
+
+pub(crate) fn verify_private_aliases(path: &Path, masked: bool) -> io::Result<()> {
+    protected_inventory(path, masked, false).map(|_| ())
+}
+
+pub(crate) fn protected_objects(path: &Path, masked: bool) -> io::Result<BTreeSet<[u64; 2]>> {
+    protected_inventory(path, masked, true)
 }
 
 fn changed(stat: &Stat) -> (i64, i64) {

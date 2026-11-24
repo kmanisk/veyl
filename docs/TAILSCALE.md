@@ -1,9 +1,9 @@
 # Private access through Tailscale Serve
 
-Veyl uses the existing tailscaled node and account. It does not log in,
-request a new account, enable Funnel, change the operator, or modify tailnet
-access policy. Use a device that already has MagicDNS, HTTPS certificates
-and an authorized local Tailscale operator.
+Veyl uses the existing tailscaled node and account. It leaves login,
+operator privileges and tailnet access policy to Tailscale. Use a
+device that already has MagicDNS, HTTPS certificates and an authorized
+local Tailscale operator.
 
 Give MCP and administration different HTTPS ports. A node can keep its
 existing BridgeDev listener on 443. Merge these fields into Veyl's private
@@ -53,7 +53,9 @@ proof is important because browser cookies do not distinguish the two
 HTTPS ports on the same hostname. The browser uses Strict SameSite, exact
 HTTPS Origin checking and CSRF protection. Veyl does not use forwarded
 identity, proxy-protocol or forwarding headers to authenticate a request.
-It rejects requests marked as Funnel traffic.
+The dashboard rejects all Funnel traffic. The MCP listener rejects
+Funnel by default. The separate [public MCP configuration and commands](CHATGPT.md)
+enable an authenticated Funnel route on the owned MCP port.
 
 Each Veyl route reserves its entire HTTPS port and has a private Serve
 ownership marker. The owner-only local receipt survives restarts and
@@ -69,7 +71,8 @@ Use the same configuration path to remove the pair:
 mcp-gateway serve rollback --confirm --config "$config"
 ```
 
-`serve remove` is equivalent. Roll back the recorded pair before changing
+`serve remove` is equivalent. If public MCP is active, run
+`serve funnel-rollback` first. Roll back the recorded pair before changing
 its ports, backend addresses or hostname. If another operator changes an
 owned port, Veyl refuses to remove the conflicting configuration. Review
 the effective Serve state before retrying an uncertain outcome. Keep

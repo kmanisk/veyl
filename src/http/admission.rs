@@ -46,6 +46,13 @@ pub struct Client {
     pub job_extra_roots: Vec<JobRoot>,
 }
 
+#[cfg(target_os = "linux")]
+impl Client {
+    pub(super) fn has_digest(&self, value: &[u8; 32]) -> bool {
+        bool::from(self.digest.ct_eq(value))
+    }
+}
+
 pub struct Configuration {
     #[cfg(target_os = "linux")]
     pub audit_limits: mcp_gateway::security::audit::AuditLimits,
@@ -348,6 +355,14 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         static_fields.remove("protected_paths");
         static_fields.remove("skills_disabled");
         static_fields.remove("mcp_servers");
+        // Credential rotation is visible at the next admission.
+        if let Some(funnel) = static_fields
+            .get_mut("tailscale_serve")
+            .and_then(|serve| serve.get_mut("funnel"))
+            .and_then(Value::as_object_mut)
+        {
+            funnel.remove("token_sha256");
+        }
     }
     #[cfg(target_os = "linux")]
     let protected_paths = crate::protected_paths::Rules::parse(&document)?;
@@ -395,6 +410,13 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
     #[cfg(target_os = "linux")]
     {
         settings.skills = crate::skills::Skills::load(path, &document, &settings)?;
+        if let Some(funnel) = settings
+            .tailnet
+            .as_ref()
+            .and_then(|serve| serve.funnel.as_ref())
+        {
+            funnel.validate(&settings)?;
+        }
     }
     Ok(settings)
 }
@@ -496,7 +518,7 @@ pub(crate) fn read_config(path: &Path) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn decode_sha256(value: &str) -> Result<[u8; 32], String> {
+pub(super) fn decode_sha256(value: &str) -> Result<[u8; 32], String> {
     if value.len() != 64
         || !value
             .bytes()
@@ -515,6 +537,19 @@ fn decode_sha256(value: &str) -> Result<[u8; 32], String> {
 pub fn authenticate(clients: &[Client], header: Option<&HeaderValue>, now: u64) -> Option<usize> {
     let header = header?.to_str().ok()?;
     let token = header.strip_prefix("Bearer ")?;
+    let candidate = token_digest(token)?;
+    let mut found = None;
+    for (index, client) in clients.iter().enumerate() {
+        // Inspect every verifier, even after a match.
+        let matched: bool = client.digest.ct_eq(&candidate).into();
+        if matched && now < client.expires_at && client.mode != ExecutionMode::Disabled {
+            found = Some(index);
+        }
+    }
+    found
+}
+
+pub(super) fn token_digest(token: &str) -> Option<[u8; 32]> {
     if token.len() != 64
         || !token
             .bytes()
@@ -522,14 +557,5 @@ pub fn authenticate(clients: &[Client], header: Option<&HeaderValue>, now: u64) 
     {
         return None;
     }
-    let candidate = Sha256::digest(token.as_bytes());
-    let mut found = None;
-    for (index, client) in clients.iter().enumerate() {
-        // Inspect every verifier, even after a match.
-        let matched: bool = client.digest.ct_eq(candidate.as_slice()).into();
-        if matched && now < client.expires_at && client.mode != ExecutionMode::Disabled {
-            found = Some(index);
-        }
-    }
-    found
+    Some(Sha256::digest(token.as_bytes()).into())
 }

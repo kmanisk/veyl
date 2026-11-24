@@ -5,6 +5,8 @@ pub(crate) mod admission;
 #[cfg(target_os = "linux")]
 pub(crate) mod dashboard;
 #[cfg(target_os = "linux")]
+pub(crate) mod funnel;
+#[cfg(target_os = "linux")]
 pub(crate) mod operator;
 #[cfg(target_os = "linux")]
 pub(crate) mod scope;
@@ -61,6 +63,7 @@ type Reply = Response<Full<Bytes>>;
 
 struct Session {
     owner: String,
+    public: bool,
     protocol: Protocol,
     last_used: Instant,
 }
@@ -83,6 +86,8 @@ struct State {
     jobs: Option<Jobs>,
     sessions: Mutex<HashMap<String, Session>>,
     failures: Mutex<HashMap<IpAddr, Failure>>,
+    #[cfg(target_os = "linux")]
+    funnel_rate: Mutex<Failure>,
     #[cfg(target_os = "linux")]
     admin: Option<dashboard::Admin>,
     #[cfg(target_os = "linux")]
@@ -223,6 +228,11 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             sessions: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
             #[cfg(target_os = "linux")]
+            funnel_rate: Mutex::new(Failure {
+                count: 0,
+                until: Instant::now(),
+            }),
+            #[cfg(target_os = "linux")]
             admin,
             #[cfg(target_os = "linux")]
             diagnostic_only,
@@ -326,7 +336,9 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
 }
 
 async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> Reply {
-    if request.uri().path() != "/mcp" {
+    let marker = request.headers().contains_key("Tailscale-Funnel-Request");
+    let path = request.uri().path();
+    if path != "/mcp" && !(marker && path.starts_with("/mcp/")) {
         return simple(StatusCode::NOT_FOUND, "Not found");
     }
     #[cfg(target_os = "linux")]
@@ -346,11 +358,26 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
         .map(|settings| settings.authority(false));
     #[cfg(not(target_os = "linux"))]
     let remote: Option<String> = None;
+    #[cfg(target_os = "linux")]
+    let public = state
+        .tailnet
+        .as_ref()
+        .and_then(|settings| settings.funnel.as_ref())
+        .filter(|_| {
+            host.is_some() && host == remote.as_deref() && funnel::marked(request.headers())
+        });
     if request.uri().authority().is_some()
         || request.headers().get_all(header::HOST).iter().count() != 1
-        || request.headers().contains_key("Tailscale-Funnel-Request")
         || !host.is_some_and(|h| h == expected || h == local_alias || remote.as_deref() == Some(h))
     {
+        return simple(StatusCode::FORBIDDEN, "Invalid Host");
+    }
+    #[cfg(target_os = "linux")]
+    if marker && (public.is_none() || request.uri().query().is_some()) {
+        return simple(StatusCode::FORBIDDEN, "Invalid public MCP route");
+    }
+    #[cfg(not(target_os = "linux"))]
+    if marker {
         return simple(StatusCode::FORBIDDEN, "Invalid Host");
     }
     let origin = if host == remote.as_deref() {
@@ -376,7 +403,25 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
 
     // Admission precedes reading even one byte of an untrusted request body.
     let now = unix_seconds();
-    {
+    #[cfg(target_os = "linux")]
+    if public.is_some() {
+        // Funnel exits share a loopback peer. Keep its aggregate budget
+        // separate from private clients and ignore claimed source IPs.
+        let mut rate = state.funnel_rate.lock().await;
+        let instant = Instant::now();
+        if instant >= rate.until {
+            rate.until = instant + Duration::from_secs(10);
+            rate.count = 0;
+        }
+        if rate.count >= 60 {
+            return simple(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many public MCP requests",
+            );
+        }
+        rate.count += 1;
+    }
+    if !marker {
         let locks = state.failures.lock().await;
         if locks
             .get(&peer)
@@ -407,8 +452,23 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     #[cfg(not(target_os = "linux"))]
     let clients = &state.clients;
 
-    let client_index = authenticate(clients, request.headers().get(header::AUTHORIZATION), now);
+    let bearer = request.headers().get(header::AUTHORIZATION).cloned();
+    #[cfg(target_os = "linux")]
+    let proof = public
+        .and_then(|settings| funnel::proof(path, request.headers(), settings.allow_secret_path));
+    #[cfg(target_os = "linux")]
+    let client_index = if marker {
+        funnel::authenticate(&settings, proof.as_ref(), now)
+    } else {
+        authenticate(clients, bearer.as_ref(), now)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let client_index = authenticate(clients, bearer.as_ref(), now);
     let Some(client_index) = client_index else {
+        if marker {
+            let _ = audit("funnel.denied");
+            return simple(StatusCode::NOT_FOUND, "Not found");
+        }
         let mut locks = state.failures.lock().await;
         let failure = locks.entry(peer).or_insert(Failure {
             count: 0,
@@ -430,6 +490,21 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
         );
     };
     let client = &clients[client_index];
+    #[cfg(target_os = "linux")]
+    if marker
+        && ![AuditPhase::Intent, AuditPhase::Success]
+            .into_iter()
+            .all(|phase| {
+                state.mutations.record_runtime_mode(
+                    &client.id,
+                    "funnel_admission",
+                    "broad_yolo",
+                    phase,
+                )
+            })
+    {
+        return simple(StatusCode::SERVICE_UNAVAILABLE, "Audit unavailable");
+    }
     let accepted = audit("auth.accepted");
     if !accepted {
         return simple(StatusCode::SERVICE_UNAVAILABLE, "Audit unavailable");
@@ -447,8 +522,6 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
         return simple(StatusCode::UNSUPPORTED_MEDIA_TYPE, "JSON required");
     }
 
-    #[cfg(target_os = "linux")]
-    let bearer = request.headers().get(header::AUTHORIZATION).cloned();
     let session_header = request
         .headers()
         .get("Mcp-Session-Id")
@@ -492,6 +565,7 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
             id.clone(),
             Session {
                 owner: client.id.clone(),
+                public: marker,
                 protocol,
                 last_used: Instant::now(),
             },
@@ -506,7 +580,7 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     let Some(session) = sessions.get_mut(&session_id) else {
         return simple(StatusCode::NOT_FOUND, "Unknown MCP session");
     };
-    if session.owner != client.id {
+    if session.owner != client.id || session.public != marker {
         return simple(StatusCode::FORBIDDEN, "Session access denied");
     }
     if session.last_used.elapsed() >= SESSION_IDLE {
@@ -528,8 +602,13 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
                     "Authorization state unavailable or restart required",
                 );
             };
-            let Some(index) = authenticate(&current.clients, bearer.as_ref(), unix_seconds())
-            else {
+            let now = unix_seconds();
+            let index = if marker {
+                funnel::authenticate(&current, proof.as_ref(), now)
+            } else {
+                authenticate(&current.clients, bearer.as_ref(), now)
+            };
+            let Some(index) = index else {
                 return simple(StatusCode::UNAUTHORIZED, "Unauthorized");
             };
             if current.clients[index].id != settings.clients[client_index].id {

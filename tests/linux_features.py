@@ -6,11 +6,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import http.client
 import ssl
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
 import pty
 import select
+import secrets
+import socket
 import socketserver
 import subprocess
 import threading
@@ -35,6 +38,7 @@ class LocalAPI(socketserver.UnixStreamServer):
         self.serial = 0
         self.posts = 0
         self.race = False
+        self.funnel_ports = "443,8443,10000"
         super().__init__(path, TailscalePeer)
 
 
@@ -54,7 +58,9 @@ class TailscalePeer(BaseHTTPRequestHandler):
         if self.headers["Host"] != "local-tailscaled.sock":
             self.reply(400)
         elif self.path == "/localapi/v0/status?peers=false":
-            self.reply(200,{"BackendState":"Running","Self":{"DNSName":TAIL["hostname"]+"."},"CertDomains":[TAIL["hostname"]]})
+            self.reply(200,{"BackendState":"Running","Self":{"DNSName":TAIL["hostname"]+".",
+                        "CapMap":{"funnel":None,"https://tailscale.com/cap/funnel-ports?ports="+self.server.funnel_ports:None}},
+                        "CertDomains":[TAIL["hostname"]]})
         elif self.path == "/localapi/v0/serve-config":
             self.reply(200,self.server.configuration)
         else:
@@ -86,6 +92,96 @@ class LinuxFeatures(unittest.TestCase):
 
     def start(self):
         self.f.start()
+
+    def test_broad_desktop_links_and_state_aliases(self):
+        home = self.f.base
+        state = home / "private-state"
+        state.mkdir(mode=0o700)
+        self.f.config = state / "clients.json"
+        audit = state / "audit.jsonl"
+        audit.touch(mode=0o600)
+        jobs = state / "jobs"
+        jobs.mkdir(mode=0o700)
+        desktop = home / ".codex"
+        desktop.mkdir()
+        secret = desktop / "credential"
+        secret.write_text("masked canary")
+        (desktop / "internal").symlink_to(secret.name)
+        (desktop / "dangling").symlink_to("missing")
+        socket_path = desktop / "session.sock"
+        desktop_socket = socket.socket(socket.AF_UNIX)
+        self.addCleanup(desktop_socket.close)
+        desktop_socket.bind(str(socket_path))
+        readonly = home / ".local/bin"
+        readonly.mkdir(parents=True)
+        tool = readonly / "program"
+        tool.write_text("read-only canary")
+        (readonly / "current").symlink_to(tool.name)
+        systemd = home / ".config/systemd"
+        systemd.mkdir(parents=True)
+        (systemd / "disabled.service").symlink_to("/dev/null")
+        outside_alias = home / "desktop-alias"
+        outside_alias.symlink_to(secret)
+        outside = home / "outside-workspace"
+        outside.write_text("outside canary")
+        self.f.doc.update(policy_version=2, audit_log=str(audit), job_state_dir=str(jobs))
+        self.f.doc["job_profiles"] = {
+            "desktop": {"executable": "/usr/bin/python3",
+                        "args": ["-c",
+                                 "from pathlib import Path; import sys\n"
+                                 "assert all(not Path(p).exists() for p in sys.argv[1:5])\n"
+                                 "assert Path(sys.argv[5]).read_text() == 'read-only canary'\n"
+                                 "try: Path(sys.argv[5]).write_text('unexpected write')\n"
+                                 "except OSError: pass\n"
+                                 "else: raise AssertionError('read-only mount writable')\n"
+                                 "print('desktop-probe-ok')",
+                                 str(self.f.config), str(secret), str(outside_alias),
+                                 str(socket_path), str(readonly / "current")],
+                        "timeout_seconds": 6, "max_output_bytes": 4096},
+        }
+        self.f.doc["clients"][0]["tools"].extend(["write_file", "job_start", "job_logs", "job_status"])
+        self.f.write_config()
+        env = dict(os.environ, HOME=str(home))
+        # Executables and symlinks still invalidate the dedicated state tree.
+        invalid = state / "helper"
+        invalid.write_text("synthetic")
+        invalid.chmod(0o700)
+        check = ("state", "check", "--state-root", state)
+        self.assertNotEqual(self.cli(*check, env=env).returncode, 0)
+        invalid.unlink()
+        invalid.symlink_to(outside)
+        self.assertNotEqual(self.cli(*check, env=env).returncode, 0)
+        invalid.unlink()
+        self.assertEqual(self.cli(*check, env=env).returncode, 0)
+        enable = self.cli("yolo", "set", "--client", "primary", "--mode", "yolo", env=env)
+        self.assertEqual(enable.returncode, 0, enable.stderr)
+        self.start()
+        session = self.f.connect()
+        self.assertFalse(self.f.call("read_file", {"path": str(outside)}, session).get("isError"))
+        for target in (self.f.config, secret, outside_alias):
+            self.assertTrue(self.f.call("read_file", {"path": str(target)}, session).get("isError"))
+        self.assertTrue(self.f.call("write_file", {
+            "path": str(readonly / "current"), "content": "unexpected",
+        }, session).get("isError"))
+        started = self.f.call("job_start", {"profile": "desktop"}, session)
+        self.assertFalse(started.get("isError"), started)
+        job = json.loads(started["content"][0]["text"])["job_id"]
+        deadline = time.monotonic() + 8
+        while True:
+            receipt = self.f.call("job_status", {"job_id": job}, session)
+            self.assertFalse(receipt.get("isError"), receipt)
+            result = json.loads(receipt["content"][0]["text"])
+            if result["state"] not in ("queued", "running", "starting"):
+                break
+            self.assertLess(time.monotonic(), deadline, result)
+            time.sleep(.05)
+        self.assertEqual(result["exit_code"], 0, result)
+        logs = self.f.call("job_logs", {"job_id": job}, session)
+        self.assertIn("desktop-probe-ok", json.dumps(logs))
+        hardlink = home / "hardlink-alias"
+        os.link(secret, hardlink)
+        self.assertTrue(self.f.call("read_file", {"path": str(hardlink)}, session).get("isError"))
+        self.assertTrue(self.f.call("job_start", {"profile": "desktop"}, session).get("isError"))
 
     @contextmanager
     def tail_peer(self):
@@ -135,6 +231,157 @@ class LinuxFeatures(unittest.TestCase):
             peer.configuration["TCP"]["8443"]={"HTTPS":True}
             self.assertNotEqual(self.cli("serve","apply","--confirm","--socket",socket).returncode,0)
             self.assertEqual(peer.posts,3)
+
+    def prepare_public_client(self, *, allow_secret_path=True):
+        state = self.f.base / "private-state"
+        state.mkdir(mode=0o700)
+        self.f.config = state / "clients.json"
+        self.f.audit = state / "audit.jsonl"
+        self.f.audit.touch(mode=0o600)
+        jobs = state / "jobs"
+        jobs.mkdir(mode=0o700)
+        token = secrets.token_hex(32)
+        self.f.doc.update(policy_version=2, audit_log=str(self.f.audit), job_state_dir=str(jobs))
+        self.f.doc["job_profiles"] = {"probe": {
+            "executable": "/usr/bin/true", "args": [], "timeout_seconds": 3, "max_output_bytes": 1024,
+        }}
+        self.f.doc["tailscale_serve"] = {**TAIL, "funnel": {
+            "client": "primary",
+            "token_sha256": hashlib.sha256(token.encode()).hexdigest(),
+            "allow_secret_path": allow_secret_path,
+        }}
+        self.f.write_config()
+        env = dict(os.environ, HOME=str(self.f.base))
+        enable = self.cli("yolo", "set", "--client", "primary", "--mode", "yolo", env=env)
+        self.assertEqual(enable.returncode, 0, enable.stderr)
+        self.f.doc = json.loads(self.f.config.read_text())
+        return token, env
+
+    def test_funnel_authentication_boundary_rotation_and_budget(self):
+        token, _ = self.prepare_public_client()
+        marker = {"Tailscale-Funnel-Request": "?1"}
+        authority = f"{TAIL['hostname']}:{TAIL['mcp_https_port']}"
+        public = {**marker, "Host": authority, "Origin": "https://" + authority}
+        self.start()
+        outside = self.f.base / "public-canary"
+        outside.write_text("funnel-broad-yolo-canary")
+        params = {"protocolVersion": "2025-11-25", "capabilities": {},
+                  "clientInfo": {"name": "funnel-fixture", "version": "1"}}
+        init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params}
+
+        def post(path, payload=init, **headers):
+            return self.f.request(self.f.mcp, "POST", path, payload, **headers)
+
+        path = "/mcp/" + token
+        self.assertEqual(post("/mcp", **public)[0], 404)
+        self.assertEqual(post("/mcp", **public, Authorization="Bearer " + product.TOKEN)[0], 404)
+        self.assertEqual(post("/mcp", **public, **{"Tailscale-User-Login": "fixture"})[0], 404)
+        self.assertEqual(post(path, Host=authority)[0], 404)
+        self.assertEqual(post(path, **marker)[0], 403)
+        self.assertEqual(post(path + "?extra=1", **public)[0], 403)
+        self.assertEqual(post(path, **public, Authorization="Bearer " + token)[0], 404)
+        self.assertEqual(post("/dashboard/api/status", **public)[0], 404)
+        dashboard_host = f"{TAIL['hostname']}:{TAIL['admin_https_port']}"
+        self.assertEqual(self.f.request(self.f.admin, "GET", "/dashboard", Host=dashboard_host,
+                                        **marker)[0], 400)
+        self.assertEqual(post("/mcp", **public, Authorization="Bearer " + token)[0], 200)
+        code, headers, _ = post(path, **public)
+        self.assertEqual(code, 200)
+        session = headers["Mcp-Session-Id"]
+        session_headers = {**public, "Mcp-Session-Id": session}
+        notify = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+        self.assertEqual(post(path, notify, **session_headers)[0], 202)
+        call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {"path": str(outside)}}}
+        status, _, result = post(path, call, **session_headers)
+        self.assertEqual(status, 200)
+        self.assertIn(b"funnel-broad-yolo-canary", result)
+        self.assertEqual(post("/mcp", call, **{"Mcp-Session-Id": session,
+                                              "Authorization": "Bearer " + product.TOKEN})[0], 403)
+        replacement = secrets.token_hex(32)
+        self.f.doc["tailscale_serve"]["funnel"]["token_sha256"] = hashlib.sha256(replacement.encode()).hexdigest()
+        candidate = self.f.config.with_suffix(".new")
+        candidate.touch(mode=0o600)
+        candidate.write_text(json.dumps(self.f.doc))
+        candidate.replace(self.f.config)
+        self.assertEqual(post(path, call, **session_headers)[0], 404)
+        self.assertEqual(post("/mcp/" + replacement, call, **session_headers)[0], 200)
+        self.assertEqual(self.cli("yolo", "disable", "--client", "primary").returncode, 0)
+        self.assertEqual(post("/mcp/" + replacement, call, **session_headers)[0], 404)
+        limited = False
+        for _ in range(61):
+            if post("/mcp", **public)[0] == 429:
+                limited = True
+                break
+        self.assertTrue(limited)
+        self.assertEqual(post("/mcp", Authorization="Bearer " + product.TOKEN)[0], 200)
+        logs = (self.f.base / "gateway.log").read_text() + self.f.audit.read_text()
+        self.assertIn("funnel_admission", logs)
+        self.assertNotIn(token, logs)
+        self.assertNotIn(replacement, logs)
+
+    def test_funnel_route_ownership_and_selective_rollback(self):
+        _, env = self.prepare_public_client(allow_secret_path=False)
+        self.f.doc["admin_listen"] = "127.0.0.1:7332"
+        self.f.write_config()
+        with self.tail_peer() as (socket, peer):
+            def command(action, *args):
+                return self.cli("serve", action, "--socket", socket, *args, env=env)
+
+            self.assertNotEqual(command("funnel-apply", "--confirm").returncode, 0)
+            result = command("apply", "--confirm")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            paired = copy.deepcopy(peer.configuration)
+            self.assertEqual(paired["AllowFunnel"], BRIDGE["AllowFunnel"])
+            self.assertNotEqual(command("funnel-apply").returncode, 0)
+            result = command("funnel-plan")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            peer.funnel_ports = "443,10000"
+            self.assertNotEqual(command("funnel-apply", "--confirm").returncode, 0)
+            peer.funnel_ports = "443,8443,10000"
+            public_key = f"{TAIL['hostname']}:{TAIL['mcp_https_port']}"
+            private_key = f"{TAIL['hostname']}:{TAIL['admin_https_port']}"
+            peer.configuration["AllowFunnel"][private_key] = True
+            self.assertNotEqual(command("funnel-apply", "--confirm").returncode, 0)
+            peer.configuration["AllowFunnel"].pop(private_key)
+            result = command("funnel-apply", "--confirm")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(peer.configuration["AllowFunnel"], {**BRIDGE["AllowFunnel"], public_key: True})
+            self.assertEqual(peer.configuration["Web"], paired["Web"])
+            result = command("inspect")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(json.loads(result.stdout)["private"])
+            result = command("funnel-rollback", "--confirm")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(peer.configuration, paired)
+
+    def test_broad_rejects_visible_mount_alias_and_nested_mount(self):
+        _, env = self.prepare_public_client()
+        state = self.f.config.parent
+        outside = self.f.base / "mountpoint"
+        outside.mkdir()
+        nested = state / "nested"
+        nested.mkdir(mode=0o700)
+
+        def check(*extra_mount, inventory_only=False):
+            # Namespace-local bind mounts disappear with the command.
+            command = ["state", "check", "--state-root", state] if inventory_only else [
+                "yolo", "set", "--client", "primary", "--mode", "yolo",
+            ]
+            return subprocess.run(
+                ["/usr/bin/bwrap", "--bind", "/", "/", *extra_mount, "--", GATEWAY,
+                 *command, "--config", self.f.config],
+                env=env, capture_output=True, text=True, timeout=12,
+            )
+
+        control = check(inventory_only=True)
+        self.assertEqual(control.returncode, 0, control.stderr)
+        alias = check("--bind", state, outside)
+        self.assertNotEqual(alias.returncode, 0)
+        self.assertIn("A visible mount aliases protected state", alias.stderr)
+        inside = check("--bind", outside, nested)
+        self.assertNotEqual(inside.returncode, 0)
+        self.assertIn("without following links or crossing mountpoints", inside.stderr)
 
     def test_remote_host_origin_bearer_and_browser_proof(self):
         self.f.doc["tailscale_serve"]=TAIL

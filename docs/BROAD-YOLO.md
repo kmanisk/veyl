@@ -25,6 +25,12 @@ link. Keep workspaces outside that tree. The gateway rejects symlink
 traversal, nested mounts within private state and visible alternate
 mount aliases.
 
+Keep executable helpers outside the state tree. For a Codex header
+helper, use an owner-only directory such as `~/.codex/veyl-helpers/`,
+which is covered by the existing Broad YOLO mask. Keep the bearer it
+reads in state. Update the helper path in the Codex client configuration
+as part of the upgrade.
+
 Prepare the state directory yourself. Stop admissions and let active
 jobs finish. Keep a private rollback copy of the old configuration,
 ledger segments, metadata, keys and receipts. Copy those objects into
@@ -53,6 +59,17 @@ workspace roots are read-only. Custom Git hook paths and alternate
 application startup mechanisms require explicit rules or separate
 review. Files created at missing protected HOME paths remain sandbox
 local. Unsafe or stale protected path identities fail closed.
+
+Desktop directories can contain symbolic links. Veyl inventories links
+without following them and checks real protected files for hardlink
+aliases. A link inside a masked directory disappears with its containing
+mount. A link inside a read-only directory cannot be replaced through
+that mount. Its referent follows the policy for the referent's own
+location. If a desktop mechanism loads a writable external referent,
+protect that referent explicitly. Existing desktop socket entries are
+accepted only beneath complete directory masks. Rules still reject
+symlink roots and nested mount boundaries. The dedicated state tree
+still rejects all symbolic links, sockets and executable regular files.
 
 A guard executes after all mounts. It verifies the final masks, read-only
 mounts, workspace identity, private PID and mount namespaces, non-root

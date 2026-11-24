@@ -86,6 +86,7 @@ specific upstream tools to approved clients.
 
 - [Skill import and per-client grants](docs/SKILLS.md)
 - [Sandboxed stdio and Streamable HTTP upstream setup](docs/UPSTREAM-MCP.md)
+- [Connect ChatGPT over authenticated Tailscale Funnel](docs/CHATGPT.md)
 - [Implementation checkpoints and verification status](STATUS.md)
 
 The Linux candidate also includes the authenticated `veyl-monitor`,

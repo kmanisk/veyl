@@ -1,4 +1,4 @@
-//! Private, compare-and-swap updates to the local Tailscale Serve configuration.
+//! Compare-and-swap updates to the local Tailscale Serve configuration.
 
 use std::{
     ffi::OsString,
@@ -28,6 +28,7 @@ pub(crate) struct Settings {
     pub hostname: String,
     pub mcp_https_port: u16,
     pub admin_https_port: u16,
+    pub funnel: Option<crate::http::funnel::Settings>,
 }
 
 impl Settings {
@@ -54,6 +55,9 @@ impl Settings {
             return Err(
                 "Use a MagicDNS .ts.net hostname and two distinct unprivileged HTTPS ports".into(),
             );
+        }
+        if parsed.funnel.is_some() && !matches!(parsed.mcp_https_port, 8443 | 10000) {
+            return Err("Veyl Funnel requires a dedicated MCP port of 8443 or 10000".into());
         }
         Ok(parsed)
     }
@@ -122,7 +126,12 @@ fn entries<'a>(
     }
 }
 
-fn route_state(state: &Value, routes: &Routes, index: usize) -> Result<RouteState, String> {
+fn route_state(
+    state: &Value,
+    routes: &Routes,
+    index: usize,
+    allow_public_mcp: bool,
+) -> Result<RouteState, String> {
     let key = routes.authority(index);
     let port = routes.ports[index];
     let same_port = |host: &str| {
@@ -130,7 +139,11 @@ fn route_state(state: &Value, routes: &Routes, index: usize) -> Result<RouteStat
             .and_then(|(_, tail)| tail.parse::<u16>().ok())
             == Some(port)
     };
-    if entries(state, "AllowFunnel")?.any(|(host, enabled)| same_port(host) && *enabled != false) {
+    if entries(state, "AllowFunnel")?.any(|(host, enabled)| {
+        same_port(host)
+            && *enabled != false
+            && !(allow_public_mcp && index == 0 && *host == key && *enabled == true)
+    }) {
         return Err(format!(
             "Public Funnel policy collides with HTTPS port {port}"
         ));
@@ -157,15 +170,15 @@ fn route_state(state: &Value, routes: &Routes, index: usize) -> Result<RouteStat
         entries(state, "TCP")?.find_map(|(key, tcp)| (key.parse() == Ok(port)).then_some(tcp));
     match (seen, tcp) {
         (true, Some(tcp)) if *tcp == json!({"HTTPS":true}) => Ok(RouteState::Owned),
-        (false, None) => Ok(RouteState::Absent),
+        (false, None) if state["AllowFunnel"][&key] != true => Ok(RouteState::Absent),
         _ => Err(format!("Another TCP listener occupies HTTPS port {port}")),
     }
 }
 
 fn transition(state: &Value, routes: &Routes, add: bool) -> Result<Value, String> {
     let statuses = [
-        route_state(state, routes, 0)?,
-        route_state(state, routes, 1)?,
+        route_state(state, routes, 0, add)?,
+        route_state(state, routes, 1, false)?,
     ];
     let mut new = state.clone();
     for (i, status) in statuses.into_iter().enumerate() {
@@ -192,6 +205,44 @@ fn transition(state: &Value, routes: &Routes, add: bool) -> Result<Value, String
         }
     }
     Ok(new)
+}
+
+fn funnel_transition(state: &Value, routes: &Routes, enable: bool) -> Result<Value, String> {
+    if route_state(state, routes, 0, true)? != RouteState::Owned
+        || (enable && route_state(state, routes, 1, false)? != RouteState::Owned)
+    {
+        return Err("Funnel requires an owned Veyl MCP route with a private dashboard".into());
+    }
+    if !matches!(routes.ports[0], 8443 | 10000) {
+        return Err("Funnel requires a dedicated MCP port of 8443 or 10000".into());
+    }
+    let mut next = state.clone();
+    let authority = routes.authority(0);
+    if enable {
+        next["AllowFunnel"][authority] = json!(true);
+    } else if let Some(entries) = next.get_mut("AllowFunnel").and_then(Value::as_object_mut) {
+        entries.remove(&authority);
+    }
+    Ok(next)
+}
+
+fn node_allows_funnel(status: &Value, port: u16) -> bool {
+    let Some(caps) = status["Self"]["CapMap"].as_object() else {
+        return false;
+    };
+    caps.contains_key("funnel")
+        && caps
+            .keys()
+            .filter_map(|cap| cap.strip_prefix("https://tailscale.com/cap/funnel-ports?ports="))
+            .flat_map(|ports| ports.split(','))
+            .any(|entry| match entry.split_once('-') {
+                Some((first, last)) => first
+                    .parse::<u16>()
+                    .ok()
+                    .zip(last.parse::<u16>().ok())
+                    .is_some_and(|(first, last)| (first..=last).contains(&port)),
+                None => entry.parse::<u16>() == Ok(port),
+            })
 }
 
 async fn local_request(
@@ -240,7 +291,7 @@ fn state_object(value: Value) -> Result<Value, String> {
     Ok(value)
 }
 
-const HELP: &str = "usage: mcp-gateway serve <plan|validate|inspect|apply|remove|rollback> --config PATH [--listen 127.0.0.1:PORT] [--state-file PATH | --live] [--socket PATH] [--confirm]";
+const HELP: &str = "usage: veyl serve <plan|validate|inspect|apply|remove|rollback|funnel-plan|funnel-apply|funnel-rollback> --config PATH [--listen 127.0.0.1:PORT] [--state-file PATH | --live] [--socket PATH] [--confirm]";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args.iter().any(|a| a == "--help") {
@@ -250,11 +301,24 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     let action = args.first().and_then(|s| s.to_str()).ok_or(HELP)?;
     if !matches!(
         action,
-        "plan" | "validate" | "inspect" | "apply" | "remove" | "rollback"
+        "plan"
+            | "validate"
+            | "inspect"
+            | "apply"
+            | "remove"
+            | "rollback"
+            | "funnel-plan"
+            | "funnel-apply"
+            | "funnel-rollback"
     ) {
         return Err(HELP.into());
     }
-    let change = matches!(action, "apply" | "remove" | "rollback");
+    let change = matches!(
+        action,
+        "apply" | "remove" | "rollback" | "funnel-apply" | "funnel-rollback"
+    );
+    let funnel_only = action.starts_with("funnel-");
+    let disable_funnel = action == "funnel-rollback";
     let mut config = None;
     let mut fixture = None;
     let mut address = None;
@@ -314,8 +378,33 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         })
         .transpose()?;
     let mcp = address.unwrap_or_else(|| "127.0.0.1:7331".parse().unwrap());
-    let add = action != "remove" && action != "rollback";
-    let routes = if !add {
+    let add = !matches!(action, "remove" | "rollback");
+    let public = settings
+        .tailnet
+        .as_ref()
+        .and_then(|serve| serve.funnel.as_ref());
+    if funnel_only && !disable_funnel && public.is_none() {
+        return Err("Configure tailscale_serve.funnel before enabling public MCP".into());
+    }
+    if action == "funnel-apply" {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let client = settings
+            .clients
+            .iter()
+            .find(|client| {
+                public.is_some_and(|public| client.id == public.client)
+                    && client.mode == mcp_gateway::security::policy::ExecutionMode::BroadYolo
+                    && now < client.expires_at
+            })
+            .ok_or("Funnel needs its approved, unexpired Broad YOLO client")?;
+        crate::jobs::broad::Broad::prepare(&path, &settings)?
+            .probe(&client.root)
+            .map_err(|_| "Broad YOLO sandbox preflight failed")?;
+    }
+    let routes = if !add || disable_funnel {
         let Some(known) = receipt.clone() else {
             println!(
                 "{}",
@@ -362,7 +451,8 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         .build()
         .map_err(|_| "Cannot initialize LocalAPI client")?;
     let socket = socket_path.as_deref().unwrap_or(Path::new(SOCKET));
-    let use_live = change || live || (action == "inspect" && fixture.is_none());
+    let use_live =
+        change || live || (matches!(action, "inspect" | "funnel-plan") && fixture.is_none());
     let (state, etag) = if use_live {
         let (status, _) = runtime.block_on(local_request(
             socket,
@@ -380,12 +470,19 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             return Err("Serve hostname does not match this running Tailscale node".into());
         }
         if add
+            && !disable_funnel
             && !status["CertDomains"]
                 .as_array()
                 .is_some_and(|domains| domains.iter().any(|domain| domain == &routes.host))
         {
             return Err(
                 "This tailnet has not enabled a certificate for the configured hostname".into(),
+            );
+        }
+        if funnel_only && !disable_funnel && !node_allows_funnel(&status, routes.ports[0]) {
+            return Err(
+                "This Tailscale node is not authorized for Funnel on the configured MCP port"
+                    .into(),
             );
         }
         let (state, etag) =
@@ -400,11 +497,19 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         (json!({}), String::new())
     };
 
+    let allow_public = public.is_some() || disable_funnel;
     let owned = [
-        route_state(&state, &routes, 0)? == RouteState::Owned,
-        route_state(&state, &routes, 1)? == RouteState::Owned,
+        route_state(&state, &routes, 0, allow_public)? == RouteState::Owned,
+        route_state(&state, &routes, 1, false)? == RouteState::Owned,
     ];
-    let next = transition(&state, &routes, add)?;
+    let next = if funnel_only {
+        if receipt.is_none() {
+            return Err("Apply private Serve before changing Funnel".into());
+        }
+        funnel_transition(&state, &routes, !disable_funnel)?
+    } else {
+        transition(&state, &routes, add)?
+    };
     if let Some(config) = &policy
         && next != state
     {
@@ -419,7 +524,12 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             settings.audit_limits,
         )
         .map_err(|_| "Serve mutation requires a healthy audit ledger")?;
-        let audit_name = if add { "serve_apply" } else { "serve_remove" };
+        let audit_name = match action {
+            "funnel-apply" => "funnel_apply",
+            "funnel-rollback" => "funnel_rollback",
+            _ if add => "serve_apply",
+            _ => "serve_remove",
+        };
         let record = |phase| {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -449,15 +559,23 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         let (response, _) =
             runtime.block_on(local_request(socket, Method::GET, API, None, vec![]))?;
         let response = state_object(response)?;
-        if [
-            route_state(&response, &routes, 0)?,
-            route_state(&response, &routes, 1)?,
-        ] != [if add {
+        let expected = [if add {
             RouteState::Owned
         } else {
             RouteState::Absent
-        }; 2]
-        {
+        }; 2];
+        let verified = if funnel_only {
+            response["AllowFunnel"][routes.authority(0)] == next["AllowFunnel"][routes.authority(0)]
+                && response["Web"] == next["Web"]
+                && response["TCP"] == next["TCP"]
+                && response["AllowFunnel"] == next["AllowFunnel"]
+        } else {
+            [
+                route_state(&response, &routes, 0, allow_public)?,
+                route_state(&response, &routes, 1, false)?,
+            ] == expected
+        };
+        if !verified {
             let _ = record(AuditPhase::Uncertain);
             return Err("Serve update could not be verified. Inspect current routes.".into());
         }
@@ -473,7 +591,9 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         "{}",
         json!({
             "action": action, "source": if use_live {"tailscaled"} else if fixture.is_some() {"snapshot"} else {"configuration-only"},
-            "changed": change && next != state, "owned_before": owned, "private":true,
+            "changed": change && next != state, "owned_before": owned,
+            "private": (if change { &next } else { &state })["AllowFunnel"][routes.authority(0)] != true,
+            "funnel_configured": public.is_some(),
             "mcp": format!("https://{}/mcp", routes.authority(0)),
             "dashboard": format!("https://{}/dashboard", routes.authority(1)),
             "backends": routes.targets
@@ -511,8 +631,9 @@ pub(crate) fn health(config: &Path, settings: Option<&Settings>) -> Value {
                 ))?;
                 let document = state_object(document)?;
                 Ok([
-                    route_state(&document, &routes, 0)? == RouteState::Owned,
-                    route_state(&document, &routes, 1)? == RouteState::Owned,
+                    route_state(&document, &routes, 0, settings.funnel.is_some())?
+                        == RouteState::Owned,
+                    route_state(&document, &routes, 1, false)? == RouteState::Owned,
                 ])
             };
             match actual() {

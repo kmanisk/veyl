@@ -995,3 +995,38 @@ production service activation require separate approval. GitHub
 authenticated the account as `kmanisk`, and the destination repository
 lookup did not resolve. Creation and private publication remain gated on
 both independent approvals.
+
+## Veyl v0.1.1-beta production candidate
+
+Base `fa13ec6e43e88a1eb56e0aa0b2166c1d4890e13b`, the published
+`v0.1.0-beta`. The existing production service uses the private MCP
+and dashboard routes on 8443 and 9443. Only BridgeDev on 443 is public
+at preflight.
+
+- Broad YOLO handles desktop symlinks as leaf objects and permits
+  sockets inside masked desktop directories. Descriptor-based inventory
+  still rejects state symlinks, executable state files, nested mounts and
+  accessible hardlink or bind aliases. The operator moves executable
+  header helpers outside the private state as part of deployment.
+- Opt-in public MCP uses a separate verifier, dedicated Broad YOLO
+  identity, per-request credential revalidation, bounded admission
+  and private audit events. Private sessions remain separate. The
+  dashboard still rejects Funnel.
+- `veyl serve funnel-plan`, `funnel-apply` and `funnel-rollback` manage
+  the public flag on the existing owned MCP port using conditional
+  Tailscale LocalAPI updates. The private route pair is preserved.
+
+The consolidated verifier passed 287/287 cases with all 28 pins
+unchanged. Cargo formatting, Clippy, 37 Rust tests, the release build,
+5 product probes, 11 Linux probes and a disposable systemd lifecycle
+passed. The actual-HOME candidate probe used separate disposable state,
+verified direct reads and writes, a supervised TCP connection, and
+protected state denial. Job `9a2194f0cd91ea7bbcf59c8fed778e72` exited 0.
+Logs are under `target/v0.1.1-beta/`. Locked suite details and hashes
+before and after are under `target/gate3d/v0.1.1-beta-funnel/`.
+
+Run the independent review before promotion. After both approvals,
+back up the original binaries and both configurations, move the Codex
+helper to `~/.codex/veyl-helpers/`, apply the dedicated Funnel verifier,
+restart only Veyl and test the public route from outside the tailnet.
+The [ChatGPT guide](docs/CHATGPT.md) covers connector setup and revocation.
