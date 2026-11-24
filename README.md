@@ -11,7 +11,7 @@ commands, durable jobs, native diagnostics, skills and upstream MCP servers.
 Install the Linux beta from crates.io (no manual clone or symlink):
 
 ```sh
-cargo install veyl --version 0.2.3-beta --locked --bin veyl --bin veyl-monitor
+cargo install veyl --version 0.2.4-beta --locked --bin veyl --bin veyl-monitor
 ```
 
 Veyl is open source under the MIT license. Source code and prebuilt Linux
@@ -67,8 +67,10 @@ The durable audit remains metadata-only.
 
 ## Daily use
 
-The native YOLO preset and `deny_tools` describe the current development
-checkout. The published 0.2.3-beta still uses explicit tool grants.
+Veyl v0.2.4-beta includes unified permission modes (`Standard`, `YOLO` with
+native tool preset and `deny_tools`, `FULL` with confirmation), confined ad-hoc
+commands (`exec_command`, `task_run`), independent `stdout`/`stderr` log cursors,
+and live local-timezone AM/PM millisecond monitoring.
 
 | Command | Action |
 | --- | --- |
@@ -107,5 +109,4 @@ Veyl is a beta-stage Linux product. Core gateway functions, dashboards,
 skills and durable jobs work; additional subsystem diagnostics, complete
 BridgeDev parity and unattended multi-hour agent orchestration remain
 under development. See [release notes](https://github.com/kmanisk/veyl/releases)
-for version-specific verification and limitations.
 for version-specific verification and limitations.

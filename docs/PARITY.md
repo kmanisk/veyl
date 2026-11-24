@@ -1,5 +1,19 @@
 # BridgeDev capability comparison
 
+## v0.2.4-beta — production-verified capability checkpoint
+
+The production gateway now runs the unified Standard/YOLO/FULL permission
+model, sandbox-confined dynamic execution and task retries, independent log
+cursors, live monotonic detached-job timing, and the corrected dashboard and
+TUI. Live verification through Funnel and local administration confirmed
+28 advertised native tools, structured diagnostics, protected-state masking,
+durable task cancellation and command/file-target previews with explicit
+local trace. ChatGPT's connector catalog still needs a discovery refresh
+or investigation if it exposes fewer tools than the gateway advertises.
+No claim of complete BridgeDev parity: interactive processes, longer task
+budgets, structured Git mutations, optional integrations and autonomous
+agent orchestration remain outstanding.
+
 ## Detached-job timing and target previews (verified integration)
 
 Independently verified: cross-process monotonic live job timing (`live_elapsed_ms`

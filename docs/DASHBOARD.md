@@ -111,9 +111,7 @@ client identity and elapsed milliseconds. It is RAM-only, limited to 24
 calls and 8192 serialized bytes per argument/result value (oversized values
 are replaced by an explicit omission marker). It expires after ten minutes,
 is bound to the paired loopback operator session, requires CSRF proof, and
-is unavailable via the private remote dashboard. One timer clears raw data at
-expiration. A call's Details action fetches a fresh matching trace record by
-call ID. List refreshes request trace state without the captured payloads.
+is unavailable via the private remote dashboard. One timer clears raw data at expiration. A call's Details action fetches a fresh matching trace record by call ID. While explicit local tracing is active, list refreshes may retrieve bounded trace previews; otherwise they request metadata only.
 Stop or clear with t or the dashboard button. Normal monitor quit and dashboard
 sign-out clear their trace. Command output may include sensitive data.
 No raw transport credentials, file-tool payloads or upstream payloads are

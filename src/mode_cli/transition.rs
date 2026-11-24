@@ -244,7 +244,7 @@ pub(super) fn apply(
         Operation::LegacyDowngrade | Operation::SetDisabled(_) => previous,
         Operation::EnableScoped if version3 => {
             return Err(
-                "Use veyl mode yolo to select YOLO, or veyl mode enable to restore client access"
+                "Legacy 'yolo enable' is deprecated under policy version 3; use 'veyl mode set CLIENT yolo' (or 'veyl mode yolo') to select YOLO, or 'veyl mode enable' to restore client access"
                     .into(),
             );
         }

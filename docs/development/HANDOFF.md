@@ -1,5 +1,30 @@
 # Gateway Milestone 1 — Working Handoff
 
+## 2026-11-25 — v0.2.4-beta production handoff
+
+Production upgrade was authorized and completed by AGY. The matching
+`veyl`, `veyl-monitor` and `mcp-gateway` binaries are installed in both
+local-bin and Cargo-bin. BridgeDev independently compared all six files and
+the running gateway executable to the release build. Gateway PID 283899 was
+active and enabled with no unexpected restarts at verification time.
+
+Executable rollback backups belong outside the validated state tree:
+`~/.local/share/veyl-backups/pre-v0.2.4-beta/{local-bin,cargo-bin}`.
+The prior location inside the state tree was rejected by the layout guard;
+AGY moved the backups and validation passed. Verify saved hashes before
+any rollback, and do not restart production with active jobs.
+
+Production smoke tests through actual Funnel, loopback, private HTTPS and
+a real terminal passed; see STATUS.md. The public Funnel check must resolve
+public ingress rather than the node's tailnet address. Preserve mandatory
+Funnel admission markers. Raw local trace is disabled after verification.
+
+Next feature work: persistent interactive processes and shells, bounded
+multi-hour execution, structured authorized Git operations and Nightshift
+agent orchestration. Preserve the release checkpoint and all independent
+test pins. No new permission expansion or production changes for parity
+development.
+
 ## Independent verification, GitHub integration, and rollback-safe upgrade procedure (2026-11-25)
 
 Candidate `target/parity-monitor.ZWQdxYaI` (manifest SHA-256
@@ -14,13 +39,16 @@ and was integrated into `/home/onyx/Projects/veyl` with existing canonical docs 
 - `mcp-gateway.service` executes `~/.local/bin/mcp-gateway` (currently older PID `212410`).
 - `~/.cargo/bin/veyl-monitor` and `~/.cargo/bin/mcp-gateway` hold even older copies. Do not mix an updated CLI/monitor against the older gateway daemon.
 
-### Rollback-safe upgrade procedure (awaiting separate authorization)
-1. Back up all existing binaries across both `~/.local/bin` and `~/.cargo/bin`:
+### Rollback-safe upgrade procedure (historical; v0.2.4-beta upgrade completed)
+1. Back up all existing binaries across both `~/.local/bin` and `~/.cargo/bin` into separate private directories **outside** Veyl's validated state tree. For future upgrades, choose a new backup directory; do not overwrite the existing v0.2.4-beta rollback copies.
    ```sh
-   mkdir -p ~/.local/state/veyl/backups/pre-parity-monitor
-   cp -a ~/.local/bin/{veyl,veyl-monitor,mcp-gateway} ~/.cargo/bin/{veyl,veyl-monitor,mcp-gateway} ~/.local/state/veyl/backups/pre-parity-monitor/
+   install -d -m 700 "$HOME/.local/share/veyl-backups"
+   backup=$(mktemp -d "$HOME/.local/share/veyl-backups/pre-upgrade.XXXXXXXX")
+   mkdir -m 700 "$backup/local-bin" "$backup/cargo-bin"
+   cp -a ~/.local/bin/{veyl,veyl-monitor,mcp-gateway} "$backup/local-bin/"
+   cp -a ~/.cargo/bin/{veyl,veyl-monitor,mcp-gateway} "$backup/cargo-bin/"
    ```
-   (Save Cargo copies into a separate subdir `cargo-bin/` inside the backup dir if preserving exact differing timestamps/hashes.)
+   Never store executable backups under `~/.local/state/veyl`: the state-layout validator rejects them. Before restoring, verify backup hashes against a trusted record; same-UID backups outside protected state are not an independent integrity anchor.
 2. Build release binaries in `/home/onyx/Projects/veyl`:
    ```sh
    cargo build --offline --locked --release

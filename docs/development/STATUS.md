@@ -1,5 +1,56 @@
 # Gate 3d status
 
+## 2026-11-25 — v0.2.4-beta release verification and live upgrade
+
+AGY upgraded the production gateway, CLI and monitor to 0.2.4-beta after
+the accepted checkpoint `cadda0c5b3d384faeec7a12579804eb6d2983401`.
+Release changes: version bump, installation documentation and explicit
+legacy YOLO deprecation wording; no permission expansion.
+
+BridgeDev resumed the interrupted live smoke test and verified the running
+gateway PID 283899, all six installed binaries against the release build,
+and valid Broad YOLO state layout. Executable rollback backups were moved
+outside the state tree by AGY to
+`~/.local/share/veyl-backups/pre-v0.2.4-beta/{local-bin,cargo-bin}`.
+Do not store executable backups inside the validated state directory.
+
+Live checks passed: two fresh public Funnel sessions (28 tools each,
+with and without ChatGPT Origin), private HTTPS dashboard, local dashboard
+and verified audit status, structured system inspection, protected-path
+confinement, independent stream offsets, live detached-job timing and
+cancellation, and real PTY TUI command/file-target previews with local
+AM/PM and increasing elapsed duration (508 to 1016 ms). Trace was disabled
+and cleared after the probe. No credentials, grants or routes changed
+during BridgeDev continuation. No additional production restart.
+
+Independent release verification:
+- Formatting, Clippy with warnings denied, Rust tests (105 executions).
+- 28/28 original locked pins before and after, 287/287 cases, and the
+  additional three-mode draft suite 6/6.
+- 37/37 Python integration probes on release binaries, JS syntax, real PTY,
+  and excluded test hooks. AGY also ran Brave CDP and private systemd
+  lifecycle before the interruption.
+- Initial locked-suite failure was a fixture issue: inherited umask 0077
+  made the requested insecure 0755 directory actually 0700. The unchanged
+  negative control and full battery passed with test-only umask 0022.
+- Cargo audit remains unavailable; no dependency advisory refresh claimed.
+- ChatGPT connector still exposed 16 tools at the last catalog observation,
+  despite 28 advertised by fresh public sessions.
+
+Receipts: `target/release-live-resume-final.log`,
+`target/release-024-verification.log` (initial fixture failure retained),
+`target/release-024-controlled-acceptance.log`,
+`target/release-024-package.log`. Release artifacts in `dist/v0.2.4-beta/`.
+
+Release SHA-256:
+- gateway: `baab7b6268285eae860bac0560404dc79210db35ae32c42eff2f0a55e7ab68b2`
+- CLI: `52903a7ffbfbf15f87f155bd2b862c9c94f66df9fac1079b999035895e6266ff`
+- monitor: `25e94be68623bfec6434c44c24ed99cf3e03b2b2a7cb2e789367868e225d8400`
+
+Next: persistent interactive process management, structured Git,
+operator-approved multi-hour budgets, and durable orchestration.
+Full BridgeDev functional parity is not yet achieved.
+
 ## 2026-11-25 — AGY independent verification and GitHub integration
 
 Independently verified and integrated candidate `target/parity-monitor.ZWQdxYaI`
