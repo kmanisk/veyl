@@ -71,6 +71,7 @@ impl Jobs {
             client_id: owner.to_owned(),
             profile: name,
             argv_sha256: profile.argv_hash(),
+            executable: Some(profile.executable.clone()),
             root: root.path().to_owned(),
             cwd: root.path().to_owned(),
             timeout_seconds: profile.timeout_seconds,

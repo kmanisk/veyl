@@ -4,13 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Veyl</title>
+<link rel="icon" type="image/svg+xml" href="/dashboard/icon.svg">
 <link rel="stylesheet" href="/dashboard/style.css">
 <script src="/dashboard/app.js" defer></script>
 </head>
 <body>
 <header class="masthead">
-  <div class="brand">V<span>eyl</span></div>
+  <div class="brand"><img src="/dashboard/icon.svg" alt="" width="30" height="30"> Veyl <small>operations</small></div>
   <div class="header-controls" id="controls" hidden>
+    <button id="theme" type="button">Theme: system</button>
     <label class="live-toggle"><input type="checkbox" id="live-refresh"> Live refresh</label>
     <button id="refresh" type="button">Refresh</button>
     <button id="logout" type="button">Sign out</button>
@@ -27,18 +29,19 @@
   </form>
   <div id="dashboard" class="dashboard" hidden>
     <nav aria-label="Dashboard views" role="tablist" aria-orientation="vertical">
-      <a href="#audit" role="tab">Activity</a>
-      <a href="#jobs" role="tab">Jobs</a>
-      <a href="#health" role="tab">Health</a>
+      <a href="#health" role="tab">Overview</a>
+      <a href="#audit" role="tab">Activity monitor</a>
+      <a href="#jobs" role="tab">Running jobs</a>
       <a href="#clients">Clients</a>
-      <a href="#configuration">Configuration</a>
-      <a href="#protection">Protected paths</a>
       <a id="skills-nav" href="#skills" hidden>Skills</a>
-      <a href="#servers">Upstream MCP</a>
+      <a href="#servers">Extensions / MCP</a>
+      <a href="#configuration">Connection & settings</a>
+      <a href="#protection">Access & security</a>
     </nav>
     <section class="content">
       <section aria-labelledby="health" class="panel">
         <h1 id="health">Gateway health</h1>
+        <p class="muted">Local gateway, client sessions and verified audit status.</p>
         <dl id="metrics" class="metrics"></dl>
       </section>
       <section aria-labelledby="clients" class="panel">
@@ -107,11 +110,13 @@
       </section>
       <section aria-labelledby="audit" class="panel">
         <h2 id="audit">Activity stream / audit events</h2>
+        <div class="row" id="trace-controls" hidden><button id="trace-toggle" type="button">Capture local command trace</button><span id="trace-state" class="muted"></span></div>
+        <p class="muted">Verified audit metadata is always available. Optional local tracing shows command arguments and JSON results for supported tools.</p>
         <label for="audit-filter">Filter events</label>
         <input id="audit-filter" type="search" placeholder="Client, operation, phase…" autocomplete="off">
         <div class="table">
           <table>
-            <thead><tr><th scope="col">Time</th><th scope="col">Operation</th><th scope="col">Client</th><th scope="col">Phase</th></tr></thead>
+            <thead><tr><th scope="col">Time</th><th scope="col">Operation</th><th scope="col">Client</th><th scope="col">Phase</th><th scope="col">Target / mode</th><th scope="col">Details</th></tr></thead>
             <tbody id="audit-rows"></tbody>
           </table>
         </div>
@@ -129,5 +134,9 @@
     </section>
   </div>
 </main>
+<dialog id="detail-dialog" aria-labelledby="detail-title">
+  <div class="row detail-toolbar"><h2 id="detail-title">Details &amp; parameters</h2><button id="detail-close" type="button">Close</button></div>
+  <pre id="detail-json"></pre>
+</dialog>
 </body>
 </html>

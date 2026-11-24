@@ -351,13 +351,31 @@ impl AuditSink {
             if events.len() == 40 {
                 events.pop_front();
             }
-            events.push_back(json!({
+            let mut view = json!({
                 "time": event["unix_seconds"],
                 "client": event["principal"],
                 "tool": event["tool"],
                 "phase": event["phase"],
                 "mode": event["effective_mode"],
-            }));
+            });
+            // Only verified, already-recorded metadata. Never return raw
+            // credential, argument, environment or file-content fields.
+            for key in [
+                "sequence",
+                "job_id",
+                "argv_sha256",
+                "cwd",
+                "timeout_seconds",
+                "max_output_bytes",
+                "state",
+                "stdout_bytes",
+                "stderr_bytes",
+            ] {
+                if let Some(value) = event.get(key) {
+                    view[key] = value.clone();
+                }
+            }
+            events.push_back(view);
         })?;
         Ok(events.into())
     }

@@ -1,5 +1,29 @@
 # Gate 3d status
 
+## 2026-11-24 — MIT and operator UI checkpoint
+
+MIT license authorized by operator. Product README targets the v0.2.2-alpha
+crate. Development notes consolidated under docs/development with a short
+root AGENTS.md entrypoint. The dashboard uses a BridgeDev-style operations
+layout, system/dark/light themes, same-origin SVG icon, filters and JSON
+details. The terminal monitor supports mouse clicks, wheel, Activity/Jobs
+filters, Enter JSON details, l job logs and readable UTC timestamps.
+New job receipts retain the executable and existing argument hash, not raw
+arguments. Verified audit summaries include bounded job metadata.
+
+Optional explicit local trace retains up to 24 command/job/diagnostic calls
+with bounded argument/result JSON in RAM, for ten minutes and only for the
+owning paired loopback operator session. It cannot be read via remote
+dashboard or another paired session. No durable raw trace or audit schema
+changes. Unsupported tools and historical calls are not captured.
+
+Rust suite and Clippy passed; Linux 16/16, product 6/6 (new trace API
+isolation and actual result comparison), browser pairing/tab navigation/
+details/theme, real PTY filter/details/mouse and locked modes 6/6 passed.
+Receipts mwuve1v1-otafsl and mwuvet7i-yapczl. Full historical acceptance
+and independent AGY review remain pending. Marketplace and complete
+BridgeDev extension-management parity are not implemented.
+
 ## 2026-11-24 — product packaging and repository cleanup
 
 Cargo package is now named `veyl`; the native executable `veyl` and

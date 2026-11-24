@@ -47,7 +47,7 @@ impl Screen {
         let mut screen = Self { tty, saved };
         screen
             .tty
-            .write_all(b"\x1b[?1049h\x1b[?25l")
+            .write_all(b"\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h")
             .map_err(|_| "Cannot open alternate screen")?;
         Ok(screen)
     }
@@ -91,7 +91,9 @@ impl Screen {
 }
 impl Drop for Screen {
     fn drop(&mut self) {
-        let _ = self.tty.write_all(b"\x1b[0m\x1b[?25h\x1b[?1049l");
+        let _ = self
+            .tty
+            .write_all(b"\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l");
         let _ = tcsetattr(&self.tty, OptionalActions::Now, &self.saved);
     }
 }
@@ -171,6 +173,27 @@ fn table_rows(value: &Value, key: &str) -> Vec<Value> {
         value[key].as_array().cloned().unwrap_or_default()
     }
 }
+fn time_label(value: &Value) -> String {
+    let Some(seconds) = value.as_u64() else {
+        return "-".into();
+    };
+    let day = seconds % 86400;
+    format!("{:02}:{:02}:{:02}", day / 3600, day / 60 % 60, day % 60)
+}
+fn mouse_event(bytes: &[u8]) -> Option<(usize, usize, usize)> {
+    let fields = bytes.strip_prefix(b"\x1b[<")?;
+    let fields = fields
+        .strip_suffix(b"M")
+        .or_else(|| fields.strip_suffix(b"m"))?;
+    let mut fields = std::str::from_utf8(fields).ok()?.split(';');
+    let button = fields.next()?.parse().ok()?;
+    let x = fields.next()?.parse().ok()?;
+    let y = fields.next()?.parse().ok()?;
+    if fields.next().is_some() || x == 0 || y == 0 {
+        return None;
+    }
+    Some((button, x, y))
+}
 struct View {
     tab: usize,
     client: Option<String>,
@@ -181,11 +204,52 @@ struct View {
     filter: String,
     editing_filter: bool,
     logs: Option<String>,
+    details: Option<Value>,
+    detail_width: usize,
+    trace_enabled: bool,
     confirm: Option<String>,
     notice: String,
     cursor: String,
 }
 impl View {
+    fn matches(&self, value: &Value) -> bool {
+        value
+            .to_string()
+            .to_ascii_lowercase()
+            .contains(&self.filter.to_ascii_lowercase())
+    }
+    fn audit_rows(&self) -> Vec<Value> {
+        table_rows(&self.value, "events")
+            .into_iter()
+            .rev()
+            .filter(|v| self.matches(v))
+            .collect()
+    }
+    fn selected_record(&self) -> Option<Value> {
+        match self.tab {
+            2 => self.job_rows().get(self.selected).cloned(),
+            3 => self.audit_rows().get(self.selected).cloned(),
+            1 => table_rows(&self.value, "clients")
+                .get(self.selected)
+                .cloned(),
+            4 => table_rows(&self.value, "skills")
+                .get(self.selected)
+                .cloned(),
+            5 => table_rows(&self.value, "servers")
+                .get(self.selected)
+                .cloned(),
+            _ => Some(self.value.clone()),
+        }
+    }
+    fn open_details(&mut self) {
+        if self.details.is_none()
+            && self.logs.is_none()
+            && let Some(value) = self.selected_record()
+        {
+            self.details = Some(value);
+            self.selected = 0;
+        }
+    }
     fn job_rows(&self) -> Vec<Value> {
         let mut rows: Vec<_> = table_rows(&self.value, "jobs")
             .into_iter()
@@ -201,6 +265,19 @@ impl View {
         rows
     }
     fn rows(&self) -> Vec<(String, &'static str)> {
+        if let Some(value) = &self.details {
+            let json = serde_json::to_string_pretty(value).unwrap_or_default();
+            return json
+                .lines()
+                .flat_map(|line| {
+                    let line = safe(line);
+                    line.as_bytes()
+                        .chunks(self.detail_width.max(1))
+                        .map(|part| (String::from_utf8_lossy(part).into_owned(), ""))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+        }
         if self.logs.is_some() {
             let mut lines = Vec::new();
             for stream in ["stdout", "stderr"] {
@@ -290,26 +367,35 @@ impl View {
                             strval(&v["job_id"]),
                             state,
                             strval(&v["exit_code"]),
-                            strval(&v["created_at"]),
+                            time_label(&v["created_at"]),
                             cell(&strval(&v["cwd"]), 26),
-                            strval(&v["profile"])
+                            format_args!("{} {}", strval(&v["profile"]), strval(&v["executable"]))
                         ),
                         color,
                     )
                 })
                 .collect(),
-            3 => table_rows(&self.value, "events")
+            3 => self
+                .audit_rows()
                 .iter()
-                .rev()
                 .map(|v| {
                     let phase = strval(&v["phase"]);
                     (
                         format!(
-                            "{:<12} {:<22} {:<18} {}",
-                            strval(&v["time"]),
-                            strval(&v["tool"]),
-                            strval(&v["client"]),
-                            phase
+                            "{} {} {} {} {}",
+                            cell(&time_label(&v["time"]), 13),
+                            cell(&strval(&v["tool"]), 23),
+                            cell(&strval(&v["client"]), 14),
+                            cell(&phase, 11),
+                            if v["source"] == "live_trace" {
+                                format!(
+                                    "{} ms {}",
+                                    strval(&v["duration_ms"]),
+                                    strval(&v["arguments"])
+                                )
+                            } else {
+                                strval(&v["cwd"])
+                            }
                         ),
                         match phase.as_str() {
                             "failure" => "\x1b[31m",
@@ -412,6 +498,17 @@ impl View {
                     )
                     .map(|(v, _)| v),
                 2 => Ok(Value::Null),
+                3 => {
+                    let mut value = monitor.show("audit", None, None)?;
+                    if let Ok((trace, _)) = monitor.request("trace", None) {
+                        self.trace_enabled = trace["enabled"] == true;
+                        if let Some(events) = value["events"].as_array_mut() {
+                            events.extend(table_rows(&trace, "events"));
+                            events.sort_by_key(|event| event["time"].as_u64().unwrap_or(0));
+                        }
+                    }
+                    Ok(value)
+                }
                 _ => monitor.show(VIEWS[self.tab], self.client.as_deref(), None),
             }
         })();
@@ -433,6 +530,7 @@ impl View {
         self.tab = tab;
         self.selected = 0;
         self.logs = None;
+        self.details = None;
         self.confirm = None;
         self.cursor.clear();
         self.filter.clear();
@@ -491,18 +589,26 @@ impl View {
                 &mut out,
                 &format!(
                     "Veyl / {}   Client: {}   Filter: {}",
-                    if self.logs.is_some() {
+                    if self.details.is_some() {
+                        "details"
+                    } else if self.logs.is_some() {
                         "logs"
                     } else {
                         VIEWS[self.tab]
                     },
-                    self.client.as_deref().unwrap_or("-"),
+                    if self.tab == 3 {
+                        "all"
+                    } else {
+                        self.client.as_deref().unwrap_or("-")
+                    },
                     self.filter
                 ),
                 w,
                 "\x1b[1m",
             );
-            let heading = if self.logs.is_some() {
+            let heading = if self.details.is_some() {
+                "Details & Parameters (JSON) - Esc to close"
+            } else if self.logs.is_some() {
                 "Job output"
             } else {
                 match self.tab {
@@ -510,7 +616,9 @@ impl View {
                     2 => {
                         "JOB ID                            STATUS      EXIT   CREATED    DIRECTORY                  PROFILE"
                     }
-                    3 => "TIME         OPERATION              CLIENT             PHASE",
+                    3 => {
+                        "TIME (UTC)    OPERATION               CLIENT         PHASE       TARGET / DIRECTORY"
+                    }
                     _ => LABELS[self.tab],
                 }
             };
@@ -544,18 +652,29 @@ impl View {
             }
             border(&mut out, w, false);
             let status = if let Some(id) = &self.confirm {
-                format!("Cancel {id}? y confirms / n returns")
+                if id == "local-trace" {
+                    "Capture command arguments and responses for 10 min (may contain secrets)? y confirms".into()
+                } else {
+                    format!("Cancel {id}? y confirms / n returns")
+                }
             } else if self.editing_filter {
                 format!("Filter: {} (Enter accepts, Esc clears)", self.filter)
             } else if !self.notice.is_empty() {
                 self.notice.clone()
+            } else if self.details.is_some() {
+                "JSON details | Esc returns to list".into()
             } else if let Some(id) = &self.logs {
                 format!("Job {id} | Esc returns to jobs")
             } else {
                 format!(
-                    "{} records | selected {}",
+                    "{} records | selected {}{}",
                     rows.len(),
-                    self.selected + usize::from(!rows.is_empty())
+                    self.selected + usize::from(!rows.is_empty()),
+                    if self.trace_enabled {
+                        " | LOCAL TRACE ON"
+                    } else {
+                        ""
+                    }
                 )
             };
             row(&mut out, &status, w, "\x1b[2m");
@@ -564,13 +683,16 @@ impl View {
             out.push_str("\x1b[0m\r\n");
             row(
                 &mut out,
-                "[Tab] View  [j/k] Move  [p] Client  [/] Filter  [Enter/l] Logs  [x] Cancel",
+                "[Tab] View  [j/k] Move  [p] Client  [/] Filter  [Enter] Details  [l] Logs",
                 w,
                 "\x1b[39m",
             );
             // Last line intentionally has no newline (avoids terminal scrolling).
             out.push_str("\x1b[2m");
-            out.push_str(&cell("[n] Next page  [Esc] Back  [r] Refresh  [q] Quit", w));
+            out.push_str(&cell(
+                "[n] Next page  [Esc] Back  [x] Cancel  [t] Trace  [r] Refresh  [q] Quit",
+                w,
+            ));
             out.push_str("\x1b[0m");
         }
         screen
@@ -593,6 +715,9 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
         filter: String::new(),
         editing_filter: false,
         logs: None,
+        details: None,
+        detail_width: 80,
+        trace_enabled: false,
         confirm: None,
         notice: String::new(),
         cursor: String::new(),
@@ -601,7 +726,9 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
     let mut redraw = true;
     let mut escape = Vec::new();
     loop {
-        if Instant::now() >= next && v.confirm.is_none() && !v.editing_filter {
+        v.detail_width = screen.size().0.saturating_sub(4).max(1);
+        if Instant::now() >= next && v.confirm.is_none() && !v.editing_filter && v.details.is_none()
+        {
             v.refresh(monitor);
             next = Instant::now() + Duration::from_secs(2);
             redraw = true;
@@ -614,6 +741,7 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
         if keys.is_empty() && !escape.is_empty() {
             escape.clear();
             v.logs = None;
+            v.details = None;
             v.confirm = None;
             v.editing_filter = false;
             v.filter.clear();
@@ -629,6 +757,51 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                 } else if escape.as_slice() == b"\x1b[B" {
                     escape.clear();
                     b'j'
+                } else if escape.starts_with(b"\x1b[<") {
+                    if key == b'M' || key == b'm' {
+                        if let Some((button, x, y)) = mouse_event(&escape)
+                            && v.confirm.is_none()
+                            && !v.editing_filter
+                        {
+                            if button == 64 {
+                                v.selected = v.selected.saturating_sub(3);
+                            }
+                            if button == 65 {
+                                v.selected = (v.selected + 3).min(v.rows().len().saturating_sub(1));
+                            }
+                            if button == 0 && key == b'M' {
+                                if y == 3 {
+                                    let mut start = 1;
+                                    for (position, tab) in TAB_ORDER.iter().enumerate() {
+                                        let end = start
+                                            + format!(" {} {} ", position + 1, LABELS[*tab]).len()
+                                            + 1;
+                                        if (start..end).contains(&x) {
+                                            v.switch(*tab);
+                                            next = Instant::now();
+                                            break;
+                                        }
+                                        start = end;
+                                    }
+                                } else if v.details.is_none()
+                                    && v.logs.is_none()
+                                    && (7..screen.size().1.saturating_sub(4)).contains(&y)
+                                {
+                                    let space = screen.size().1.saturating_sub(11);
+                                    let start = v.selected.saturating_sub(space.saturating_sub(1));
+                                    let row = start + y - 7;
+                                    if row < v.rows().len() {
+                                        v.selected = row;
+                                        v.open_details();
+                                    }
+                                }
+                            }
+                        }
+                        escape.clear();
+                    } else if escape.len() > 32 {
+                        escape.clear();
+                    }
+                    continue;
                 } else if escape.len() < 3 {
                     continue;
                 } else {
@@ -639,9 +812,28 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                 key
             };
             if key == 3 {
+                if v.trace_enabled {
+                    let _ = monitor.request(
+                        "trace",
+                        Some(serde_json::json!({"enabled":false,"confirm":true})),
+                    );
+                }
                 return Ok(());
             }
             if let Some(id) = v.confirm.take() {
+                if id == "local-trace" {
+                    if key == b'y' {
+                        match monitor.request(
+                            "trace",
+                            Some(serde_json::json!({"enabled":true,"confirm":true})),
+                        ) {
+                            Ok((value, _)) => v.trace_enabled = value["enabled"] == true,
+                            Err(e) => v.notice = e,
+                        }
+                    }
+                    next = Instant::now();
+                    continue;
+                }
                 if key == b'y'
                     && let Some(client) = &v.client
                 {
@@ -669,7 +861,31 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                 continue;
             }
             match key {
-                b'q' => return Ok(()),
+                b'q' => {
+                    if v.trace_enabled {
+                        let _ = monitor.request(
+                            "trace",
+                            Some(serde_json::json!({"enabled":false,"confirm":true})),
+                        );
+                    }
+                    return Ok(());
+                }
+                b't' if v.tab == 3 && v.details.is_none() => {
+                    if v.trace_enabled {
+                        match monitor.request(
+                            "trace",
+                            Some(serde_json::json!({"enabled":false,"confirm":true})),
+                        ) {
+                            Ok(_) => {
+                                v.trace_enabled = false;
+                                next = Instant::now();
+                            }
+                            Err(e) => v.notice = e,
+                        }
+                    } else {
+                        v.confirm = Some("local-trace".into());
+                    }
+                }
                 b'1'..=b'7' => {
                     v.switch(TAB_ORDER[usize::from(key - b'1')]);
                     next = Instant::now();
@@ -696,18 +912,19 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                         next = Instant::now();
                     }
                 }
-                b'/' if v.tab == 2 && v.logs.is_none() => {
+                b'/' if matches!(v.tab, 2 | 3) && v.logs.is_none() && v.details.is_none() => {
                     v.editing_filter = true;
                     v.filter.clear();
                 }
-                b'n' if v.tab == 2 && v.logs.is_none() => {
+                b'n' if v.tab == 2 && v.logs.is_none() && v.details.is_none() => {
                     if let Some(cursor) = v.value["next_cursor"].as_str().filter(|s| clean_id(s)) {
                         v.cursor = cursor.into();
                         v.selected = 0;
                         next = Instant::now();
                     }
                 }
-                b'\r' | b'\n' | b'l' if v.tab == 2 && v.logs.is_none() => {
+                b'\r' | b'\n' if v.logs.is_none() => v.open_details(),
+                b'l' if v.tab == 2 && v.logs.is_none() && v.details.is_none() => {
                     if let Some(id) = v
                         .job_rows()
                         .get(v.selected)
@@ -719,7 +936,11 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                         next = Instant::now();
                     }
                 }
-                b'x' if v.tab == 2 && v.logs.is_none() && v.notice.is_empty() => {
+                b'x' if v.tab == 2
+                    && v.logs.is_none()
+                    && v.details.is_none()
+                    && v.notice.is_empty() =>
+                {
                     if let Some(id) = v
                         .job_rows()
                         .get(v.selected)
@@ -739,7 +960,11 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                 _ => {}
             }
             // Render a tab transition even if more input is buffered.
-            if next <= Instant::now() && v.confirm.is_none() && !v.editing_filter {
+            if next <= Instant::now()
+                && v.confirm.is_none()
+                && !v.editing_filter
+                && v.details.is_none()
+            {
                 v.refresh(monitor);
                 next = Instant::now() + Duration::from_secs(2);
                 v.draw(&mut screen)?;
@@ -774,5 +999,12 @@ mod tests {
         assert!(rendered.contains("╭──────╮"));
         assert!(rendered.contains("a?    "));
         assert!(rendered.contains("╰──────╯"));
+    }
+    #[test]
+    fn mouse_and_timestamp_decoding() {
+        assert_eq!(mouse_event(b"\x1b[<0;12;7M"), Some((0, 12, 7)));
+        assert_eq!(mouse_event(b"\x1b[<0;0;7M"), None);
+        assert_eq!(mouse_event(b"\x1b[<0;12;7;8M"), None);
+        assert_eq!(time_label(&serde_json::json!(3661)), "01:01:01");
     }
 }

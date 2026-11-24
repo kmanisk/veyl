@@ -30,6 +30,8 @@ def main():
         workspace.mkdir(mode=0o700)
         env = {**os.environ, "HOME": str(home)}
         subprocess.run([binary, "init", "--root", workspace], env=env, check=True, capture_output=True)
+        for action in ("revoke","grant"):
+            subprocess.run([binary,"diagnostics",action,"dev"],env=env,check=True,capture_output=True)
         config = home / ".local/state/veyl/clients.json"
         document = json.loads(config.read_text())
         admin_port = port()

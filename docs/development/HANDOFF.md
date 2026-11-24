@@ -1,5 +1,15 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current product and UI checkpoint
+
+Use ~/Projects/veyl on main. Development documents live in
+docs/development; historical reports in docs/history. MIT license
+authorized. See STATUS.md and ../DASHBOARD.md for the local trace and
+operator UI changes. Review trace session boundaries and bounded memory
+in independent acceptance; keep durable audit metadata-only. The
+BridgeDev marketplace, packs, instruction management and remaining tool
+parity are separate unfinished features.
+
 ## Product packaging checkpoint
 
 The current checkout is ~/Projects/veyl. The package is named veyl,

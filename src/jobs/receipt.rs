@@ -60,6 +60,8 @@ pub(super) struct Receipt {
     pub client_id: String,
     pub profile: String,
     pub argv_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<String>,
     pub root: std::path::PathBuf,
     pub cwd: std::path::PathBuf,
     pub timeout_seconds: u64,

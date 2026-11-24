@@ -27,12 +27,14 @@ const HELP: &str = "usage: veyl dashboard open [--remote] [--config PATH] | veyl
 const INDEX: &str = include_str!("dashboard/index.html");
 const STYLE: &str = include_str!("dashboard/style.css");
 const SCRIPT: &str = include_str!("dashboard/app.js");
+const ICON: &str = include_str!("../../assets/veyl.svg");
 
 pub(super) struct Admin {
     pub(super) addr: SocketAddr,
     config: PathBuf,
     sessions: Mutex<HashMap<String, AdminSession>>,
     cpu_sample: Mutex<Option<(Instant, u64)>>,
+    pub(super) trace: std::sync::Mutex<super::trace::Trace>,
 }
 
 struct AdminSession {
@@ -54,6 +56,7 @@ impl Admin {
             config,
             sessions: Mutex::new(HashMap::new()),
             cpu_sample: Mutex::new(None),
+            trace: std::sync::Mutex::new(super::trace::Trace::default()),
         }
     }
 }
@@ -195,7 +198,7 @@ pub(super) async fn serve(request: Request<Incoming>, state: Arc<State>) -> Repl
         ("x-frame-options", "DENY"),
         (
             "content-security-policy",
-            "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         ),
     ] {
         reply
@@ -269,6 +272,7 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             "/dashboard/login" => return asset(INDEX, "text/html; charset=utf-8"),
             "/dashboard/style.css" => return asset(STYLE, "text/css; charset=utf-8"),
             "/dashboard/app.js" => return asset(SCRIPT, "text/javascript; charset=utf-8"),
+            "/dashboard/icon.svg" | "/favicon.ico" => return asset(ICON, "image/svg+xml"),
             "/dashboard" if query.starts_with("token=") => {
                 return if remote {
                     redirect("/dashboard/login")
@@ -337,10 +341,32 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         if let Some(key) = key {
             admin.sessions.lock().await.remove(key);
         }
+        if let Ok(mut trace) = admin.trace.lock() { trace.set(&csrf, false); }
         return cookie(ok(json!({"signed_out": true})), "", 0);
     }
     if method == Method::POST && !csrf_matches {
         return forbidden();
+    }
+    if path == "/api/dashboard/trace" {
+        // Raw command/response previews are explicitly enabled by one
+        // paired loopback operator session. Never expose them over Tailnet.
+        if remote || !csrf_matches { return forbidden(); }
+        if method == Method::GET {
+            return match admin.trace.lock() {
+                Ok(mut trace) => ok(trace.view(&csrf)),
+                Err(_) => unavailable(),
+            };
+        }
+        if method == Method::POST {
+            let Ok(data) = body(request).await else { return bad(); };
+            let Some(enabled) = data["enabled"].as_bool() else { return bad(); };
+            if data["confirm"] != true { return forbidden(); }
+            return match admin.trace.lock() {
+                Ok(mut trace) => if trace.set(&csrf, enabled) { ok(trace.view(&csrf)) } else { simple(Status::CONFLICT, "Trace belongs to another local session") },
+                Err(_) => unavailable(),
+            };
+        }
+        return bad();
     }
     if method == Method::GET && path == "/api/dashboard/integrations" {
         let config = admin.config.clone();

@@ -166,6 +166,35 @@ class ProductFeatures(unittest.TestCase):
         return {"Cookie": headers["Set-Cookie"].split(";")[0], "Origin": origin,
                 "X-CSRF-Token": json.loads(data)["csrf"]}
 
+    def test_local_trace_session_isolation_and_command_response(self):
+        self.doc["clients"][0]["tools"].append("system_info")
+        self.write_config()
+        self.start()
+        headers = self.pair()
+        other = self.pair()
+        path = "/api/dashboard/trace"
+        self.assertEqual(self.request(self.admin,"GET",path)[0],401)
+        self.assertEqual(self.request(self.admin,"GET",path,Cookie=headers["Cookie"])[0],403)
+        self.assertEqual(self.request(self.admin,"POST",path,{"enabled":True,"confirm":False},**headers)[0],403)
+        self.assertEqual(self.request(self.admin,"POST",path,{"enabled":True,"confirm":True},**headers)[0],200)
+        self.assertEqual(self.request(self.admin,"POST",path,{"enabled":True,"confirm":True},**other)[0],409)
+        session = self.connect()
+        result = self.call("system_info",{},session)
+        self.assertFalse(result["isError"],result)
+        status,_,body = self.request(self.admin,"GET",path,**headers)
+        self.assertEqual(status,200)
+        events=json.loads(body)["events"]
+        self.assertEqual(len(events),1)
+        self.assertEqual(events[0]["client"],"primary")
+        self.assertEqual(events[0]["tool"],"system_info")
+        self.assertEqual(events[0]["arguments"],{})
+        self.assertEqual(events[0]["response"],result)
+        self.assertEqual(json.loads(self.request(self.admin,"GET",path,**other)[2])["events"],[])
+        self.assertEqual(self.request(self.admin,"GET","/dashboard/icon.svg")[0],200)
+        self.assertEqual(self.request(self.mcp,"GET","/dashboard/icon.svg")[0],404)
+        self.assertEqual(self.request(self.admin,"POST",path,{"enabled":False,"confirm":True},**headers)[0],200)
+        self.assertEqual(json.loads(self.request(self.admin,"GET",path,**headers)[2])["events"],[])
+
     def test_admin_skills_import_grant_and_revoke(self):
         self.start()
         session = self.connect()

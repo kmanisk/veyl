@@ -10,6 +10,8 @@ pub(crate) mod funnel;
 pub(crate) mod operator;
 #[cfg(target_os = "linux")]
 pub(crate) mod scope;
+#[cfg(target_os = "linux")]
+mod trace;
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -745,6 +747,8 @@ fn dispatch_tools(
     client: &Client,
     settings: &Configuration,
 ) -> Reply {
+    #[cfg(target_os = "linux")]
+    let trace = state.admin.as_ref().and_then(|admin| admin.trace.lock().ok()?.begin(&client.id, &payload));
     #[cfg(not(target_os = "linux"))]
     let _ = settings;
     let response = protocol.dispatch_with_tools(
@@ -1019,6 +1023,13 @@ fn dispatch_tools(
         },
     );
 
+    #[cfg(target_os = "linux")]
+    if let Some((id,started)) = trace
+        && let Some(admin) = &state.admin
+        && let Ok(mut trace) = admin.trace.lock()
+    {
+        trace.finish(id,started,response.as_ref());
+    }
     match response {
         None => simple(StatusCode::ACCEPTED, ""),
         Some(response) => json_response(StatusCode::OK, response, None),

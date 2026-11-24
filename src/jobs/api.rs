@@ -288,6 +288,11 @@ impl Jobs {
                 status["created_at"] = json!(receipt.created_at);
                 status["cwd"] = json!(receipt.cwd);
                 status["profile"] = json!(receipt.profile);
+                status["client"] = json!(receipt.client_id);
+                status["executable"] = json!(receipt.executable);
+                status["argv_sha256"] = json!(receipt.argv_sha256);
+                status["timeout_seconds"] = json!(receipt.timeout_seconds);
+                status["max_output_bytes"] = json!(receipt.max_output_bytes);
             }
             receipts.push(status);
         }

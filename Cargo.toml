@@ -5,6 +5,7 @@ edition = "2024"
 default-run = "veyl"
 description = "A lightweight Linux MCP gateway with durable jobs, skills, and native monitoring"
 repository = "https://github.com/kmanisk/veyl"
+license = "MIT"
 readme = "README.md"
 keywords = ["mcp", "linux", "gateway", "agents"]
 categories = ["command-line-utilities", "development-tools"]

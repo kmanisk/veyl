@@ -12,6 +12,44 @@ let jobRequest = 0;
 let logRequest = 0;
 const tabs = [...document.querySelectorAll('nav a[href^="#"]')];
 let activeTab = "health";
+let traceEnabled = false;
+byId("trace-controls").hidden = remote;
+byId("trace-toggle").addEventListener("click", async () => {
+  if (!traceEnabled && !window.confirm("Capture command arguments and responses for 10 minutes in this local session? They may contain secrets. No trace is written to disk.")) return;
+  try {
+    const state = await request("trace", {enabled: !traceEnabled, confirm:true});
+    traceEnabled = state.enabled;
+    if (traceEnabled && !byId("live-refresh").checked) {
+      byId("live-refresh").checked = true;
+      byId("live-refresh").dispatchEvent(new Event("change"));
+    }
+    await loadAudit();
+  } catch(error) { notice.textContent=error.message; }
+});
+const themeModes = ["system", "dark", "light"];
+let theme = "system";
+try { const saved = localStorage.getItem("veyl-theme"); if (themeModes.includes(saved)) theme = saved; } catch {}
+function applyTheme() {
+  document.documentElement.dataset.theme = theme;
+  byId("theme").textContent = "Theme: " + theme;
+}
+applyTheme();
+byId("theme").addEventListener("click", () => {
+  theme = themeModes[(themeModes.indexOf(theme) + 1) % themeModes.length];
+  try { localStorage.setItem("veyl-theme", theme); } catch {}
+  applyTheme();
+});
+function showDetails(value) {
+  byId("detail-json").textContent = JSON.stringify(value, null, 2);
+  if (!byId("detail-dialog").open) byId("detail-dialog").showModal();
+}
+byId("detail-close").addEventListener("click", () => byId("detail-dialog").close());
+byId("detail-dialog").addEventListener("close", () => byId("detail-json").replaceChildren());
+document.addEventListener("keydown", event => {
+  if (event.key !== "/" || event.ctrlKey || event.altKey || event.metaKey || byId("dashboard").hidden || byId("detail-dialog").open || ["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName)) return;
+  const field = activeTab === "audit" ? "audit-filter" : activeTab === "jobs" ? "job-filter" : null;
+  if (field) { event.preventDefault(); byId(field).focus(); }
+});
 function selectTab(id, focus = false) {
   const available = tabs.filter(tab => !tab.hidden);
   if (!available.some(tab => tab.hash === "#" + id)) id = "health";
@@ -67,6 +105,7 @@ async function request(path, body) {
 }
 
 function showPair() {
+  if (byId("detail-dialog").open) byId("detail-dialog").close();
   byId("live-refresh").checked = false;
   csrf = undefined;
   if (remote) sessionStorage.removeItem(proofKey);
@@ -94,7 +133,7 @@ function table(id, rows) {
 
 function filterRows(id, value) {
   const query = value.trim().toLowerCase();
-  for (const row of byId(id).children) row.hidden = !row.textContent.toLowerCase().includes(query);
+  for (const row of byId(id).children) row.hidden = !(row.dataset.search || row.textContent).toLowerCase().includes(query);
 }
 byId("job-filter").addEventListener("input", event => filterRows("job-rows", event.target.value));
 byId("audit-filter").addEventListener("input", event => filterRows("audit-rows", event.target.value));
@@ -232,12 +271,14 @@ async function loadJobs(cursor = "") {
   if (jobs.length === 0) add(list, "li", "No job records.");
   for (const job of jobs) {
     const row = add(list, "li", "");
+    row.dataset.search = JSON.stringify(job);
     add(row, "code", job.job_id);
     const status = add(row, "span", job.state + (job.exit_code != null ? " · exit " + job.exit_code : ""));
     status.className = "job-state";
     status.dataset.state = job.state;
-    const details = add(row, "span", [job.created_at ? new Date(job.created_at * 1000).toLocaleString() : "", job.cwd, job.profile].filter(Boolean).join(" · "));
+    const details = add(row, "span", [job.created_at ? new Date(job.created_at * 1000).toLocaleString() : "", job.client, job.cwd, job.executable || job.profile].filter(Boolean).join(" · "));
     details.className = "job-details";
+    button(row, "Details", async () => showDetails(job));
     button(row, "Logs", async () => {
       const requestId = ++logRequest;
       const logs = await request("jobs/" + job.job_id + "/logs?client=" + encodeURIComponent(client));
@@ -353,12 +394,30 @@ byId("server-grant").addEventListener("submit", event => {
 
 async function loadAudit() {
   const { events } = await request("audit");
+  if (!remote) {
+    try {
+      const trace = await request("trace");
+      traceEnabled = trace.enabled;
+      byId("trace-toggle").textContent = traceEnabled ? "Stop and clear local trace" : "Capture local command trace";
+      byId("trace-toggle").disabled = trace.busy;
+      byId("trace-state").textContent = traceEnabled ? "Local trace active · up to 24 calls" : trace.busy ? "Another local session owns the trace" : "Trace off";
+      events.push(...trace.events);
+      events.sort((a,b) => a.time-b.time);
+    } catch(error) { byId("trace-state").textContent = "Trace unavailable"; }
+  }
   byId("audit-empty").hidden = events.length !== 0;
   byId("audit-empty").textContent = "No audit events recorded.";
-  table("audit-rows", events.toReversed().map(event => [
-    event.time == null ? "—" : new Date(event.time * 1000).toLocaleString(),
-    event.tool ?? "—", event.client ?? "—", event.phase ?? "—"
-  ]));
+  const body = byId("audit-rows");
+  body.replaceChildren();
+  for (const event of events.toReversed()) {
+    const tr = add(body, "tr", "");
+    tr.dataset.search = JSON.stringify(event);
+    const target = event.source === "live_trace" ? [event.duration_ms == null ? "" : event.duration_ms + " ms", JSON.stringify(event.arguments)].filter(Boolean).join(" · ").slice(0,180) : event.cwd || event.mode || "—";
+    for (const value of [event.time == null ? "—" : new Date(event.time * 1000).toLocaleString(), event.tool ?? "—", event.client ?? "—", event.phase ?? "—", target]) add(tr, "td", value);
+    tr.children[3].className = "event-phase";
+    tr.children[3].dataset.phase = event.phase;
+    button(add(tr, "td", ""), "Details", async () => showDetails(event));
+  }
   filterRows("audit-rows", byId("audit-filter").value);
 }
 

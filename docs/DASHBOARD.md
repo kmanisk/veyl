@@ -28,17 +28,34 @@ validation and configured path rules. They have no policy-editing controls.
 Job logs are visible to the paired operator and may
 contain sensitive output written by the job itself.
 
-The sidebar switches between individual views rather than scrolling through
-all panels. Arrow keys navigate the focused tabs. Live refresh is optional
-and runs only while the browser is open and visible, on the Health, Activity
-and Jobs views. Job rows show creation timestamp, status, directory and
-profile; raw command arguments are not retained in receipts.
+The sidebar switches between individual views. Arrow keys navigate focused
+tabs; / focuses the Activity or Jobs filter. The theme button selects
+system, dark or light. Details buttons open JSON dialogs. Live refresh
+is optional and runs on visible Health, Activity and Jobs views. Job rows
+show creation timestamp, status, owner, directory, profile and (for new
+receipts) executable. Raw command arguments are not retained in receipts.
 
 Open the terminal monitor with `veyl monitor`. Its native full-screen view
 uses 1–7 or Tab to switch views, arrow keys or j/k to navigate, p to cycle
-clients, / to filter jobs, Enter/l for logs, x then y to cancel a selected job,
-and q to exit. The monitor refreshes on demand while open. Scripts retain
+clients, / to filter Activity and Jobs, Enter for JSON details, l for logs,
+x then y to cancel a selected job, and q to exit. Click tabs and data rows
+with a mouse or use the scroll wheel. Esc closes details or clears filters.
+Activity timestamps are UTC; raw timestamps remain in the JSON record.
+Scripts retain
 one-shot JSON with `veyl monitor --view health`.
+
+Optional local command tracing: on the Activity tab press t and confirm with
+y, or use the local dashboard's Capture button. The trace captures supported
+HTTP command, job and diagnostic tool arguments and actual tool results,
+client identity and elapsed milliseconds. It is RAM-only, limited to 24
+calls and 8192 serialized bytes per argument/result value (oversized values
+are replaced by an explicit omission marker). It expires after ten minutes,
+is bound to the paired loopback operator session, requires CSRF proof, and
+is unavailable via the private remote dashboard. Stop/clear with t or the
+dashboard button. Normal monitor quit and dashboard sign-out clear their
+trace. Command output may include sensitive data; enable only when needed.
+No raw transport credentials, file-tool payloads or upstream payloads are
+captured. Historical commands cannot be reconstructed from hashes.
 
 The terminal interface inherits the current terminal foreground and
 background. Thin, dim panel borders and footer separators organize the

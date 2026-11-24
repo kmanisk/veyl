@@ -733,7 +733,11 @@ class LinuxFeatures(unittest.TestCase):
         self.assertTrue(self.f.call("system_inspect",{},session)["isError"])
 
     def test_monitor_pairing_views_and_keyboard(self):
+        self.f.doc["clients"][0]["tools"].append("system_info")
+        self.f.write_config()
         self.start()
+        reply = self.f.call("system_info",{},self.f.connect())
+        self.assertFalse(reply["isError"],reply)
         def pair():
             return self.f.cli("dashboard","pair")
         cmd=[str(MONITOR),"--listen",f"127.0.0.1:{self.f.admin}"]
@@ -759,7 +763,7 @@ class LinuxFeatures(unittest.TestCase):
             os.close(write)
             result=bytearray()
             deadline=time.monotonic()+8
-            sent=False
+            stage=0
             sent_quit=False
             while time.monotonic()<deadline:
                 readable,_,_=select.select([terminal],[],[],.2)
@@ -772,13 +776,30 @@ class LinuxFeatures(unittest.TestCase):
                 if not chunk:
                     break
                 result.extend(chunk)
-                if b"Veyl / audit" in result and not sent:
+                screen=result.rsplit(b"\x1b[H\x1b[2J",1)[-1]
+                if stage==0 and b"Veyl / audit" in screen and b"system_info" in screen:
+                    os.write(terminal,b"/system_info\r")
+                    stage=1
+                elif stage==1 and b"Filter: system_info" in screen and b"system_info" in screen:
+                    os.write(terminal,b"\r")
+                    stage=2
+                elif stage==2 and b"Details & Parameters (JSON)" in screen:
+                    self.assertIn(b'"tool": "system_info"',screen)
+                    os.write(terminal,b"\x1b")
+                    stage=3
+                elif stage==3 and b"Veyl / audit" in screen and b"system_info" in screen:
+                    os.write(terminal,b"\x1b[<0;8;7M")
+                    stage=4
+                elif stage==4 and b"Details & Parameters (JSON)" in screen:
                     os.write(terminal,b"4")
-                    sent=True
+                    stage=5
                 if b"Veyl / clients" in result and not sent_quit:
                     os.write(terminal,b"q")
                     sent_quit=True
             self.assertIn(b"Veyl / clients",result)
+            self.assertEqual(stage,5)
+            self.assertIn(b"\x1b[?1006h",result)
+            self.assertIn(b"\x1b[?1006l",result)
             self.assertIn(b"primary",result)
             self.assertIn(b"\x1b[?1049h",result)
             self.assertIn(b"\x1b[?1049l",result)

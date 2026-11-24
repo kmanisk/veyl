@@ -63,9 +63,20 @@ try {
     assert.equal(await evaluate("document.querySelector('[role=tab][aria-selected=true]').hash"),"#"+id);
   }
   await evaluate("document.querySelector('nav a[href=\"#health\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
-  assert.deepEqual(await evaluate(visible),["clients"]);
+  assert.deepEqual(await evaluate(visible),["audit"]);
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'/',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.id"),"audit-filter");
+  await until(()=>evaluate("document.querySelector('#audit-rows button') !== null"));
+  await evaluate("document.querySelector('#audit-rows button').click()");
+  assert.equal(await evaluate("document.querySelector('#detail-dialog').open"),true);
+  assert.ok((await evaluate("document.querySelector('#detail-json').textContent")).includes('"tool"'));
+  await evaluate("document.querySelector('#detail-close').click()");
+  assert.equal(await evaluate("document.querySelector('#detail-dialog').open"),false);
+  await evaluate("document.querySelector('#theme').click()");
+  assert.equal(await evaluate("document.documentElement.dataset.theme"),"dark");
+  assert.equal(await evaluate("document.querySelector('link[rel=icon]').getAttribute('href')"),"/dashboard/icon.svg");
   await send("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
-  assert.deepEqual(await evaluate(visible),["clients"]);
+  assert.deepEqual(await evaluate(visible),["audit"]);
   console.log("DASHBOARD_TABS_AND_KEYBOARD_PASS");
 } finally {
   if(ws)ws.close();

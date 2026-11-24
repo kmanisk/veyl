@@ -8,15 +8,14 @@ commands, durable jobs, native diagnostics, skills and upstream MCP servers.
 
 ## Install
 
-Cargo installation from the repository (no manual clone or symlink):
+Install the Linux alpha from crates.io (no manual clone or symlink):
 
 ```sh
-cargo install --git https://github.com/kmanisk/veyl --branch main --locked --bin veyl --bin veyl-monitor
+cargo install veyl --version 0.2.2-alpha --locked --bin veyl --bin veyl-monitor
 ```
 
-The repository is currently private; GitHub access is required.
-Crates.io publication is pending. Prebuilt Linux archives are available
-on the [releases page](https://github.com/kmanisk/veyl/releases).
+The crate is licensed under MIT. The GitHub repository is currently private;
+the crates.io package contains the installable source and user documentation.
 
 Requires Linux, Bubblewrap (`bwrap`) and Git. Add Tailscale for remote
 access and a systemd user session for persistent service mode.
@@ -58,10 +57,11 @@ veyl ui
 veyl monitor
 ```
 
-The web dashboard has individual sidebar views for clients, jobs, activity,
-skills and upstream MCP servers. The native terminal monitor has live
-activity, selectable jobs, logs and keyboard navigation. Both pair
-automatically with the local gateway.
+Both pair automatically. The dashboard has sidebar views, themes and JSON
+detail dialogs. The terminal monitor supports keyboard and mouse navigation,
+activity/job filtering, Enter for JSON details and l for job logs.
+Use t on Activity (or the local dashboard's Capture button) for a bounded,
+temporary command/response trace. The durable audit remains metadata-only.
 
 ## Daily use
 
