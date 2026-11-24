@@ -1049,3 +1049,30 @@ browser probe after the independent review and rollout. ChatGPT account
 discovery requires a separate observation. Current documentation does
 not establish a browser-only connector transport or a restriction on
 port 8443.
+
+## Veyl v0.1.3-beta native shared Funnel
+
+The state-layout failure came from the adapter-era Serve backup with an
+unsafe directory mode inside the private state tree. The operator
+relocated it to a protected rollback directory. The production public
+client then read an absolute project path outside its workspace. Its
+attempt to read the policy file remained denied.
+
+The `tailscale_serve.shared_funnel` option adds an owned `/veyl/`
+handler to an existing public HTTPS authority on 443. Existing private
+Serve ports and the public root handler are preserved. The CLI validates
+the path namespace, uses conditional LocalAPI requests, and can adopt or
+restore the exact temporary adapter. Retiring the dedicated public flag
+is an explicit operation after verification.
+
+The dashboard shows redacted configuration, route status, and Broad
+YOLO protection rules and state-layout validation. Late job-log
+responses cannot replace a more recently selected job's logs.
+
+The verifier passed all 287 locked tests and retained all 28 pins.
+38 Rust tests, 5 product probes, 14 Linux tests, the systemd fixture
+lifecycle and disposable Brave dashboard controls passed. An actual
+Codex app-server forwarded a synthetic upstream tool. An actual
+Antigravity client completed authenticated discovery. Local
+receipts are under `target/v0.1.3-beta/`. Production routing and
+publication follow independent review and live checks.

@@ -30,6 +30,8 @@
       <a href="#clients">Clients</a>
       <a href="#jobs">Jobs</a>
       <a href="#audit">Audit</a>
+      <a href="#configuration">Configuration</a>
+      <a href="#protection">Protected paths</a>
       <a id="skills-nav" href="#skills" hidden>Skills</a>
       <a href="#servers">Upstream MCP</a>
     </nav>
@@ -74,7 +76,7 @@
         <details>
           <summary>Add an upstream server</summary>
           <form id="server-add" class="config-form">
-            <label>Server ID <input name="id" required pattern="[a-z0-9_-]{1,24}"></label>
+            <label>Server ID <input name="id" required pattern="[a-z0-9_\-]{1,24}"></label>
             <label>Transport <select name="action" id="server-transport"><option value="add-http">HTTP / HTTPS</option><option value="add-stdio">Sandboxed stdio</option></select></label>
             <div id="server-http-fields">
               <label>Endpoint URL <input name="url" type="url" placeholder="http://127.0.0.1:9000/mcp"></label>
@@ -107,6 +109,15 @@
           </table>
         </div>
         <p id="audit-empty" hidden>No audit events recorded.</p>
+      </section>
+      <section aria-labelledby="configuration" class="panel">
+        <h2 id="configuration">Configuration and service</h2>
+        <dl id="configuration-summary" class="metrics"></dl>
+        <dl id="integrations-summary" class="metrics"></dl>
+      </section>
+      <section aria-labelledby="protection" class="panel">
+        <h2 id="protection">Broad YOLO protected paths</h2>
+        <dl id="protected-summary" class="metrics"></dl>
       </section>
     </section>
   </div>

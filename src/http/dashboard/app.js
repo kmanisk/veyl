@@ -8,6 +8,7 @@ const proofKey = "veyl-session-proof";
 let csrf = remote ? sessionStorage.getItem(proofKey) : undefined;
 let nextPage;
 let jobRequest = 0;
+let logRequest = 0;
 
 async function request(path, body) {
   const response = await fetch(api + path, body === undefined ? {
@@ -21,7 +22,7 @@ async function request(path, body) {
     if (response.status === 401 && path !== "pair") showPair();
     const message = response.headers.get("content-type")?.includes("application/json")
       ? (await response.json()).error : await response.text();
-    throw new Error(message);
+    throw Object.assign(new Error(message), { status: response.status });
   }
   return response.json();
 }
@@ -57,6 +58,32 @@ function button(parent, label, action) {
   element.addEventListener("click", () => action().catch(error => notice.textContent = error.message));
 }
 
+function summary(id, entries) {
+  const list = byId(id);
+  list.replaceChildren();
+  for (const [label, value] of entries) {
+    const box = add(list, "div", "");
+    add(box, "dt", label);
+    add(box, "dd", value);
+  }
+}
+
+async function loadIntegrations() {
+  summary("integrations-summary", [["Integrations", "Checking…"]]);
+  try {
+    const { service, tailscale } = await request("integrations");
+    summary("integrations-summary", [
+      ["Systemd", service.ActiveState || service.LoadState || "Unavailable"],
+      ["Tailscale", tailscale.state || "Unconfigured"],
+      ["MCP HTTPS", tailscale.mcp || "Unavailable"],
+      ["Dashboard HTTPS", tailscale.dashboard || "Unavailable"],
+    ]);
+  } catch (error) {
+    summary("integrations-summary", [["Integrations", "Unavailable"]]);
+    throw error;
+  }
+}
+
 async function refresh() {
   notice.textContent = "Loading gateway status…";
   const state = await request("status");
@@ -65,18 +92,31 @@ async function refresh() {
   byId("dashboard").hidden = false;
   byId("controls").hidden = false;
   notice.textContent = "";
-  const metrics = byId("metrics");
-  metrics.replaceChildren();
-  for (const [label, value] of [
+  summary("metrics", [
     ["MCP listener", state.listener], ["MCP sessions", state.sessions], ["TCP connections", state.connections],
     ["Memory", state.rss_kib == null ? "Unavailable" : (state.rss_kib / 1024).toFixed(1) + " MiB"],
     ["CPU", state.cpu_percent == null ? "Refresh for sample" : state.cpu_percent.toFixed(2) + "%"],
     ["Audit", state.audit || "Unconfigured"]
-  ]) {
-    const box = add(metrics, "div", "");
-    add(box, "dt", label);
-    add(box, "dd", value);
-  }
+  ]);
+  const config = state.configuration;
+  const paths = state.protected_paths;
+  summary("configuration-summary", [
+    ["Version", state.version],
+    ["Authorization", config.authorization],
+    ["Private state layout", config.broad_state_layout],
+    ["Job profiles", config.configured_job_profiles ? "Configured" : "Unconfigured"],
+    ["Skills store", config.configured_skills_store ? "Configured" : "Unconfigured"],
+  ]);
+  const homePaths = rules => rules.map(path => "~/" + path);
+  const describe = rules => rules.length ? rules.join(", ") : "None";
+  summary("protected-summary", [
+    ["Masked state", paths.state_directory || "Broad YOLO inactive"],
+    ["Masked skill store", paths.skills_directory || "Unconfigured"],
+    ["Default masks", describe(homePaths(paths.default_masked))],
+    ["Default read-only paths", describe(homePaths(paths.default_readonly))],
+    ["Additional masks", describe(paths.extra_masked)],
+    ["Additional read-only paths", describe(paths.extra_readonly)],
+  ]);
   const modes = { standard: "Standard", scoped_yolo: "Scoped YOLO", broad_yolo: "Broad YOLO", full: "FULL", disabled: "Disabled" };
   table("client-rows", state.clients.map(client => [
     client.id, modes[client.mode] + (client.expired ? " (expired)" : ""),
@@ -98,7 +138,7 @@ async function refresh() {
   serverClient.replaceChildren();
   for (const client of state.clients) add(serverClient, "option", client.id).value = client.id;
   if (state.clients.some(client => client.id === previousServerClient)) serverClient.value = previousServerClient;
-  const tasks = [loadServers()];
+  const tasks = [loadServers(), loadIntegrations()];
   byId("job-controls").hidden = !state.jobs_configured;
   if (state.jobs_configured) {
     tasks.push(loadJobs());
@@ -144,8 +184,9 @@ async function loadJobs(cursor = "") {
     const row = add(list, "li", "");
     add(row, "span", job.job_id + " · " + job.state);
     button(row, "Logs", async () => {
+      const requestId = ++logRequest;
       const logs = await request("jobs/" + job.job_id + "/logs?client=" + encodeURIComponent(client));
-      if (jobRequest !== generation) return;
+      if (jobRequest !== generation || requestId !== logRequest) return;
       byId("output").textContent = JSON.stringify(logs, null, 2);
       byId("logs").hidden = false;
       byId("logs").open = true;
@@ -286,4 +327,4 @@ byId("logout").addEventListener("click", async () => {
     notice.textContent = "Signed out.";
   } catch (error) { notice.textContent = error.message; }
 });
-refresh().catch(error => notice.textContent = byId("pair").hidden ? error.message : "");
+refresh().catch(error => notice.textContent = error.status === 401 ? "" : error.message);

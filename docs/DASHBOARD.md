@@ -22,7 +22,10 @@ events. Refresh reads current data from the gateway. The first CPU sample
 requires a second refresh. Job cancellation and changes to skills or upstream
 servers require an explicit confirmation. Execution mode changes stay in
 the trusted local CLI. Credentials and user configuration are excluded from
-dashboard responses. Job logs are visible to the paired operator and may
+dashboard responses. The configuration and protection panels show a
+redacted summary of service and route status, Broad YOLO state-layout
+validation and configured path rules. They have no policy-editing controls.
+Job logs are visible to the paired operator and may
 contain sensitive output written by the job itself.
 
 The admin listener uses exact Host and browser Origin checks, a single-use

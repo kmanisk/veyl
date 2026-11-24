@@ -361,17 +361,28 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     #[cfg(not(target_os = "linux"))]
     let remote: Option<String> = None;
     #[cfg(target_os = "linux")]
+    let shared_origin = state.tailnet.as_ref().and_then(|settings| {
+        (marker && host.is_some_and(|host| settings.shared_authority(host)))
+            .then(|| format!("https://{}", settings.hostname))
+    });
+    #[cfg(not(target_os = "linux"))]
+    let shared_origin: Option<String> = None;
+    #[cfg(target_os = "linux")]
     let public = state
         .tailnet
         .as_ref()
         .and_then(|settings| settings.funnel.as_ref())
         .filter(|_| {
-            host.is_some() && host == remote.as_deref() && funnel::marked(request.headers())
+            (host == remote.as_deref() || shared_origin.is_some())
+                && host.is_some()
+                && funnel::marked(request.headers())
         })
         .map(|settings| settings.allow_secret_path);
     if request.uri().authority().is_some()
         || request.headers().get_all(header::HOST).iter().count() != 1
-        || !host.is_some_and(|h| h == expected || h == local_alias || remote.as_deref() == Some(h))
+        || !(shared_origin.is_some()
+            || host
+                .is_some_and(|h| h == expected || h == local_alias || remote.as_deref() == Some(h)))
     {
         return simple(StatusCode::FORBIDDEN, "Invalid Host");
     }
@@ -383,7 +394,9 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     if marker {
         return simple(StatusCode::FORBIDDEN, "Invalid Host");
     }
-    let origin = if host == remote.as_deref() {
+    let origin = if let Some(origin) = shared_origin {
+        origin
+    } else if host == remote.as_deref() {
         format!("https://{}", host.unwrap_or_default())
     } else {
         format!("http://{}", host.unwrap_or_default())

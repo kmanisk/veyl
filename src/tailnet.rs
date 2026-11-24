@@ -21,6 +21,10 @@ use crate::http::operator::{PolicyFile, revision, verify_approvals};
 const SOCKET: &str = "/run/tailscale/tailscaled.sock";
 const API: &str = "/localapi/v0/serve-config";
 const MARKER: &str = "/.well-known/veyl-serve";
+const SHARED_MOUNT: &str = "/veyl/";
+const SHARED_MARKER: &str = "/veyl/.well-known/veyl-serve";
+const ADAPTER_BACKEND: &str = "http://127.0.0.1:7330";
+const SHARED_DISABLED: &str = "Veyl public MCP disabled";
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +33,8 @@ pub(crate) struct Settings {
     pub mcp_https_port: u16,
     pub admin_https_port: u16,
     pub funnel: Option<crate::http::funnel::Settings>,
+    #[serde(default)]
+    pub shared_funnel: bool,
 }
 
 impl Settings {
@@ -59,6 +65,9 @@ impl Settings {
         if parsed.funnel.is_some() && !matches!(parsed.mcp_https_port, 8443 | 10000) {
             return Err("Veyl Funnel requires a dedicated MCP port of 8443 or 10000".into());
         }
+        if parsed.shared_funnel && parsed.funnel.is_none() {
+            return Err("Shared Funnel requires a configured public MCP credential".into());
+        }
         Ok(parsed)
     }
 
@@ -72,6 +81,10 @@ impl Settings {
                 self.mcp_https_port
             }
         )
+    }
+
+    pub fn shared_authority(&self, host: &str) -> bool {
+        self.shared_funnel && (host == self.hostname || host == format!("{}:443", self.hostname))
     }
 }
 
@@ -226,6 +239,121 @@ fn funnel_transition(state: &Value, routes: &Routes, enable: bool) -> Result<Val
     Ok(next)
 }
 
+#[derive(PartialEq, Eq)]
+enum SharedState {
+    Absent,
+    Adapter,
+    Enabled,
+    Disabled,
+}
+
+fn under_shared_mount(path: &str) -> bool {
+    let mut components = Vec::new();
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                components.pop();
+            }
+            _ => components.push(component),
+        }
+    }
+    components.first() == Some(&"veyl")
+}
+
+fn shared_authority(routes: &Routes) -> String {
+    format!("{}:443", routes.host)
+}
+
+fn shared_backend(routes: &Routes) -> Value {
+    json!({"Proxy":format!("http://{}", routes.targets[0])})
+}
+
+fn shared_marker(routes: &Routes) -> Value {
+    json!({"Text":format!("Veyl route {}", routes.id)})
+}
+
+fn shared_state(state: &Value, routes: &Routes) -> Result<SharedState, String> {
+    let authority = shared_authority(routes);
+    let handlers = state["Web"][&authority]["Handlers"]
+        .as_object()
+        .ok_or("Shared Funnel requires an existing HTTPS handler map on 443")?;
+    if state["TCP"]["443"] != json!({"HTTPS":true})
+        || state["AllowFunnel"][&authority] != true
+        || !handlers
+            .get("/")
+            .is_some_and(|root| root["Proxy"].is_string())
+    {
+        return Err("Shared Funnel requires an existing public HTTPS root proxy on 443".into());
+    }
+    for (_, foreground) in entries(state, "Foreground")? {
+        if entries(foreground, "TCP")?.any(|(key, _)| key == "443")
+            || entries(foreground, "Web")?.any(|(key, _)| key == &authority)
+            || entries(foreground, "AllowFunnel")?.any(|(key, _)| key == &authority)
+        {
+            return Err("Foreground Serve session occupies the shared Funnel authority".into());
+        }
+    }
+    if handlers.keys().any(|path| {
+        under_shared_mount(path) && !matches!(path.as_str(), SHARED_MOUNT | SHARED_MARKER)
+    }) {
+        return Err("Another handler occupies the Veyl path namespace on 443".into());
+    }
+    match (handlers.get(SHARED_MOUNT), handlers.get(SHARED_MARKER)) {
+        (None, None) => Ok(SharedState::Absent),
+        (Some(handler), None) if *handler == json!({"Proxy":ADAPTER_BACKEND}) => {
+            Ok(SharedState::Adapter)
+        }
+        (Some(handler), Some(marker)) if *marker == shared_marker(routes) => {
+            if *handler == shared_backend(routes) {
+                Ok(SharedState::Enabled)
+            } else if *handler == json!({"Text":SHARED_DISABLED}) {
+                Ok(SharedState::Disabled)
+            } else {
+                Err("The owned Veyl path has a conflicting handler".into())
+            }
+        }
+        _ => Err("Another handler owns the Veyl mount on 443".into()),
+    }
+}
+
+fn shared_transition(
+    state: &Value,
+    routes: &Routes,
+    enable: bool,
+    adapter: bool,
+) -> Result<Value, String> {
+    let current = shared_state(state, routes)?;
+    let mut next = state.clone();
+    let handlers = next["Web"][shared_authority(routes)]["Handlers"]
+        .as_object_mut()
+        .expect("validated shared handler map");
+    if enable {
+        if current == SharedState::Adapter && !adapter {
+            return Err(
+                "Existing adapter owns the route. Use --adapter to adopt it explicitly".into(),
+            );
+        }
+        if current == SharedState::Absent && adapter {
+            return Err("The expected adapter route is absent".into());
+        }
+        handlers.insert(SHARED_MOUNT.into(), shared_backend(routes));
+        handlers.insert(SHARED_MARKER.into(), shared_marker(routes));
+    } else if matches!(current, SharedState::Enabled | SharedState::Disabled) {
+        if adapter {
+            handlers.insert(SHARED_MOUNT.into(), json!({"Proxy":ADAPTER_BACKEND}));
+            handlers.remove(SHARED_MARKER);
+        } else {
+            // Keep a non-proxy handler so retired connector URLs cannot fall
+            // through to the unrelated root proxy with their credentials.
+            handlers.insert(SHARED_MOUNT.into(), json!({"Text":SHARED_DISABLED}));
+        }
+    } else if !(current == SharedState::Adapter && adapter) && current != SharedState::Absent {
+        return Err("The adapter route is not owned by Veyl".into());
+    }
+    Ok(next)
+}
+
 fn node_allows_funnel(status: &Value, port: u16) -> bool {
     let Some(caps) = status["Self"]["CapMap"].as_object() else {
         return false;
@@ -291,7 +419,7 @@ fn state_object(value: Value) -> Result<Value, String> {
     Ok(value)
 }
 
-const HELP: &str = "usage: veyl serve <plan|validate|inspect|apply|remove|rollback|funnel-plan|funnel-apply|funnel-rollback> --config PATH [--listen 127.0.0.1:PORT] [--state-file PATH | --live] [--socket PATH] [--confirm]";
+const HELP: &str = "usage: veyl serve <plan|validate|inspect|apply|remove|rollback|funnel-plan|funnel-apply|funnel-rollback|funnel-retire-dedicated> --config PATH [--listen 127.0.0.1:PORT] [--state-file PATH | --live] [--socket PATH] [--adapter] [--confirm]";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args.iter().any(|a| a == "--help") {
@@ -310,21 +438,29 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             | "funnel-plan"
             | "funnel-apply"
             | "funnel-rollback"
+            | "funnel-retire-dedicated"
     ) {
         return Err(HELP.into());
     }
     let change = matches!(
         action,
-        "apply" | "remove" | "rollback" | "funnel-apply" | "funnel-rollback"
+        "apply"
+            | "remove"
+            | "rollback"
+            | "funnel-apply"
+            | "funnel-rollback"
+            | "funnel-retire-dedicated"
     );
     let funnel_only = action.starts_with("funnel-");
     let disable_funnel = action == "funnel-rollback";
+    let retire_dedicated = action == "funnel-retire-dedicated";
     let mut config = None;
     let mut fixture = None;
     let mut address = None;
     let mut socket_path = None;
     let mut confirm = false;
     let mut live = false;
+    let mut adapter = false;
     let mut args = args[1..].iter();
     while let Some(key) = args.next() {
         match key.to_str() {
@@ -357,6 +493,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             }
             Some("--confirm") if !confirm => confirm = true,
             Some("--live") if !live => live = true,
+            Some("--adapter") if !adapter && funnel_only && !retire_dedicated => adapter = true,
             _ => return Err(HELP.into()),
         }
     }
@@ -383,6 +520,13 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         .tailnet
         .as_ref()
         .and_then(|serve| serve.funnel.as_ref());
+    let shared = settings
+        .tailnet
+        .as_ref()
+        .is_some_and(|serve| serve.shared_funnel);
+    if !shared && (adapter || retire_dedicated) {
+        return Err("This command requires tailscale_serve.shared_funnel".into());
+    }
     if funnel_only && !disable_funnel && public.is_none() {
         return Err("Configure tailscale_serve.funnel before enabling public MCP".into());
     }
@@ -479,7 +623,11 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
                 "This tailnet has not enabled a certificate for the configured hostname".into(),
             );
         }
-        if funnel_only && !disable_funnel && !node_allows_funnel(&status, routes.ports[0]) {
+        if funnel_only
+            && !disable_funnel
+            && !retire_dedicated
+            && !node_allows_funnel(&status, if shared { 443 } else { routes.ports[0] })
+        {
             return Err(
                 "This Tailscale node is not authorized for Funnel on the configured MCP port"
                     .into(),
@@ -506,8 +654,31 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         if receipt.is_none() {
             return Err("Apply private Serve before changing Funnel".into());
         }
-        funnel_transition(&state, &routes, !disable_funnel)?
+        if retire_dedicated {
+            if shared_state(&state, &routes)? != SharedState::Enabled || !owned[1] {
+                return Err(
+                    "Activate native shared Funnel and verify the private dashboard first".into(),
+                );
+            }
+            funnel_transition(&state, &routes, false)?
+        } else if shared {
+            if !disable_funnel && (!owned[0] || !owned[1]) {
+                return Err("Shared Funnel needs the owned private Serve route pair".into());
+            }
+            shared_transition(&state, &routes, !disable_funnel, adapter)?
+        } else {
+            funnel_transition(&state, &routes, !disable_funnel)?
+        }
     } else {
+        if !add
+            && shared
+            && matches!(
+                shared_state(&state, &routes),
+                Ok(SharedState::Enabled | SharedState::Disabled)
+            )
+        {
+            return Err("The owned shared mount depends on the Serve receipt. Roll back the public path separately".into());
+        }
         transition(&state, &routes, add)?
     };
     if let Some(config) = &policy
@@ -527,6 +698,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         let audit_name = match action {
             "funnel-apply" => "funnel_apply",
             "funnel-rollback" => "funnel_rollback",
+            "funnel-retire-dedicated" => "funnel_retire_dedicated",
             _ if add => "serve_apply",
             _ => "serve_remove",
         };
@@ -587,14 +759,21 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     {
         config.remove_serve_receipt()?;
     }
+    let effective = if change { &next } else { &state };
+    let shared_active = shared
+        && shared_state(effective, &routes).is_ok_and(|status| status == SharedState::Enabled);
+    let dedicated_mcp = format!("https://{}/mcp", routes.authority(0));
     println!(
         "{}",
         json!({
             "action": action, "source": if use_live {"tailscaled"} else if fixture.is_some() {"snapshot"} else {"configuration-only"},
             "changed": change && next != state, "owned_before": owned,
-            "private": (if change { &next } else { &state })["AllowFunnel"][routes.authority(0)] != true,
+            "private": !shared_active && effective["AllowFunnel"][routes.authority(0)] != true,
             "funnel_configured": public.is_some(),
-            "mcp": format!("https://{}/mcp", routes.authority(0)),
+            "shared_funnel_active": shared_active,
+            "dedicated_funnel_active": effective["AllowFunnel"][routes.authority(0)] == true,
+            "mcp": if shared_active || (shared && action == "funnel-plan") { format!("https://{}/veyl/mcp", routes.host) } else { dedicated_mcp.clone() },
+            "dedicated_mcp": dedicated_mcp,
             "dashboard": format!("https://{}/dashboard", routes.authority(1)),
             "backends": routes.targets
         })
@@ -614,10 +793,10 @@ pub(crate) fn health(config: &Path, settings: Option<&Settings>) -> Value {
             })
             .transpose()
     };
-    let state = match routes() {
-        Ok(None) => "untracked",
+    let (state, shared_active, dedicated_public) = match routes() {
+        Ok(None) => ("untracked", false, false),
         Ok(Some(routes)) => {
-            let actual = || -> Result<[bool; 2], String> {
+            let actual = || -> Result<([bool; 2], bool, bool), String> {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -630,22 +809,34 @@ pub(crate) fn health(config: &Path, settings: Option<&Settings>) -> Value {
                     vec![],
                 ))?;
                 let document = state_object(document)?;
-                Ok([
+                let owned = [
                     route_state(&document, &routes, 0, settings.funnel.is_some())?
                         == RouteState::Owned,
                     route_state(&document, &routes, 1, false)? == RouteState::Owned,
-                ])
+                ];
+                let shared = settings.shared_funnel
+                    && shared_state(&document, &routes)? == SharedState::Enabled;
+                Ok((
+                    owned,
+                    shared,
+                    document["AllowFunnel"][routes.authority(0)] == true,
+                ))
             };
             match actual() {
-                Ok([true, true]) => "active",
-                Ok([false, false]) => "inactive",
-                Ok(_) => "partial",
-                Err(_) => "unavailable-or-colliding",
+                Ok(([true, true], shared, dedicated)) => ("active", shared, dedicated),
+                Ok(([false, false], false, false)) => ("inactive", false, false),
+                Ok((_, shared, dedicated)) => ("partial", shared, dedicated),
+                Err(_) => ("unavailable-or-colliding", false, false),
             }
         }
-        Err(_) => "unavailable",
+        Err(_) => ("unavailable", false, false),
     };
-    json!({"state":state,"mcp":format!("https://{}/mcp", settings.authority(false)),
+    let mcp = if shared_active {
+        format!("https://{}/veyl/mcp", settings.hostname)
+    } else {
+        format!("https://{}/mcp", settings.authority(false))
+    };
+    json!({"state":state,"mcp":mcp,"public":shared_active || dedicated_public,
         "dashboard":format!("https://{}/dashboard", settings.authority(true))})
 }
 

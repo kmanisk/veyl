@@ -45,6 +45,32 @@ identity. Tailscale proxy metadata alone does not authorize any request.
 
 ## Activate and verify
 
+For an existing public HTTPS service on 443, optionally add
+`"shared_funnel": true` to `tailscale_serve` next to `funnel`. Restart
+Veyl with the updated configuration. Tailscale sends `/veyl/` to the
+same MCP loopback listener and strips the mount prefix. Use
+`https://HOST/veyl/mcp` with a header credential, or
+`https://HOST/veyl/mcp/TOKEN` for the existing secret-path connector.
+Veyl requires Tailscale's Funnel marker and validates the configured
+host for this route. The existing root handler and HTTPS policy stay
+under their original owner.
+
+Use `serve funnel-plan` and `serve funnel-apply --confirm` to add the
+shared path. For a migration from the exact loopback adapter on port
+7330, add `--adapter` to those commands. Verify the existing connector
+URL through a public relay before running
+`serve funnel-retire-dedicated --confirm`. This removes the dedicated
+public flag and leaves private Serve and the dashboard in place.
+Keep the old adapter available until the new route passes verification.
+
+On shared 443, `serve funnel-rollback --confirm` disables public MCP at
+the owned path. It leaves a static disabled handler there so existing
+secret URLs cannot reach the colocated root proxy. During the adapter
+migration, `serve funnel-rollback --adapter --confirm` can restore
+the previous loopback adapter while it is still installed.
+
+### Dedicated port
+
 Restart the Veyl backend with the opt-in configuration before publishing
 the route. If the private route pair is absent, use `veyl serve apply
 --confirm` against the same configuration to create it first.
@@ -105,7 +131,8 @@ paste the URL into a conversation or issue. See [ChatGPT custom MCP connector se
 ## Revoke access
 
 `veyl serve funnel-rollback --config "$state/clients.json" --confirm`
-removes the public flag and preserves the private pair. To revoke a
+disables the owned public path or dedicated public flag and preserves
+the private pair. To revoke a
 credential while preserving the route, atomically replace the public
 verifier and publish a new private credential file. The next public
 request checks the new verifier, including requests on old sessions.

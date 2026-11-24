@@ -232,7 +232,7 @@ class LinuxFeatures(unittest.TestCase):
             self.assertNotEqual(self.cli("serve","apply","--confirm","--socket",socket).returncode,0)
             self.assertEqual(peer.posts,3)
 
-    def prepare_public_client(self, *, allow_secret_path=True):
+    def prepare_public_client(self, *, allow_secret_path=True, shared=False):
         state = self.f.base / "private-state"
         state.mkdir(mode=0o700)
         self.f.config = state / "clients.json"
@@ -250,6 +250,8 @@ class LinuxFeatures(unittest.TestCase):
             "token_sha256": hashlib.sha256(token.encode()).hexdigest(),
             "allow_secret_path": allow_secret_path,
         }}
+        if shared:
+            self.f.doc["tailscale_serve"]["shared_funnel"] = True
         self.f.write_config()
         env = dict(os.environ, HOME=str(self.f.base))
         enable = self.cli("yolo", "set", "--client", "primary", "--mode", "yolo", env=env)
@@ -444,6 +446,82 @@ class LinuxFeatures(unittest.TestCase):
         self.assertIn("funnel.rpc_tools_list", log)
         self.assertNotIn("evil.invalid", log)
         self.assertNotIn(token, log)
+
+    def test_shared_funnel_adoption_collision_and_selective_rollback(self):
+        _, env = self.prepare_public_client(shared=True)
+        self.f.doc["admin_listen"] = "127.0.0.1:7332"
+        self.f.write_config()
+        authority = TAIL["hostname"] + ":443"
+        dedicated = TAIL["hostname"] + ":8443"
+        with self.tail_peer() as (socket, peer):
+            def command(action, *args):
+                return self.cli("serve", action, "--socket", socket, *args, env=env)
+
+            self.assertEqual(command("apply", "--confirm").returncode, 0)
+            handlers = peer.configuration["Web"][authority]["Handlers"]
+            handlers["/veyl/"] = {"Proxy": "http://127.0.0.1:7330"}
+            handlers["/veyl-other"] = {"Text": "another app"}
+            peer.configuration["AllowFunnel"][dedicated] = True
+            before = copy.deepcopy(peer.configuration)
+            self.assertNotEqual(command("funnel-apply", "--confirm").returncode, 0)
+            handlers["/veyl/conflict"] = {"Text": "collision"}
+            self.assertNotEqual(command("funnel-apply", "--adapter", "--confirm").returncode, 0)
+            handlers.pop("/veyl/conflict")
+            self.assertEqual(peer.configuration, before)
+            peer.race = True
+            self.assertNotEqual(command("funnel-apply", "--adapter", "--confirm").returncode, 0)
+            self.assertEqual(peer.configuration["Web"], before["Web"])
+            before = copy.deepcopy(peer.configuration)
+            result = command("funnel-apply", "--adapter", "--confirm")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            native = copy.deepcopy(peer.configuration)
+            self.assertEqual(native["TCP"], before["TCP"])
+            self.assertEqual(native["AllowFunnel"], before["AllowFunnel"])
+            self.assertEqual(native["Web"][authority]["Handlers"]["/"], BRIDGE["Web"][authority]["Handlers"]["/"])
+            self.assertEqual(native["Web"][authority]["Handlers"]["/veyl/"], {"Proxy": "http://127.0.0.1:7331"})
+            self.assertEqual(json.loads(command("inspect").stdout)["mcp"], "https://node.demo.ts.net/veyl/mcp")
+            result = command("funnel-rollback", "--adapter", "--confirm")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(peer.configuration, before)
+            self.assertEqual(command("funnel-apply", "--adapter", "--confirm").returncode, 0)
+            result = command("funnel-retire-dedicated", "--confirm")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(peer.configuration["AllowFunnel"], BRIDGE["AllowFunnel"])
+            private = f"{TAIL['hostname']}:9443"
+            self.assertEqual(peer.configuration["Web"][private], before["Web"][private])
+            self.assertEqual(command("funnel-rollback", "--confirm").returncode, 0)
+            self.assertEqual(peer.configuration["Web"][authority]["Handlers"]["/veyl/"],
+                             {"Text": "Veyl public MCP disabled"})
+            self.assertEqual(peer.configuration["Web"][authority]["Handlers"]["/"], BRIDGE["Web"][authority]["Handlers"]["/"])
+            self.assertEqual(peer.configuration["Web"][authority]["Handlers"]["/veyl-other"], {"Text":"another app"})
+            self.assertNotEqual(command("funnel-retire-dedicated", "--confirm").returncode, 0)
+
+    def test_shared_funnel_host_requires_marker_public_proof_and_origin(self):
+        token, _ = self.prepare_public_client(shared=True)
+        self.start()
+        origin = "https://chatgpt.com"
+        public = {"Host": TAIL["hostname"], "Tailscale-Funnel-Request": "?1", "Origin": origin}
+        init = {"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
+            "protocolVersion":"2025-11-25","capabilities":{},
+            "clientInfo":{"name":"shared-fixture","version":"1"}}}
+        path = "/mcp/" + token
+        self.assertEqual(self.f.request(self.f.mcp, "POST", path, init, Host=TAIL["hostname"])[0], 404)
+        self.assertEqual(self.f.request(self.f.mcp, "POST", path, init, **{**public, "Host":"other.demo.ts.net"})[0], 403)
+        self.assertEqual(self.f.request(self.f.mcp, "POST", path, init, **{**public, "Origin":"https://other.demo.ts.net"})[0], 403)
+        self.assertEqual(self.f.request(self.f.mcp, "POST", "/mcp", init,
+                                        **public, Authorization="Bearer " + product.TOKEN)[0], 404)
+        status, headers, _ = self.f.request(self.f.mcp, "OPTIONS", path,
+                                            **public, **{"Access-Control-Request-Method":"POST"})
+        self.assertEqual(status, 204)
+        self.assertEqual(headers["Access-Control-Allow-Origin"], origin)
+        for host in (TAIL["hostname"], TAIL["hostname"] + ":443"):
+            status, headers, _ = self.f.request(self.f.mcp, "POST", path, init, **{**public, "Host":host})
+            self.assertEqual(status, 200)
+            session = {"Mcp-Session-Id":headers["Mcp-Session-Id"]}
+            self.assertEqual(self.f.request(self.f.mcp,"POST",path,
+                {"jsonrpc":"2.0","method":"notifications/initialized"},**public,**session)[0], 202)
+            self.assertEqual(self.f.request(self.f.mcp,"POST",path,
+                {"jsonrpc":"2.0","id":2,"method":"tools/list"},**public,**session)[0], 200)
 
     def test_broad_rejects_visible_mount_alias_and_nested_mount(self):
         _, env = self.prepare_public_client()

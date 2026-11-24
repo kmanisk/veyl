@@ -41,6 +41,12 @@ struct AdminSession {
     remote: bool,
 }
 
+impl AdminSession {
+    fn active_at(&self, now: Instant) -> bool {
+        now.duration_since(self.created) < SESSION_TTL
+    }
+}
+
 impl Admin {
     pub(super) fn new(addr: SocketAddr, config: PathBuf) -> Self {
         Self {
@@ -243,7 +249,8 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         });
     let csrf = {
         let mut sessions = admin.sessions.lock().await;
-        sessions.retain(|_, session| session.created.elapsed() < SESSION_TTL);
+        let now = Instant::now();
+        sessions.retain(|_, session| session.active_at(now));
         let Some(session) = key
             .and_then(|key| sessions.get(key))
             .filter(|session| session.remote == remote)
@@ -513,6 +520,7 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
     let jobs_configured = state.jobs.is_some();
     let listener = state.addr;
     let active_tcp = super::MAX_CONNECTIONS - state.mcp_connections.available_permits();
+    let config = admin.config.clone();
     with_policy(admin, move |settings| {
         let clients: Vec<_> = settings.clients.iter().map(|client| json!({
             "id": client.id,
@@ -531,11 +539,34 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
             "expired": client.expires_at <= unix_seconds()
         })).collect();
         let audit = settings.audit_log.as_deref().map(|path| if AuditSink::inspect(path, false).is_ok() { "verified" } else { "unavailable" });
+        let broad = settings.clients.iter().any(|client| client.mode == ExecutionMode::BroadYolo);
+        let layout = if broad {
+            if crate::state_cli::Layout::admission(&config, &settings).is_ok() { "Valid" } else { "Invalid" }
+        } else {
+            "Broad YOLO inactive"
+        };
+        use crate::protected_paths::{Kind, OPTIONAL_DEFAULTS, READONLY_DEFAULTS};
+        let protected = |kind| settings.protected_paths.selected(kind).iter()
+            .map(|rule| &rule.path).collect::<Vec<_>>();
         Ok(json!({
             "clients": clients, "sessions": connected, "connections": active_tcp, "cpu_percent": cpu_percent, "rss_kib": rss_kib,
             "csrf": csrf, "listener": listener.to_string(), "audit": audit,
             "jobs_configured": jobs_configured, "job_state_dir": settings.job_state_path(), "audit_log": settings.audit_log,
             "version": env!("CARGO_PKG_VERSION"), "skills_configured": settings.skills.is_some(),
+            "configuration": {
+                "authorization": if settings.managed { "Managed" } else { "Legacy" },
+                "broad_state_layout": layout,
+                "configured_job_profiles": settings.jobs.is_some(),
+                "configured_skills_store": settings.skills.is_some(),
+            },
+            "protected_paths": {
+                "state_directory": broad.then(|| config.parent()).flatten(),
+                "default_masked": OPTIONAL_DEFAULTS,
+                "default_readonly": READONLY_DEFAULTS,
+                "extra_masked": protected(Kind::Optional),
+                "extra_readonly": protected(Kind::ReadOnly),
+                "skills_directory": settings.skills.as_ref().map(|skills| skills.path()),
+            },
         }))
     }).await
 }
@@ -684,4 +715,21 @@ fn unavailable() -> Reply {
 }
 fn bad() -> Reply {
     simple(Status::BAD_REQUEST, "Invalid request")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dashboard_session_expires_at_its_ttl() {
+        let created = Instant::now();
+        let session = AdminSession {
+            created,
+            csrf: String::new(),
+            remote: true,
+        };
+        assert!(session.active_at(created + SESSION_TTL - Duration::from_secs(1)));
+        assert!(!session.active_at(created + SESSION_TTL));
+    }
 }

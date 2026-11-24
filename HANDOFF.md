@@ -777,3 +777,16 @@ still apply, and that telemetry omits URLs and raw headers.
 Use the deployment checks in [STATUS.md](STATUS.md). The Brave
 production probe exercises browser CORS, while ChatGPT connector
 discovery must be observed separately.
+
+## v0.1.3-beta shared-route verification
+
+The shared path is isolated from the existing 443 root. Test adoption,
+descendant collisions, conditional updates, adapter restoration and
+rollback to a static disabled handler. Keep the adapter running during
+the migration until a public client initializes and exercises the
+existing URL through the native backend. Retire only the dedicated
+Funnel flag on 8443 and preserve private Serve.
+
+The production failure and disposable dashboard and client evidence
+are indexed in [STATUS.md](STATUS.md). Use the same candidate for AGY
+acceptance, BridgeDev verification and production.
