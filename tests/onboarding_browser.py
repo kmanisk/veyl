@@ -95,6 +95,14 @@ def main():
             else:
                 raise AssertionError("A consumed pairing code was replayable")
             print("FIRST_RUN_BROWSER_PAIRING_PASS")
+            fresh = subprocess.run([binary, "dashboard", "pair"], env=env, check=True,
+                                   capture_output=True, text=True).stdout.strip().removeprefix("PAIRING_TOKEN=")
+            tabs_url = origin + "/dashboard/login#pair=" + fresh
+            tabs = subprocess.run(["node", str(Path(__file__).with_name("dashboard_tabs.mjs")), browser],
+                                  input=tabs_url, text=True, capture_output=True, timeout=35)
+            assert tabs.returncode == 0, "Real browser tab-navigation test failed: " + tabs.stderr[-1000:]
+            assert "DASHBOARD_TABS_AND_KEYBOARD_PASS" in tabs.stdout
+            print("DASHBOARD_TABS_AND_KEYBOARD_PASS")
         finally:
             gateway.terminate()
             try:

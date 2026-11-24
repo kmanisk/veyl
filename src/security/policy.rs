@@ -16,6 +16,7 @@ pub enum Action {
     SearchFiles,
     GitInspect,
     SystemInfo,
+    SystemInspect,
     ServiceStatus,
     WriteFile,
     ApplyPatch,
@@ -148,6 +149,7 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
         | Action::SearchFiles
         | Action::GitInspect
         | Action::SystemInfo
+        | Action::SystemInspect
         | Action::ServiceStatus
         | Action::ListTools
         | Action::WriteFile

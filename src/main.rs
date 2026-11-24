@@ -118,6 +118,10 @@ fn run() -> Result<(), String> {
         return mode_cli::run(&args[1..]);
     }
     #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "diagnostics") {
+        return local_cli::diagnostics(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "protected-paths") {
         return protected_cli::run(&args[1..]);
     }

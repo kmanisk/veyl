@@ -21,6 +21,8 @@ use crate::tools::{
     MutationRoot,
     registry::{Tool, tool_text},
 };
+#[path = "inspection/system.rs"]
+mod system_details;
 
 const MAX_ENTRIES: usize = 16_384;
 const MAX_COPY: u64 = 64 * 1024 * 1024;
@@ -89,6 +91,9 @@ fn inspect(
         Some(value) => value.as_object().ok_or("Expected an arguments object")?,
         None => &empty,
     };
+    if tool == Tool::SystemInspect {
+        return system_details::inspect(args, client.mutation_root.as_ref());
+    }
     if matches!(tool, Tool::SystemInfo | Tool::ServiceStatus) {
         if !args.is_empty() {
             return Err("This tool takes no arguments".into());

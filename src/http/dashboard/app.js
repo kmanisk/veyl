@@ -7,8 +7,47 @@ const remote = location.protocol === "https:";
 const proofKey = "veyl-session-proof";
 let csrf = remote ? sessionStorage.getItem(proofKey) : undefined;
 let nextPage;
+let currentJobCursor = "";
 let jobRequest = 0;
 let logRequest = 0;
+const tabs = [...document.querySelectorAll('nav a[href^="#"]')];
+let activeTab = "health";
+function selectTab(id, focus = false) {
+  const available = tabs.filter(tab => !tab.hidden);
+  if (!available.some(tab => tab.hash === "#" + id)) id = "health";
+  activeTab = id;
+  for (const tab of tabs) {
+    const key = tab.hash.slice(1);
+    const selected = key === id;
+    const page = byId(key).closest("section");
+    tab.id = tab.id || "tab-" + key;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    page.id = page.id || "page-" + key;
+    tab.setAttribute("aria-controls", page.id);
+    page.setAttribute("role", "tabpanel");
+    page.setAttribute("aria-labelledby", tab.id);
+    page.classList.toggle("inactive-tab", !selected);
+    if (selected && focus) tab.focus();
+  }
+}
+for (const tab of tabs) {
+  tab.addEventListener("click", event => {
+    event.preventDefault();
+    history.replaceState(null, "", "/dashboard" + tab.hash);
+    selectTab(tab.hash.slice(1));
+  });
+  tab.addEventListener("keydown", event => {
+    const visible = tabs.filter(item => !item.hidden);
+    const index = visible.indexOf(tab);
+    const next = { ArrowRight: (index + 1) % visible.length, ArrowDown: (index + 1) % visible.length, ArrowLeft: (index + visible.length - 1) % visible.length, ArrowUp: (index + visible.length - 1) % visible.length, Home: 0, End: visible.length - 1 }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    history.replaceState(null, "", "/dashboard" + visible[next].hash);
+    selectTab(visible[next].hash.slice(1), true);
+  });
+}
 
 async function request(path, body) {
   const response = await fetch(api + path, body === undefined ? {
@@ -28,6 +67,7 @@ async function request(path, body) {
 }
 
 function showPair() {
+  byId("live-refresh").checked = false;
   csrf = undefined;
   if (remote) sessionStorage.removeItem(proofKey);
   byId("dashboard").hidden = true;
@@ -51,6 +91,13 @@ function table(id, rows) {
     for (const value of row) add(tr, "td", value);
   }
 }
+
+function filterRows(id, value) {
+  const query = value.trim().toLowerCase();
+  for (const row of byId(id).children) row.hidden = !row.textContent.toLowerCase().includes(query);
+}
+byId("job-filter").addEventListener("input", event => filterRows("job-rows", event.target.value));
+byId("audit-filter").addEventListener("input", event => filterRows("audit-rows", event.target.value));
 
 function button(parent, label, action) {
   const element = add(parent, "button", label);
@@ -90,6 +137,7 @@ async function refresh() {
   csrf = state.csrf;
   byId("pair").hidden = true;
   byId("dashboard").hidden = false;
+  if (location.pathname === "/dashboard/login") history.replaceState(null, "", "/dashboard");
   byId("controls").hidden = false;
   notice.textContent = "";
   summary("metrics", [
@@ -117,9 +165,9 @@ async function refresh() {
     ["Additional masks", describe(paths.extra_masked)],
     ["Additional read-only paths", describe(paths.extra_readonly)],
   ]);
-  const modes = { standard: "Standard", scoped_yolo: "Scoped YOLO", broad_yolo: "Broad YOLO", full: "FULL", disabled: "Disabled" };
+  const modes = { standard: "Standard", scoped_yolo: "Scoped YOLO (legacy)", broad_yolo: "YOLO", yolo: "YOLO", full: "FULL", disabled: "Disabled" };
   table("client-rows", state.clients.map(client => [
-    client.id, modes[client.mode] + (client.expired ? " (expired)" : ""),
+    client.id, (modes[client.mode] || client.mode) + (client.disabled ? " (disabled)" : "") + (client.expired ? " (expired)" : ""),
     client.connections, [
       client.grants.join(", "),
       client.skills.length ? "Skills: " + client.skills.join(", ") : "",
@@ -156,6 +204,7 @@ async function refresh() {
   }
   byId("skill-panel").hidden = !state.skills_configured;
   byId("skills-nav").hidden = !state.skills_configured;
+  selectTab(location.hash.slice(1) || activeTab);
   if (state.skills_configured) {
     const skillClient = byId("skill-client");
     const previous = skillClient.value;
@@ -170,6 +219,7 @@ async function refresh() {
 }
 
 async function loadJobs(cursor = "") {
+  currentJobCursor = cursor;
   const generation = ++jobRequest;
   const client = byId("job-client").value;
   const list = byId("job-rows");
@@ -182,12 +232,17 @@ async function loadJobs(cursor = "") {
   if (jobs.length === 0) add(list, "li", "No job records.");
   for (const job of jobs) {
     const row = add(list, "li", "");
-    add(row, "span", job.job_id + " · " + job.state);
+    add(row, "code", job.job_id);
+    const status = add(row, "span", job.state + (job.exit_code != null ? " · exit " + job.exit_code : ""));
+    status.className = "job-state";
+    status.dataset.state = job.state;
+    const details = add(row, "span", [job.created_at ? new Date(job.created_at * 1000).toLocaleString() : "", job.cwd, job.profile].filter(Boolean).join(" · "));
+    details.className = "job-details";
     button(row, "Logs", async () => {
       const requestId = ++logRequest;
       const logs = await request("jobs/" + job.job_id + "/logs?client=" + encodeURIComponent(client));
       if (jobRequest !== generation || requestId !== logRequest) return;
-      byId("output").textContent = JSON.stringify(logs, null, 2);
+      byId("output").textContent = "STDOUT\n" + (logs.stdout || "(empty)") + "\n\nSTDERR\n" + (logs.stderr || "(empty)") + (logs.stdout_truncated || logs.stderr_truncated ? "\n\n[Output truncated]" : "");
       byId("logs").hidden = false;
       byId("logs").open = true;
     });
@@ -201,6 +256,7 @@ async function loadJobs(cursor = "") {
     }
   }
   nextPage = next;
+  filterRows("job-rows", byId("job-filter").value);
   byId("more-jobs").hidden = !next;
 }
 
@@ -303,7 +359,36 @@ async function loadAudit() {
     event.time == null ? "—" : new Date(event.time * 1000).toLocaleString(),
     event.tool ?? "—", event.client ?? "—", event.phase ?? "—"
   ]));
+  filterRows("audit-rows", byId("audit-filter").value);
 }
+
+let liveBusy = false;
+let liveTimer;
+byId("live-refresh").addEventListener("change", () => {
+  clearInterval(liveTimer);
+  if (!byId("live-refresh").checked) return;
+  liveTimer = setInterval(async () => {
+    if (!byId("live-refresh").checked) { clearInterval(liveTimer); return; }
+    if (document.hidden || byId("dashboard").hidden || liveBusy) return;
+    if (!["audit", "health", "jobs"].includes(activeTab)) return;
+    if (activeTab === "jobs" && (!byId("logs").hidden || byId("job-controls").hidden)) return;
+    liveBusy = true;
+    try {
+      if (activeTab === "audit") await loadAudit();
+      else if (activeTab === "jobs") await loadJobs(currentJobCursor);
+      else {
+        const state = await request("status");
+        summary("metrics", [
+          ["MCP listener", state.listener], ["MCP sessions", state.sessions], ["TCP connections", state.connections],
+          ["Memory", state.rss_kib == null ? "Unavailable" : (state.rss_kib / 1024).toFixed(1) + " MiB"],
+          ["CPU", state.cpu_percent == null ? "Refresh for sample" : state.cpu_percent.toFixed(2) + "%"],
+          ["Audit", state.audit || "Unconfigured"]
+        ]);
+      }
+    } catch (error) { notice.textContent = error.message; }
+    finally { liveBusy = false; }
+  }, 3000);
+});
 
 async function pairBrowser(token) {
   try {

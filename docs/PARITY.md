@@ -1,5 +1,18 @@
 # BridgeDev capability comparison
 
+## v0.2.2-alpha candidate additions
+The terminal monitor now offers live keyboard-controlled activity and job
+views, and the dashboard uses individual sidebar tabs. Admin job rows
+include creation time, cwd and profile. Existing scripts retain JSON.
+The separately granted `system_inspect` tool reports bounded structured
+resources, PCI GPU information, block devices, network interfaces, ALSA
+cards, Bluetooth adapters, DRM connectors and Veyl service status.
+It does not yet inspect live Sway, PipeWire, detailed NVIDIA telemetry,
+general systemd units, chezmoi mappings or project/system context.
+See STATUS.md for the actual candidate tests and deployment evidence.
+The historical table below describes the earlier baseline.
+
+
 This map uses the BridgeDev README and upstream-integration documentation
 from a read-only review of checkout `b21616a`. It compares documented
 capabilities and makes no claim of API or security compatibility.

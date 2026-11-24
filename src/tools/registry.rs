@@ -12,6 +12,7 @@ pub(crate) enum Tool {
     SearchFiles,
     GitInspect,
     SystemInfo,
+    SystemInspect,
     ServiceStatus,
     WriteFile,
     ApplyPatch,
@@ -38,11 +39,12 @@ pub(crate) enum Tool {
 }
 
 impl Tool {
-    pub(crate) const ALL: [Self; 27] = [
+    pub(crate) const ALL: [Self; 28] = [
         Self::ReadFile,
         Self::SearchFiles,
         Self::GitInspect,
         Self::SystemInfo,
+        Self::SystemInspect,
         Self::ServiceStatus,
         Self::WriteFile,
         Self::ApplyPatch,
@@ -74,6 +76,7 @@ impl Tool {
             "search_files" => Some(Self::SearchFiles),
             "git_inspect" => Some(Self::GitInspect),
             "system_info" => Some(Self::SystemInfo),
+            "system_inspect" => Some(Self::SystemInspect),
             "service_status" => Some(Self::ServiceStatus),
             "write_file" => Some(Self::WriteFile),
             "apply_patch" => Some(Self::ApplyPatch),
@@ -107,6 +110,7 @@ impl Tool {
             Self::SearchFiles => Action::SearchFiles,
             Self::GitInspect => Action::GitInspect,
             Self::SystemInfo => Action::SystemInfo,
+            Self::SystemInspect => Action::SystemInspect,
             Self::ServiceStatus => Action::ServiceStatus,
             Self::WriteFile => Action::WriteFile,
             Self::ApplyPatch => Action::ApplyPatch,
@@ -136,6 +140,7 @@ impl Tool {
             Self::SearchFiles
                 | Self::GitInspect
                 | Self::SystemInfo
+                | Self::SystemInspect
                 | Self::ServiceStatus
                 | Self::ListDirectory
                 | Self::DirectoryTree
@@ -225,6 +230,12 @@ impl Tool {
             Self::SystemInfo => {
                 json!({"name":"system_info","description":"Read Linux resource totals and workspace filesystem capacity","inputSchema":{"type":"object","additionalProperties":false}})
             }
+            Self::SystemInspect => json!({
+                "name":"system_inspect",
+                "description":"Read structured Linux subsystem status without arbitrary commands. Missing data is null; desktop and audio are kernel-level inventory, not compositor or sound-server state.",
+                "inputSchema":{"type":"object","additionalProperties":false,"properties":{"sections":{"type":"array","minItems":1,"maxItems":8,"uniqueItems":true,"items":{"enum":["resources","gpu","storage","network","audio","bluetooth","desktop","services"]}}}},
+                "annotations":{"readOnlyHint":true,"destructiveHint":false}
+            }),
             Self::ServiceStatus => {
                 json!({"name":"service_status","description":"Inspect the Veyl systemd user unit","inputSchema":{"type":"object","additionalProperties":false}})
             }

@@ -81,6 +81,8 @@ resolve and reach the private tailnet hostname.
 | `veyl ui --remote` | Open and pair the private Tailscale dashboard |
 | `veyl monitor` | Open the automatically paired terminal monitor |
 | `veyl monitor --view health` | Print structured health JSON |
+| `veyl diagnostics grant chatgpt` | Grant structured system inspection |
+| `veyl diagnostics revoke chatgpt` | Revoke structured system inspection |
 | `veyl connect` | Activate or recopy the configured public connector URL |
 | `veyl service on` | Install, start and enable the matching user service |
 | `veyl service status` | Inspect the service |

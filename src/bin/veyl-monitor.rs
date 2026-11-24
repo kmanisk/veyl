@@ -262,7 +262,25 @@ fn run() -> Result<(), String> {
     result
 }
 
-fn interactive(monitor: &Monitor, mut client: Option<String>) -> Result<(), String> {
+#[cfg(target_os = "linux")]
+#[path = "monitor_tui/mod.rs"]
+mod tui;
+
+#[cfg(target_os = "linux")]
+fn interactive(monitor: &Monitor, client: Option<String>) -> Result<(), String> {
+    if io::stdout().is_terminal() && std::env::var_os("TERM").is_some_and(|term| term != "dumb") {
+        tui::run(monitor, client)
+    } else {
+        line_monitor(monitor, client)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn interactive(monitor: &Monitor, client: Option<String>) -> Result<(), String> {
+    line_monitor(monitor, client)
+}
+
+fn line_monitor(monitor: &Monitor, mut client: Option<String>) -> Result<(), String> {
     let terminal = std::fs::File::open("/dev/tty")
         .map_err(|_| "An interactive terminal is unavailable. Use --view.")?;
     let mut input = BufReader::new(terminal);

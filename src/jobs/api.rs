@@ -252,6 +252,14 @@ impl Jobs {
     }
 
     pub(crate) fn list(&self, owner: &str, cursor: &str) -> io::Result<Value> {
+        self.list_page(owner, cursor, false)
+    }
+
+    pub(crate) fn list_admin(&self, owner: &str, cursor: &str) -> io::Result<Value> {
+        self.list_page(owner, cursor, true)
+    }
+
+    fn list_page(&self, owner: &str, cursor: &str, admin: bool) -> io::Result<Value> {
         let _transaction = self.store.lock(false)?;
         let mut receipts = Vec::new();
         let mut next = None;
@@ -275,7 +283,13 @@ impl Jobs {
                     .cloned();
                 break;
             }
-            receipts.push(self.present_status(&receipt));
+            let mut status = self.present_status(&receipt);
+            if admin {
+                status["created_at"] = json!(receipt.created_at);
+                status["cwd"] = json!(receipt.cwd);
+                status["profile"] = json!(receipt.profile);
+            }
+            receipts.push(status);
         }
         Ok(json!({"jobs":receipts,"next_cursor":next}))
     }

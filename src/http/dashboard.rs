@@ -462,7 +462,7 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         };
         let cursor = parameter(&query, "cursor").unwrap_or_default().to_owned();
         return job_request(state, client, None, move |jobs, client, _| {
-            jobs.list(client, &cursor)
+            jobs.list_admin(client, &cursor)
         })
         .await;
     }

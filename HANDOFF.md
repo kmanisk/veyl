@@ -1,5 +1,16 @@
 # Gateway Milestone 1 — Working Handoff
 
+## UI/diagnostics candidate (2026-11-24)
+v0.2.2-alpha is locally installed for operator review. The latest
+STATUS.md entry records verification and rollback. AGY must independently
+review the new terminal handling, admin tab navigation, job metadata
+and explicitly granted system_inspect capability before release
+promotion. Existing connector URL and BridgeDev remain operational.
+The next substantive parity checkpoint is project/system context,
+Sway/PipeWire diagnostics, interactive process tools and Nightshift
+orchestration. Do not claim the new kernel inventory covers those yet.
+
+
 ## Current production checkpoint (2026-11-24)
 
 v0.2.1-alpha is installed and verified via the existing ChatGPT

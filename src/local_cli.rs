@@ -51,7 +51,16 @@ pub(crate) fn normalize(mut args: Vec<OsString>) -> Result<Vec<OsString>, String
         }
     } else if !matches!(
         args.first().and_then(|arg| arg.to_str()),
-        Some("mode" | "dashboard" | "serve" | "skills" | "mcp-servers" | "service" | "connect")
+        Some(
+            "mode"
+                | "dashboard"
+                | "serve"
+                | "skills"
+                | "mcp-servers"
+                | "service"
+                | "connect"
+                | "diagnostics"
+        )
     ) {
         return Ok(args);
     }
@@ -67,6 +76,93 @@ pub(crate) fn normalize(mut args: Vec<OsString>) -> Result<Vec<OsString>, String
         default_config(&home)?.into_os_string(),
     ]);
     Ok(args)
+}
+
+/// Explicit local grant for the new read-only diagnostics capability.
+pub(crate) fn diagnostics(args: &[OsString]) -> Result<(), String> {
+    use crate::http::admission::{parse_clients, parse_document};
+    use crate::http::operator::{PolicyFile, verify_approvals};
+    use mcp_gateway::security::{audit::AuditSink, policy::Action};
+    const HELP: &str = "usage: veyl diagnostics show|grant|revoke CLIENT [--config PATH]";
+    if args == ["--help"] {
+        println!("{HELP}");
+        return Ok(());
+    }
+    let [action, client, option, config] = args else {
+        return Err(HELP.into());
+    };
+    let action = action.to_str().ok_or(HELP)?;
+    let client = client.to_str().ok_or(HELP)?;
+    if !matches!(action, "show" | "grant" | "revoke")
+        || option != "--config"
+        || rustix::process::geteuid().is_root()
+    {
+        return Err(HELP.into());
+    }
+    let path = Path::new(config);
+    let policy = PolicyFile::lock(path, action != "show")?;
+    let marker = format!("diagnostics:{action}:{client}");
+    let pending = policy.pending_client()?;
+    if pending.as_deref().is_some_and(|value| value != marker) || marker.len() > 128 {
+        return Err("Interrupted policy update requires local recovery".into());
+    }
+    let bytes = policy.bytes()?;
+    let settings = parse_clients(path, &bytes)?;
+    verify_approvals(&settings)?;
+    let selected = settings
+        .clients
+        .iter()
+        .find(|c| c.id == client)
+        .ok_or("Unknown client")?;
+    let granted = selected.actions.contains(&Action::SystemInspect);
+    if action == "show" {
+        println!("client={client} system_inspect={granted}");
+        return Ok(());
+    }
+    let enable = action == "grant";
+    if granted == enable && pending.is_none() {
+        println!("client={client} system_inspect={enable}");
+        return Ok(());
+    }
+    let mut document = parse_document(&bytes)?;
+    let entry = document["clients"]
+        .as_array_mut()
+        .ok_or("Invalid clients")?
+        .iter_mut()
+        .find(|entry| entry["id"].as_str() == Some(client))
+        .ok_or("Unknown client")?;
+    let tools = entry["tools"].as_array_mut().ok_or("Invalid tool grants")?;
+    tools.retain(|tool| tool.as_str() != Some("system_inspect"));
+    if enable {
+        tools.push("system_inspect".into());
+    }
+    let audit = AuditSink::open_with_limits(
+        settings
+            .audit_log
+            .as_ref()
+            .ok_or("Private audit ledger required")?,
+        settings.audit_limits,
+    )
+    .map_err(|_| "Audit ledger unavailable")?;
+    let operation = if enable {
+        "diagnostics_grant"
+    } else {
+        "diagnostics_revoke"
+    };
+    policy.commit_edit(&document, &marker, |phase| {
+        audit.record_runtime_mode(
+            client,
+            operation,
+            selected.mode.audit_mode().unwrap_or("standard"),
+            phase,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        )
+    })?;
+    println!("client={client} system_inspect={enable}");
+    Ok(())
 }
 
 /// Provision a fresh local installation. Existing directories and policies
@@ -162,7 +258,7 @@ pub(crate) fn init(args: &[OsString]) -> Result<(), String> {
             "expires_at_unix_seconds":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| "System clock is before Unix epoch")?.as_secs().saturating_add(365*24*60*60),
             "mode":"standard","disabled":false,"extra_roots":[],
             "tools":["read_file","search_files","git_inspect","system_info","service_status",
-                "write_file","apply_patch","start_job","job_status","job_logs","cancel_job",
+                "system_inspect","write_file","apply_patch","start_job","job_status","job_logs","cancel_job",
                 "list_jobs","skills_list","skills_read","list_directory","directory_tree",
                 "file_info","edit_file","create_directory","exec_command","job_wait","task_run"]
         }]

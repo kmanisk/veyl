@@ -28,6 +28,18 @@ validation and configured path rules. They have no policy-editing controls.
 Job logs are visible to the paired operator and may
 contain sensitive output written by the job itself.
 
+The sidebar switches between individual views rather than scrolling through
+all panels. Arrow keys navigate the focused tabs. Live refresh is optional
+and runs only while the browser is open and visible, on the Health, Activity
+and Jobs views. Job rows show creation timestamp, status, directory and
+profile; raw command arguments are not retained in receipts.
+
+Open the terminal monitor with `veyl monitor`. Its native full-screen view
+uses 1–7 or Tab to switch views, arrow keys or j/k to navigate, p to cycle
+clients, / to filter jobs, Enter/l for logs, x then y to cancel a selected job,
+and q to exit. The monitor refreshes on demand while open. Scripts retain
+one-shot JSON with `veyl monitor --view health`.
+
 The admin listener uses exact Host and browser Origin checks, a single-use
 hashed pairing verifier, an eight-hour in-memory session, SameSite=Strict and
 HttpOnly cookies scoped to the dashboard, and a session-bound CSRF token for

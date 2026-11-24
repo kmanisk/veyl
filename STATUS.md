@@ -1,5 +1,48 @@
 # Gate 3d status
 
+## 2026-11-24 — v0.2.2-alpha UI and diagnostics candidate
+
+Base: v0.2.1-alpha, 4134b576b83b46d135ab90fad15ad78ce8176ffe.
+Replaced scrolling dashboard sections with true, keyboard-navigable
+sidebar tabs based on the existing BridgeDev layout. Added optional
+live refresh for Health, Activity and Jobs, status colors, filtering,
+and readable job output. The Rust terminal monitor now uses a native
+alternate-screen interface with Activity, Jobs, Health, Clients, Skills,
+Upstreams and Integrations tabs, highlighted rows, raw keys, refresh,
+client cycling, filtering, job logs and confirmed cancellation. The
+existing JSON one-shot interface remains. Admin job pages now expose
+creation time, cwd and profile; raw command text is not stored.
+
+Added explicitly granted read-only `system_inspect` with eight bounded
+sections (resources, gpu, storage, network, audio, bluetooth, desktop,
+services), fixed kernel paths and structured JSON. New installs include
+the grant. Existing clients use `veyl diagnostics grant/revoke CLIENT`.
+The tool currently reports kernel ALSA/DRM inventory, not PipeWire/Sway
+session state; service reporting is limited to Veyl. Other subsystem
+context, remaining BridgeDev parity and multi-hour model-driven Nightshift
+are separate checkpoints.
+
+Verification: 54 Rust tests, Clippy, formatting, 16 Linux integration
+probes (including live diagnostic grant/revocation and real PTY tabs),
+5 product probes, 6 locked three-mode cases, and real Brave pairing,
+all sidebar tabs, arrow navigation and mobile-width visibility passed.
+Receipt mwutgu26-xgusnm, exit 0. No locked tests modified.
+Independent AGY acceptance for this candidate remains pending.
+
+Installed v0.2.2-alpha locally after preflight found no active Veyl
+jobs for the three configured clients. Restarted only mcp-gateway.service.
+Both Veyl and BridgeDev active, existing connector credential and
+routes preserved, audit ledger valid, actual ChatGPT service_status
+and system_info calls passed. Grant system_inspect to chatgpt via the
+audited local CLI; client tool discovery still requires refresh.
+Installed SHA-256:
+- gateway d5c7557e297f68ce445bcb64ab278c861ee4e5514ac1f7c29fb9c6b5b948d024
+- monitor 3ef0579a1a057c341287a8e71bd0d4dfd23be60625bd30518d7d9938e403e78b
+Rollback binaries: ~/.local/share/veyl-rollback-v0.2.1-alpha.Q7n2LE/
+Before reverting to v0.2.1-alpha, revoke the new diagnostic grant using
+the v0.2.2-alpha CLI, since the older parser does not recognize it.
+
+
 ## 2026-11-24 — v0.2.1-alpha production upgrade
 
 Independently verified the packaged candidate against AGY's recorded

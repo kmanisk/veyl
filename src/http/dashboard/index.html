@@ -11,6 +11,7 @@
 <header class="masthead">
   <div class="brand">V<span>eyl</span></div>
   <div class="header-controls" id="controls" hidden>
+    <label class="live-toggle"><input type="checkbox" id="live-refresh"> Live refresh</label>
     <button id="refresh" type="button">Refresh</button>
     <button id="logout" type="button">Sign out</button>
   </div>
@@ -25,19 +26,21 @@
     <button type="submit">Pair browser</button>
   </form>
   <div id="dashboard" class="dashboard" hidden>
-    <nav aria-label="Dashboard">
-      <a href="#health">Health</a>
+    <nav aria-label="Dashboard views" role="tablist" aria-orientation="vertical">
+      <a href="#audit" role="tab">Activity</a>
+      <a href="#jobs" role="tab">Jobs</a>
+      <a href="#health" role="tab">Health</a>
       <a href="#clients">Clients</a>
-      <a href="#jobs">Jobs</a>
-      <a href="#audit">Audit</a>
       <a href="#configuration">Configuration</a>
       <a href="#protection">Protected paths</a>
       <a id="skills-nav" href="#skills" hidden>Skills</a>
       <a href="#servers">Upstream MCP</a>
     </nav>
     <section class="content">
-      <h1 id="health">Gateway health</h1>
-      <dl id="metrics" class="metrics"></dl>
+      <section aria-labelledby="health" class="panel">
+        <h1 id="health">Gateway health</h1>
+        <dl id="metrics" class="metrics"></dl>
+      </section>
       <section aria-labelledby="clients" class="panel">
         <h2 id="clients">Clients</h2>
         <div class="table">
@@ -53,6 +56,8 @@
         <div id="job-controls" class="row">
           <label for="job-client">Client</label>
           <select id="job-client"></select>
+          <label for="job-filter">Filter</label>
+          <input id="job-filter" type="search" placeholder="Job, status, directory…" autocomplete="off">
           <button id="more-jobs" type="button" hidden>Next page</button>
         </div>
         <ul id="job-rows"></ul>
@@ -101,7 +106,9 @@
         </details>
       </section>
       <section aria-labelledby="audit" class="panel">
-        <h2 id="audit">Recent audit events</h2>
+        <h2 id="audit">Activity stream / audit events</h2>
+        <label for="audit-filter">Filter events</label>
+        <input id="audit-filter" type="search" placeholder="Client, operation, phase…" autocomplete="off">
         <div class="table">
           <table>
             <thead><tr><th scope="col">Time</th><th scope="col">Operation</th><th scope="col">Client</th><th scope="col">Phase</th></tr></thead>

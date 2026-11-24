@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import http.client
 import ssl
 import copy
+import fcntl
 import hashlib
 import json
 import os
@@ -16,6 +17,8 @@ import secrets
 import socket
 import socketserver
 import subprocess
+import struct
+import termios
 import threading
 import time
 import unittest
@@ -707,6 +710,27 @@ class LinuxFeatures(unittest.TestCase):
             self.assertTrue(self.f.call(tool,{},foreign,product.OTHER_TOKEN)["isError"])
         self.assertIn('"tool":"git_inspect"',self.f.audit.read_text())
 
+    def test_structured_system_inspection_requires_grant_and_valid_sections(self):
+        self.start()
+        session=self.f.connect()
+        self.assertTrue(self.f.call("system_inspect",{},session)["isError"])
+        self.assertIn("system_inspect=false",self.f.cli("diagnostics","show","primary"))
+        self.assertIn("system_inspect=true",self.f.cli("diagnostics","grant","primary"))
+        reply=self.f.call("system_inspect",{"sections":["resources","gpu","storage","network","audio","bluetooth","desktop","services"]},session)
+        self.assertFalse(reply["isError"],reply)
+        data=json.loads(reply["content"][0]["text"])
+        self.assertTrue(data["read_only"])
+        self.assertGreater(data["sections"]["resources"]["memory_total_kib"],0)
+        self.assertEqual(len(data["sections"]),8)
+        self.assertIsInstance(data["sections"]["gpu"]["items"],list)
+        self.assertIn("LoadState",data["sections"]["services"]["veyl"])
+        for invalid in ({"sections":["unknown"]},{"sections":["gpu","gpu"]},{"path":"/etc/shadow"}):
+            self.assertTrue(self.f.call("system_inspect",invalid,session)["isError"])
+        foreign=self.f.connect(product.OTHER_TOKEN)
+        self.assertTrue(self.f.call("system_inspect",{},foreign,product.OTHER_TOKEN)["isError"])
+        self.assertIn("system_inspect=false",self.f.cli("diagnostics","revoke","primary"))
+        self.assertTrue(self.f.call("system_inspect",{},session)["isError"])
+
     def test_monitor_pairing_views_and_keyboard(self):
         self.start()
         def pair():
@@ -722,6 +746,8 @@ class LinuxFeatures(unittest.TestCase):
         read,write=os.pipe()
         pid,terminal=pty.fork()
         if pid==0:
+            os.environ["TERM"]="xterm-256color"
+            fcntl.ioctl(1,termios.TIOCSWINSZ,struct.pack("HHHH",32,132,0,0))
             os.close(write)
             os.dup2(read,0)
             os.close(read)
@@ -733,6 +759,7 @@ class LinuxFeatures(unittest.TestCase):
             result=bytearray()
             deadline=time.monotonic()+8
             sent=False
+            sent_quit=False
             while time.monotonic()<deadline:
                 readable,_,_=select.select([terminal],[],[],.2)
                 if not readable:
@@ -744,11 +771,17 @@ class LinuxFeatures(unittest.TestCase):
                 if not chunk:
                     break
                 result.extend(chunk)
-                if b"Veyl / health" in result and not sent:
-                    os.write(terminal,b"2\nq\n")
+                if b"Veyl / audit" in result and not sent:
+                    os.write(terminal,b"4")
                     sent=True
+                if b"Veyl / clients" in result and not sent_quit:
+                    os.write(terminal,b"q")
+                    sent_quit=True
             self.assertIn(b"Veyl / clients",result)
-            self.assertIn(b'"primary"',result)
+            self.assertIn(b"primary",result)
+            self.assertIn(b"\x1b[?1049h",result)
+            self.assertIn(b"\x1b[?1049l",result)
+            self.assertIn(b"SESSIONS / GRANTS",result)
         finally:
             os.close(terminal)
             found,status=os.waitpid(pid,os.WNOHANG)
