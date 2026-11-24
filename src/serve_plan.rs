@@ -15,7 +15,7 @@ use crate::http::operator::verify_approvals;
 use crate::protected_paths::validate_path;
 
 const HELP: &str =
-    "usage: mcp-gateway serve plan --config PATH [--listen 127.0.0.1:PORT] [--state-file PATH]";
+    "usage: veyl serve plan --config PATH [--listen 127.0.0.1:PORT] [--state-file PATH]";
 const SNAPSHOT_LIMIT: u64 = 1_048_576;
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {

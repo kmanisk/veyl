@@ -15,7 +15,7 @@ use crate::http::operator::{
 use crate::http::scope::sibling_scopes;
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
-    const USAGE: &str = "usage: mcp-gateway yolo <enable|disable|reset|status|set --mode MODE [--confirm-full]> --client ID --config PATH";
+    const USAGE: &str = "usage: veyl yolo <enable|disable|reset|status|set --mode MODE [--confirm-full]> --client ID --config PATH";
     if args.iter().any(|arg| arg == "--help") {
         println!("{USAGE}");
         return Ok(());

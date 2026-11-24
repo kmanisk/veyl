@@ -35,6 +35,17 @@ the actual disposable Veyl probe was unavailable. Automated package
 installation, source proposal/approval workflows, instruction packs and
 full BridgeDev provider parity remain unimplemented.
 
+## v0.2.3-beta release additions
+
+Veyl v0.2.3-beta establishes verified exact per-tool grant enforcement,
+preventing tool discovery leakage where client configurations could observe
+or invoke ungranted tool aliases sharing action permissions. Supervises
+`job_start` argument validation to reject arbitrary caller `argv` on configured
+profiles. Provides the concise operator CLI: `veyl mode <verb>` with automatic
+single-client resolution and ambiguous multi-client rejection, `veyl ui` / `veyl dashboard`
+browser launch, `veyl tui` / `veyl monitor` interactive terminal monitor, and
+client-neutral `veyl setup --root "$PWD" --yolo`.
+
 ## v0.2.2-alpha candidate additions
 The terminal monitor now offers live keyboard-controlled activity and job
 views, and the dashboard uses individual sidebar tabs. Admin job rows

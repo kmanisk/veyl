@@ -1,5 +1,52 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Production release v0.2.3-beta and next milestone roadmap (2026-11-24)
+
+### 1. Release status
+
+The v0.2.3-beta Linux beta release has been independently accepted and published:
+- Version: `0.2.3-beta`
+- Exact per-tool grant enforcement and job_start argument sanitization verified across 27 locked acceptance suites (27/27 PASS).
+- All 94 Rust tests, Clippy, formatting, Linux subsystem tests (16/16), product integration tests (9/9), and browser CDP tests passed.
+- Concise CLI verbs (`veyl mode <verb>`, `veyl ui`/`veyl dashboard`, `veyl tui`/`veyl monitor`, `veyl setup --root "$PWD" --yolo`) verified.
+
+### 2. Next milestone roadmap: BridgeDev parity and Nightshift orchestration
+
+To reach complete parity with `/home/onyx/Projects/bridge-dev`, implement the following modular components:
+
+1. **Chezmoi Inspection and Drift Guard (`chezmoi_inspect`)**:
+   - Reference: `bridge-dev/src/tools/chezmoi.ts` and `bridge-dev/src/lib/chezmoi-guard.ts`.
+   - Read-only tool that resolves live target paths to canonical `~/.local/share/chezmoi` source files.
+   - Detects templates (`.tmpl`), dirty Git status, unmanaged files, and outside destinations.
+   - Prevents AI clients from directly mutating live managed dotfiles without going through chezmoi source.
+
+2. **Interactive Process and Persistent Shell Session**:
+   - Reference: `bridge-dev/src/tools/shell.ts` and `bridge-dev/src/lib/persistent-shell.ts`.
+   - Persistent shell session with stateful cwd across calls (`run_command`, `shell_status`, `shell_reset`).
+   - Process supervision: `start_process`, `process_status`, `process_output`, `stop_process`, `clear_processes`.
+
+3. **Structured Git Tooling**:
+   - Reference: `bridge-dev/src/tools/git.ts`.
+   - Discrete, structured tools (`git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_restore`, `git_push`, `git_pull`, `git_stash`, `git_reset`) returning typed JSON instead of raw text.
+   - Replaces token-heavy shell parsing for agents.
+
+4. **Project Skill Discovery and Instruction Packs**:
+   - Reference: `bridge-dev/src/tools/context.ts` and `bridge-dev/src/lib/instruction-context.ts`.
+   - Discovery of repository-local skills in `.claude/skills`, `.agents/skills`, or `.gemini/skills`.
+   - Path-scoped rule loader (`load_path_rules`) for `.claude/rules/*.md`.
+   - Auto-memory note tool (`remember`) for session persistence.
+
+5. **Extension Management and Proposal Workflows**:
+   - Reference: `bridge-dev/src/tools/extensions.ts`.
+   - Operator review request tools (`extensions_propose_add`, `skills_propose_add`, `mcp_propose_add`).
+
+6. **Durable Nightshift Loop Orchestration**:
+   - Reference: `bridge-dev/src/lib/checkpoint.ts` and `bridge-dev/src/tools/rewind.ts`.
+   - Beyond single-step `task_run` and `job_wait`: full unattended loop orchestration.
+   - Automatic Git state checkpointing before each major iteration, structured progress logging, stall detection, and verified rollback (`rewind`).
+
+---
+
 ## Next independent acceptance — context, live diagnostics, marketplace
 
 Use ~/Projects/veyl, main; see latest STATUS.md and docs/PARITY.md.

@@ -1,5 +1,83 @@
 # Gate 3d status
 
+## 2026-11-24 — v0.2.3-beta production deployment and publication gate
+
+Final independent acceptance verification executed and PASSED across all requirements:
+1. All 28 historical acceptance SHA-256 pins verified in ~/.local/share/veyl-development/rust-mcp-gateway-lab/.
+2. All 27 locked acceptance suites PASSED (0 failures, 100% clean).
+   Both prior blocker tests verified:
+   - locked_file_mutation.py: 9/9 PASS (exact per-tool grant enforcement).
+   - locked_durable_jobs.py: 9/9 PASS (rejection of unexpected job arguments).
+3. Rust build: 94/94 test executions PASSED.
+4. Rust linting: cargo clippy --all-targets -- -D warnings passed with 0 warnings.
+5. Code style: cargo fmt -- --check clean.
+6. Product integration: tests/product_features.py (9/9 PASS).
+7. Linux subsystem integration: tests/linux_features.py (16/16 PASS).
+8. Real browser onboarding and dashboard tabs: tests/onboarding_browser.py passed under headless Brave CDP.
+9. Version updated to 0.2.3-beta in Cargo.toml, Cargo.lock, and README.md.
+10. Release binary build verified with release packaging.
+11. Local and private dashboards, terminal monitor, systemd service, portable operation, and client connectivity verified.
+
+## 2026-11-24 — acceptance blocker corrections and terminal alias
+
+Corrected both AGY findings without changing locked suites: retain exact
+configured tool grants and require them in discovery and invocation;
+reject unexpected profile-job arguments before request-id replay or
+execution. New product regression exercises direct ungranted alias calls
+and verifies no file mutation. Added `veyl tui` as an alias of monitor;
+ui and dashboard continue to open the browser.
+
+BridgeDev verification against the rebuilt local candidate: locked file
+mutation 9/9, locked durable jobs 9/9, product 9/9, Linux 16/16, Rust
+93/93, Clippy and diff check passed (mwuym3l2-71dr1x,
+mwuyn42e-598krr). All 28 historical suite pins matched
+(mwuyo16b-k93kvm). Registry still reports 0.2.2-alpha.
+Full post-fix independent acceptance has not yet been performed.
+Keep publication and deployment gated on acceptance of the exact
+candidate. No live grant changes, service restart or version bump.
+
+## 2026-11-24 — AGY independent acceptance of shortened CLI and parity checkpoint
+
+Independent acceptance verification performed on local candidate extending faccd73.
+Preserved all uncommitted CLI improvements and reconciled remote README commit 2bd2996
+without data loss or force-push.
+All 28 external acceptance SHA-256 digests verified in ~/.local/share/veyl-development/rust-mcp-gateway-lab/.
+Offline Rust build: 93/93 test executions PASSED.
+Clippy: cargo clippy --all-targets -- -D warnings passed with 0 warnings.
+Python test suites: tests/product_features.py (8/8 PASS), tests/linux_features.py (16/16 PASS).
+Browser onboarding and dashboard tabs: tests/onboarding_browser.py passed under headless Brave CDP.
+Shortened CLI verification: veyl help, veyl mode, veyl mode yolo, veyl mode standard,
+veyl mode enable, veyl mode disable, veyl mode full (rejected without confirmation, accepted
+with --confirm-full), single-client auto-selection, multi-client ambiguous rejection, and
+legacy mcp-gateway symlink branding all PASSED.
+Production safety: existing active mcp-gateway service (port 7331), Tailscale Funnel /veyl/
+and ports 8443/9443 preserved untouched.
+
+Blockers identified in historical locked acceptance suites:
+1. acceptance_pass2_files/locked_file_mutation.py (test_01_explicit_write_grant_is_discovered):
+   tools/list exposes 6 tools ('create_directory', 'edit_file', 'file_info', 'read_file',
+   'write_file', 'apply_patch') when only ['read_file', 'write_file', 'apply_patch'] were granted.
+   Root cause: admission::Client discards configured tool names; http::mod.rs filters by
+   action authorization only.
+2. acceptance_pass2_jobs/locked_durable_jobs.py (test_07_unknown_profile_or_user_argv_never_executes):
+   job_start accepts unexpected 'argv' argument when 'profile' is present instead of failing closed.
+   Root cause: jobs::api.rs ignores presence of argv when args.contains_key("profile").
+
+Per acceptance contract, commit and push are held pending Codex resolution of these two reproducible
+blockers. Detailed specifications and reproduction commands provided in HANDOFF.md.
+
+## 2026-11-24 — concise operator CLI
+
+Local candidate extends faccd73 with Veyl-branded root and subcommand help
+for the native binary and legacy symlink. Added mode listing and short
+mode verbs with optional client selection. Single-client installations
+select automatically; multiple-client installations require an interactive
+selection or explicit ID, never a hardcoded ChatGPT default. Existing
+mode set and --chatgpt-yolo syntax remains compatible; --yolo is the
+short public connector setup alias. README reflects shorter commands.
+No production mode changes, deployment, push or version bump.
+Six onboarding tests and Clippy passed (mwuy11wv-udmn6l).
+
 ## 2026-11-24 — BridgeDev context/diagnostics parity checkpoint
 
 Preserved prior local palette/marketplace changes on main, base b68f6c2.

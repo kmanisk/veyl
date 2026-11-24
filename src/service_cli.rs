@@ -20,11 +20,11 @@ use crate::http::operator::{PolicyFile, verify_approvals};
 
 const UNIT: &str = "mcp-gateway.service";
 const HELP: &str = "usage: veyl service on [--config PATH] [--listen IP:PORT]\n\
-                   mcp-gateway service print-unit [--config PATH] [--listen IP:PORT]\n\
-                   mcp-gateway service install (--dry-run | --confirm) [--config PATH] [--listen IP:PORT]\n\
-                   mcp-gateway service uninstall --confirm [--dry-run] [--config PATH] [--listen IP:PORT]\n\
-                   mcp-gateway service <enable|disable|start|stop|restart> (--dry-run | --confirm) [--config PATH] [--listen IP:PORT]\n\
-                   mcp-gateway service <status|diagnostics|validate>";
+                   veyl service print-unit [--config PATH] [--listen IP:PORT]\n\
+                   veyl service install (--dry-run | --confirm) [--config PATH] [--listen IP:PORT]\n\
+                   veyl service uninstall --confirm [--dry-run] [--config PATH] [--listen IP:PORT]\n\
+                   veyl service <enable|disable|start|stop|restart> (--dry-run | --confirm) [--config PATH] [--listen IP:PORT]\n\
+                   veyl service <status|diagnostics|validate>";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args.iter().any(|arg| arg == "--help") {

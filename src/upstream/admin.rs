@@ -11,7 +11,7 @@ use super::{server_name, tool_name};
 use crate::http::admission::{parse_clients, parse_document};
 use crate::http::operator::{PolicyFile, verify_approvals};
 
-const HELP: &str = "usage: mcp-gateway mcp-servers list | probe ID | add-stdio ID /absolute/COMMAND [ARGS...] | add-http ID URL [CONNECT_IP] | enable ID | disable ID | remove ID | restrict CLIENT | grant CLIENT ID TOOL | revoke CLIENT ID TOOL (append --config PATH)";
+const HELP: &str = "usage: veyl mcp-servers list | probe ID | add-stdio ID /absolute/COMMAND [ARGS...] | add-http ID URL [CONNECT_IP] | enable ID | disable ID | remove ID | restrict CLIENT | grant CLIENT ID TOOL | revoke CLIENT ID TOOL (append --config PATH)";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args == ["--help"] {

@@ -13,7 +13,7 @@ use crate::http::admission::{Configuration, parse_clients, read_config};
 use crate::http::operator::verify_approvals;
 use crate::protected_paths::validate_path;
 
-const HELP: &str = "usage: mcp-gateway state check [--state-root PATH] [--config PATH]";
+const HELP: &str = "usage: veyl state check [--state-root PATH] [--config PATH]";
 const LOCAL: ResolveFlags = ResolveFlags::BENEATH
     .union(ResolveFlags::NO_XDEV)
     .union(ResolveFlags::NO_SYMLINKS)

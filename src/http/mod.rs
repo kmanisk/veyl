@@ -109,7 +109,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             Some("--listen") if listen.is_none() => listen = args.next(),
             Some("--config") if config.is_none() => config = args.next(),
             _ => return Err(
-                "usage: mcp-gateway http --listen 127.0.0.1:PORT --config /absolute/clients.json"
+                "usage: veyl http --listen 127.0.0.1:PORT --config /absolute/clients.json"
                     .into(),
             ),
         }
@@ -777,7 +777,8 @@ fn dispatch_tools(
             let mut tools: Vec<_> = Tool::ALL
                 .into_iter()
                 .filter(|tool| {
-                    authorized(client, tool.action(), state, audited, unix_seconds())
+                    client.tools.contains(tool)
+                        && authorized(client, tool.action(), state, audited, unix_seconds())
                         && tool_available(*tool, client, state, settings)
                 })
                 .map(Tool::schema)
@@ -889,7 +890,8 @@ fn dispatch_tools(
                 );
             }
             let permitted = tool.is_some_and(|tool| {
-                authorized(client, tool.action(), state, audit("policy.checked"), now)
+                client.tools.contains(&tool)
+                    && authorized(client, tool.action(), state, audit("policy.checked"), now)
             });
             if !permitted {
                 #[cfg(target_os = "linux")]

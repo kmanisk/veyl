@@ -15,7 +15,7 @@ use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
 
-const HELP: &str = "Usage: mcp-gateway dashboard pair --config PATH | veyl-monitor --listen 127.0.0.1:PORT [--client ID] [--view health|clients|jobs|logs|audit|skills|upstreams|integrations] [--job ID]\n    Use --cancel JOB --client ID --confirm for non-interactive cancellation.";
+const HELP: &str = "Usage: veyl dashboard pair --config PATH | veyl-monitor --listen 127.0.0.1:PORT [--client ID] [--view health|clients|jobs|logs|audit|skills|upstreams|integrations] [--job ID]\n    Use --cancel JOB --client ID --confirm for non-interactive cancellation.";
 struct Monitor {
     rt: tokio::runtime::Runtime,
     addr: SocketAddrV4,

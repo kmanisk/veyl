@@ -166,6 +166,25 @@ class ProductFeatures(unittest.TestCase):
         return {"Cookie": headers["Set-Cookie"].split(";")[0], "Origin": origin,
                 "X-CSRF-Token": json.loads(data)["csrf"]}
 
+    def test_tool_names_are_explicit_grants_not_action_aliases(self):
+        self.doc["clients"][0]["tools"] = ["read_file", "write_file", "apply_patch"]
+        self.write_config()
+        (self.workspace / "file.txt").write_text("original")
+        self.start()
+        session = self.connect()
+        _, listing = self.rpc("tools/list", session)
+        self.assertEqual({t["name"] for t in listing["result"]["tools"]},
+                         {"read_file", "write_file", "apply_patch"})
+        for name, args in [
+            ("file_info", {"path":"file.txt"}),
+            ("edit_file", {"path":"file.txt","target":"original","replacement":"changed"}),
+            ("create_directory", {"path":"ungranted"}),
+        ]:
+            self.assertTrue(self.call(name,args,session)["isError"])
+        self.assertEqual((self.workspace / "file.txt").read_text(),"original")
+        self.assertFalse((self.workspace / "ungranted").exists())
+        self.assertFalse(self.call("read_file",{"path":"file.txt"},session)["isError"])
+
     def test_local_trace_session_isolation_and_command_response(self):
         self.doc["clients"][0]["tools"].append("system_info")
         self.write_config()

@@ -29,6 +29,7 @@ pub struct Client {
     pub expires_at: u64,
     pub root: PathBuf,
     pub actions: Vec<Action>,
+    pub(crate) tools: HashSet<Tool>,
     pub mode: ExecutionMode,
     pub disabled: bool,
     #[cfg(target_os = "linux")]
@@ -340,6 +341,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             expires_at,
             root,
             actions,
+            tools: names,
             mode: mode.into(),
             disabled: entry["disabled"].as_bool().unwrap_or(false),
             #[cfg(target_os = "linux")]

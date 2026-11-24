@@ -42,45 +42,99 @@ use std::path::PathBuf;
 use file_access::FileAccess;
 use protocol::Protocol;
 
+const HELP: &str = "Veyl — local-first MCP gateway
+
+Usage: veyl <command> [options]
+
+Getting started
+  setup --root DIR [--tailscale | --yolo]          Set up Veyl
+  init --root DIR                                Initialize local configuration
+  connect                                        Copy the connector URL
+
+Daily use
+  ui [--remote]                                  Open and pair the dashboard
+  dashboard                                      Alias for ui
+  tui | monitor                                  Open the terminal monitor
+  service on | status                            Manage the user service
+  run                                            Run in the foreground
+  portable                                       Switch to foreground operation
+  mode                                           List client modes
+  mode standard|yolo|full [CLIENT]               Change a client mode
+  mode enable|disable [CLIENT]                   Enable or disable a client
+
+Administration
+  diagnostics, skills, mcp-servers, audit, state, serve, protected-paths
+
+Advanced transport
+  --root DIR                                     MCP over stdio
+  http --listen 127.0.0.1:PORT --config PATH      MCP over HTTP
+
+Use veyl help <command> or veyl <command> --help for options.
+Use veyl --version to display the installed version.";
+
 fn main() {
+    let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "tui") {
+        args[0] = "monitor".into();
+    }
+    if args.len() == 2 && args[0] == "help" && args[1] == "tui" {
+        args[1] = "monitor".into();
+    }
+    let public_command = |arg: &std::ffi::OsString| matches!(arg.to_str(),
+        Some("init" | "setup" | "connect" | "run" | "portable" | "ui" | "dashboard" | "monitor" | "service" | "mode" | "diagnostics" | "audit" | "skills" | "mcp-servers" | "state" | "serve" | "protected-paths" | "yolo" | "http"));
+    if args.len() == 2 && args[0] == "help" && public_command(&args[1]) {
+        args.swap(0, 1);
+        args[1] = "--help".into();
+    }
+    if args.len() == 2 && args[1] == "-h" && public_command(&args[0]) {
+        args[1] = "--help".into();
+    }
     #[cfg(target_os = "linux")]
     {
-        let args: Vec<_> = std::env::args_os().skip(1).collect();
         if args.first().is_some_and(|arg| arg == "audit") {
             if let Err((status, message)) = audit_cli::run(&args[1..]) {
-                eprintln!("mcp-gateway: {message}");
+                eprintln!("veyl: {message}");
                 std::process::exit(status);
             }
             return;
         }
     }
-    if let Err(message) = run() {
-        eprintln!("mcp-gateway: {message}");
+    if let Err(message) = run(args) {
+        eprintln!("veyl: {message}");
         std::process::exit(2);
     }
 }
 
-fn run() -> Result<(), String> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
+fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
+    let invoked_as_veyl = std::env::args_os().next()
+        .is_some_and(|p| std::path::Path::new(&p).file_name().is_some_and(|n| n == "veyl"));
+    if args == ["help"] || args == ["--help"] || args == ["-h"] || (args.is_empty() && invoked_as_veyl) {
+        println!("{HELP}");
+        return Ok(());
+    }
+    if args == ["version"] || args == ["--version"] || args == ["-V"] {
+        println!("{} {}", if invoked_as_veyl { "veyl" } else { env!("CARGO_BIN_NAME") }, env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if args == ["http", "--help"] {
+        println!("Usage: veyl http --listen 127.0.0.1:PORT --config PATH");
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    if args == ["ui", "--help"] {
+        println!("Usage: veyl ui [--remote] [--config PATH]\nOpen and pair the dashboard.");
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    if args == ["run", "--help"] || args == ["portable", "--help"] {
+        println!("Usage: veyl {} [--config PATH] [--listen 127.0.0.1:PORT]\nRun in the foreground; portable first stops and disables the matching Veyl user service.", args[0].to_string_lossy());
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     let args = local_cli::normalize(args)?;
-    if args.len() == 1 {
-        if args[0] == "--version" {
-            println!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
-            return Ok(());
-        }
-        if args[0] == "--help" {
-            if env!("CARGO_BIN_NAME") == "veyl" {
-                println!("Veyl — Linux MCP gateway\n\n  veyl setup --root DIR [--tailscale | --chatgpt-yolo]\n  veyl init --root DIR\n  veyl run\n  veyl ui [--remote]\n  veyl monitor\n  veyl connect\n  veyl service on | status\n  veyl portable\n  veyl mode get CLIENT\n  veyl mode set CLIENT standard|yolo|full\n\nAdvanced commands: diagnostics, audit, skills, mcp-servers, state, serve, protected-paths. Add --help to a command for its options.");
-                return Ok(());
-            }
-            println!(
-                "mcp-gateway --root DIR | http --listen 127.0.0.1:PORT --config PATH
-\
-                      veyl init --root DIR | veyl ui | veyl run | veyl portable | veyl service on | veyl mode --help | monitor --help | yolo --help | audit --help | service --help | protected-paths --help | state --help | serve --help | skills --help | dashboard --help | mcp-servers --help"
-            );
-            return Ok(());
-        }
+    if args == ["--help"] {
+        println!("{HELP}");
+        return Ok(());
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "service") {
@@ -157,7 +211,7 @@ fn run() -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "monitor") {
-        if env!("CARGO_BIN_NAME") == "veyl" && args.len() == 2 && args[1] == "--help" {
+        if args.len() == 2 && args[1] == "--help" {
             println!("Usage: veyl monitor [--client ID] [--view health|clients|jobs|logs|audit|skills|upstreams|integrations] [--job ID]\nPairs automatically. Without --view, opens the interactive terminal monitor.");
             return Ok(());
         }
@@ -187,7 +241,7 @@ fn run() -> Result<(), String> {
     let mut args = args.into_iter();
     let root = match (args.next(), args.next(), args.next()) {
         (Some(option), Some(root), None) if option == "--root" => PathBuf::from(root),
-        _ => return Err("usage: mcp-gateway --root <existing-directory>".to_string()),
+        _ => return Err("Invalid command or arguments. Use veyl --help for available commands.".to_string()),
     };
 
     let files = FileAccess::new(&root)?;

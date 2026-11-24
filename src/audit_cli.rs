@@ -8,7 +8,7 @@ use mcp_gateway::security::audit::{AuditLimits, AuditSink};
 use crate::http::admission::read_config;
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), (i32, String)> {
-    const USAGE: &str = "usage: mcp-gateway audit <verify|status|inspect|rotate|export-head> [--config PATH | --log PATH] [--json] [--anchor FILE | --out PATH]";
+    const USAGE: &str = "usage: veyl audit <verify|status|inspect|rotate|export-head> [--config PATH | --log PATH] [--json] [--anchor FILE | --out PATH]";
     let invalid = || (2, USAGE.to_owned());
     let action = args
         .first()

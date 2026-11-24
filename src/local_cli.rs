@@ -24,6 +24,9 @@ fn default_config(home: &Path) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn normalize(mut args: Vec<OsString>) -> Result<Vec<OsString>, String> {
+    if args == ["mode"] {
+        args.push("list".into());
+    }
     if args == ["dashboard"] {
         args.push("open".into());
     }
@@ -173,7 +176,7 @@ pub(crate) fn init(args: &[OsString]) -> Result<(), String> {
     use sha2::{Digest, Sha256};
     use std::ffi::OsStr;
 
-    const HELP: &str = "usage: veyl init --root EXISTING_WORKSPACE [--tailscale | --tailscale-host HOST] [--chatgpt-yolo]";
+    const HELP: &str = "usage: veyl init --root EXISTING_WORKSPACE [--tailscale | --tailscale-host HOST] [--yolo]";
     if args == ["--help"] {
         println!("{HELP}");
         return Ok(());
@@ -201,7 +204,7 @@ pub(crate) fn init(args: &[OsString]) -> Result<(), String> {
                 );
             }
             Some("--tailscale") if !tailscale => tailscale = true,
-            Some("--chatgpt-yolo") if !public => public = true,
+            Some("--yolo" | "--chatgpt-yolo") if !public => public = true,
             _ => return Err(HELP.into()),
         }
     }
@@ -379,7 +382,7 @@ fn credential() -> Result<String, String> {
 pub(crate) fn setup(args: &[OsString]) -> Result<(), String> {
     if args == ["--help"] {
         println!(
-            "usage: veyl setup --root EXISTING_WORKSPACE [--tailscale] [--chatgpt-yolo]\nInitialize and start the user service. Public setup copies the connector URL once."
+            "usage: veyl setup --root EXISTING_WORKSPACE [--tailscale] [--yolo]\nInitialize and start the user service. --yolo creates a public authenticated Funnel connector and copies its URL once."
         );
         return Ok(());
     }

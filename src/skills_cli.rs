@@ -12,7 +12,7 @@ use crate::http::operator::{PolicyFile, verify_approvals};
 use crate::skills::{Skill, valid_name};
 use crate::tools::MutationRoot;
 
-const HELP: &str = "usage: mcp-gateway skills list | read NAME | import /absolute/SKILL_FOLDER | enable NAME | disable NAME | grant CLIENT NAME | revoke CLIENT NAME (append --config PATH)";
+const HELP: &str = "usage: veyl skills list | read NAME | import /absolute/SKILL_FOLDER | enable NAME | disable NAME | grant CLIENT NAME | revoke CLIENT NAME (append --config PATH)";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args == ["--help"] {

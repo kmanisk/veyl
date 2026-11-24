@@ -12,6 +12,106 @@ use std::sync::Mutex;
 
 static SERIAL_LOCK: Mutex<()> = Mutex::new(());
 
+#[test]
+fn branded_help_is_available_without_configuration() {
+    let fixture = Fixture::new();
+    let alias = fixture.0.join("veyl");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_mcp-gateway"), &alias).unwrap();
+    for binary in [PathBuf::from(env!("CARGO_BIN_EXE_veyl")), alias] {
+        let run = |args: &[&str]| {
+            Command::new(&binary)
+                .args(args)
+                .env("HOME", &fixture.0)
+                .output()
+                .unwrap()
+        };
+        for args in [&[][..], &["help"][..], &["--help"][..], &["-h"][..]] {
+            let output = ok(run(args));
+            assert!(output.contains("Usage: veyl"));
+            assert!(output.contains("monitor"));
+            assert!(!output.contains("mcp-gateway"));
+        }
+        for command in [
+            "init",
+            "setup",
+            "connect",
+            "run",
+            "portable",
+            "ui",
+            "dashboard",
+            "monitor",
+            "tui",
+            "service",
+            "mode",
+            "diagnostics",
+            "audit",
+            "skills",
+            "mcp-servers",
+            "state",
+            "serve",
+            "protected-paths",
+            "yolo",
+            "http",
+        ] {
+            for args in [[command, "--help"], ["help", command], [command, "-h"]] {
+                let output = ok(run(&args));
+                assert!(output.contains("veyl"), "{args:?}: {output}");
+                assert!(!output.contains("mcp-gateway"), "{args:?}: {output}");
+            }
+        }
+        let invalid = run(&["not-a-command"]);
+        assert!(!invalid.status.success());
+        let stderr = String::from_utf8_lossy(&invalid.stderr);
+        assert!(stderr.starts_with("veyl:"));
+        assert!(stderr.contains("veyl --help"));
+        assert!(!stderr.contains("mcp-gateway"));
+        assert!(invalid.stdout.is_empty());
+        assert!(ok(run(&["--version"])).starts_with("veyl "));
+    }
+    assert!(!fixture.0.join(".local").exists());
+}
+
+#[test]
+fn short_mode_commands_select_single_client_and_reject_ambiguous_changes() {
+    let _lock = SERIAL_LOCK.lock().unwrap();
+    let f = Fixture::new();
+    let invoke = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_veyl"))
+            .env("HOME", &f.0)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    ok(invoke(&[
+        "init",
+        "--root",
+        f.0.join("workspace").to_str().unwrap(),
+    ]));
+    assert!(ok(invoke(&["mode"])).contains("dev\tstandard\tenabled"));
+    assert!(ok(invoke(&["mode", "get"])).contains("mode=standard"));
+    assert!(!invoke(&["mode", "full"]).status.success());
+    ok(invoke(&["mode", "disable"]));
+    assert!(ok(invoke(&["mode"])).contains("dev\tstandard\tdisabled"));
+    ok(invoke(&["mode", "enable"]));
+    assert!(ok(invoke(&["mode"])).contains("dev\tstandard\tenabled"));
+    let config = f.0.join(".local/state/veyl/clients.json");
+    let mut doc: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    let mut other = doc["clients"][0].clone();
+    other["id"] = "other".into();
+    other["token_sha256"] =
+        "abababababababababababababababababababababababababababababababab".into();
+    doc["clients"].as_array_mut().unwrap().push(other);
+    fs::write(&config, serde_json::to_vec(&doc).unwrap()).unwrap();
+    let before = fs::read(&config).unwrap();
+    let ambiguous = invoke(&["mode", "yolo"]);
+    assert!(!ambiguous.status.success());
+    assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("Multiple clients configured"));
+    assert_eq!(fs::read(&config).unwrap(), before);
+    ok(invoke(&["mode", "disable", "other"]));
+    assert!(ok(invoke(&["mode"])).contains("other\tstandard\tdisabled"));
+    assert!(ok(invoke(&["mode"])).contains("dev\tstandard\tenabled"));
+}
+
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
@@ -241,6 +341,8 @@ fn mode_transitions_and_full_confirmation_workflow() {
     let set_standard = ok(invoke(&["mode", "set", "chatgpt", "standard"]));
     assert!(set_standard.contains("mode=standard"));
     assert!(ok(invoke(&["mode", "get", "chatgpt"])).contains("mode=standard"));
+    assert!(ok(invoke(&["mode", "yolo", "chatgpt"])).contains("mode=yolo"));
+    assert!(ok(invoke(&["mode", "standard", "chatgpt"])).contains("mode=standard"));
 }
 
 #[test]

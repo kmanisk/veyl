@@ -11,11 +11,22 @@ use crate::http::admission::{parse_clients, parse_document};
 use crate::http::operator::{Mode, PolicyFile, revision, verify_approvals};
 use crate::http::scope::root_paths;
 
-const USAGE: &str = "usage: veyl mode get --client ID --config PATH | veyl mode set --client ID --mode standard|yolo|full [--confirm-full] --config PATH | veyl mode migrate --config PATH | veyl mode enable|disable --client ID --config PATH";
+const USAGE: &str = "Usage: veyl mode [list]\n       veyl mode standard|yolo|full [CLIENT] [--confirm-full]\n       veyl mode get|enable|disable [CLIENT]\n       veyl mode migrate\nAll commands accept --config PATH. With multiple clients, select interactively or supply a client ID. FULL requires --confirm-full. Existing mode set syntax is also supported.";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args == ["--help"] {
         println!("{USAGE}");
+        return Ok(());
+    }
+    let resolved = resolve_shortcut(args)?;
+    let args = resolved.as_slice();
+    if args.first().is_some_and(|arg| arg == "list") {
+        let [_, option, path] = args else { return Err(USAGE.into()); };
+        if option != "--config" { return Err(USAGE.into()); }
+        let clients = client_choices(Path::new(path))?;
+        for (id, mode, disabled) in clients {
+            println!("{id}\t{mode}\t{}", if disabled {"disabled"} else {"enabled"});
+        }
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "migrate") {
@@ -39,6 +50,74 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         return set_disabled(Path::new(&translated[4]), id, disabled);
     }
     crate::yolo_cli::run(&translate(args)?)
+}
+
+fn client_choices(path: &Path) -> Result<Vec<(String, String, bool)>, String> {
+    let policy = PolicyFile::lock(path, false)?;
+    let settings = policy.snapshot()?;
+    verify_approvals(&settings)?;
+    Ok(settings.clients.iter().map(|client| {
+        let label = match client.mode {
+            mcp_gateway::security::policy::ExecutionMode::BroadYolo => "yolo",
+            mcp_gateway::security::policy::ExecutionMode::PersistentYolo => "scoped_yolo",
+            mcp_gateway::security::policy::ExecutionMode::Standard => "standard",
+                _ => client.mode.audit_mode().unwrap_or("disabled"),
+        };
+        (client.id.clone(), label.to_owned(), client.disabled)
+    }).collect())
+}
+
+fn resolve_shortcut(args: &[OsString]) -> Result<Vec<OsString>, String> {
+    use std::io::{self, IsTerminal, Write};
+    let operation = args.first().and_then(|arg|arg.to_str()).ok_or(USAGE)?;
+    if !matches!(operation, "standard" | "yolo" | "full" | "get" | "status" | "enable" | "disable") {
+        return Ok(args.to_vec());
+    }
+    let mut client = None;
+    let mut config = None;
+    let mut confirm = false;
+    let mut rest = args[1..].iter();
+    while let Some(arg) = rest.next() {
+        match arg.to_str() {
+            Some("--client") if client.is_none() => client = Some(rest.next().ok_or(USAGE)?.clone()),
+            Some("--config") if config.is_none() => config = Some(rest.next().ok_or(USAGE)?.clone()),
+            Some("--confirm-full") if operation == "full" && !confirm => confirm = true,
+            Some(value) if !value.starts_with('-') && client.is_none() => client=Some(arg.clone()),
+            _ => return Err(USAGE.into()),
+        }
+    }
+    if operation == "full" && !confirm { return Err("FULL requires --confirm-full".into()); }
+    let config = config.ok_or(USAGE)?;
+    let client = match client {
+        Some(id) => id,
+        None => {
+            let choices = client_choices(Path::new(&config))?;
+            if choices.len() == 1 {
+                choices[0].0.clone().into()
+            } else {
+                if choices.is_empty() { return Err("No configured clients".into()); }
+                if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+                    return Err("Multiple clients configured; run veyl mode to list them, then supply a client ID".into());
+                }
+                let mut stderr = io::stderr().lock();
+                for (i,(id,mode,disabled)) in choices.iter().enumerate() {
+                    writeln!(stderr,"{}: {} ({}, {})",i+1,id,mode,if *disabled {"disabled"} else {"enabled"}).map_err(|e|e.to_string())?;
+                }
+                write!(stderr,"Select client for {operation} (blank cancels): ").map_err(|e|e.to_string())?;
+                stderr.flush().map_err(|e|e.to_string())?;
+                let mut line = String::new();
+                io::stdin().read_line(&mut line).map_err(|e|e.to_string())?;
+                let index = line.trim().parse::<usize>().ok().and_then(|n|n.checked_sub(1)).ok_or("No client selected")?;
+                choices.get(index).ok_or("Invalid client selection")?.0.clone().into()
+            }
+        }
+    };
+    let mut resolved = if matches!(operation,"standard"|"yolo"|"full") {
+        vec!["set".into(),"--client".into(),client,"--mode".into(),operation.into()]
+    } else { vec![operation.into(),"--client".into(),client] };
+    resolved.extend(["--config".into(),config]);
+    if confirm { resolved.push("--confirm-full".into()); }
+    Ok(resolved)
 }
 
 fn now() -> u64 {

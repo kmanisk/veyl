@@ -41,6 +41,12 @@ impl Jobs {
         };
         let result = match tool {
             Tool::StartJob | Tool::JobStart | Tool::RunCommand => {
+                let short = tool == Tool::RunCommand;
+                if args.keys().any(|key| !matches!(key.as_str(), "profile" | "request_id") && !(short && key == "argv"))
+                    || args.contains_key("profile") == args.contains_key("argv")
+                {
+                    return tool_text(true, "Expected exactly one configured job profile or permitted argv, with no unexpected arguments");
+                }
                 let req_id = args.get("request_id").and_then(Value::as_str);
                 if let Some(req_id) = req_id
                     && let Ok(Some(existing_id)) = self.store.get_request_id(req_id)
@@ -51,7 +57,6 @@ impl Jobs {
                     status["idempotent_replay"] = json!(true);
                     return tool_text(false, &status.to_string());
                 }
-                let short = tool == Tool::RunCommand;
                 let selected = match args.len() {
                     _ if args.contains_key("profile") => {
                         args["profile"].as_str().and_then(|name| {
