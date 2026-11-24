@@ -14,8 +14,8 @@ Install the Linux beta from crates.io (no manual clone or symlink):
 cargo install veyl --version 0.2.3-beta --locked --bin veyl --bin veyl-monitor
 ```
 
-The crate is licensed under MIT. The GitHub repository is currently private;
-the crates.io package contains the installable source and user documentation.
+Veyl is open source under the MIT license. Source code and prebuilt Linux
+binaries are available on GitHub, and the crate is available on crates.io.
 
 Requires Linux, Bubblewrap (`bwrap`) and Git. Add Tailscale for remote
 access and a systemd user session for persistent service mode.
