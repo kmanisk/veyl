@@ -21,7 +21,7 @@ Requires Linux, Bubblewrap (`bwrap`) and Git. Add Tailscale for remote
 access and a systemd user session for persistent service mode.
 Cargo's bin directory must be on PATH.
 
-## Connect ChatGPT
+## Connect a remote client
 
 1. Sign in to Tailscale once. Enable HTTPS, MagicDNS and Funnel for your
    node, and allow your user to manage Serve routes.
@@ -72,12 +72,32 @@ temporary command/response trace. The durable audit remains metadata-only.
 | `veyl service on` | Start and enable the user service |
 | `veyl service status` | Inspect the service |
 | `veyl portable` | Switch from service to foreground |
-| `veyl mode set chatgpt yolo` | Persistent YOLO |
-| `veyl mode set chatgpt standard` | Workspace-scoped Standard |
-| `veyl mode disable chatgpt` | Disable client access |
+| `veyl mode set CLIENT yolo` | Persistent YOLO |
+| `veyl mode set CLIENT standard` | Workspace-scoped Standard |
+| `veyl mode disable CLIENT` | Disable client access |
 
-FULL mode requires explicit confirmation. Stop any foreground gateway
-before starting the service.
+Replace `CLIENT` with your configured client ID. FULL mode requires explicit
+confirmation. Stop any foreground gateway before starting the service.
+
+## Short commands (next update)
+
+The following commands are implemented in the local candidate and await
+independent acceptance. They are not yet included in the published crate.
+
+```sh
+veyl setup --root "$PWD" --yolo
+veyl mode
+veyl mode yolo
+veyl mode standard
+veyl mode full --confirm-full
+veyl mode disable
+veyl mode enable
+veyl help
+```
+
+Mode commands select the sole client automatically or prompt for a client
+when several are configured. Append a client ID for noninteractive use.
+Existing explicit commands remain compatible.
 
 ## Documentation
 
