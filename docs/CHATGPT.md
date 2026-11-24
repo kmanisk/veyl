@@ -66,6 +66,22 @@ disposable file. Confirm the result and audit attribution. Public
 requests share a bounded request budget, separate from private bearer
 failures.
 
+On the configured public MCP route, browser requests from
+`https://chatgpt.com` and `https://chat.openai.com` can preflight POSTs
+and read the MCP session and protocol response headers. OPTIONS uses
+the public request budget and grants no access. Every POST still
+requires the public credential. Private MCP and the dashboard retain
+their own origin checks.
+
+If discovery fails, check Veyl's stderr or service journal while
+retrying in ChatGPT. `MCP_HTTP_EVENT=funnel.response` identifies the
+HTTP method, classified origin and status. `funnel.rpc_initialize`
+and `funnel.rpc_tools_list` identify authenticated discovery requests.
+The events omit the URL, credentials, raw Origin and client metadata.
+A browser probe against a public relay can verify CORS independently
+of ChatGPT's account and cloud network. A successful browser probe
+does not establish that the connector service reached the endpoint.
+
 ## ChatGPT connection
 
 Open **Plugins → + → Add custom MCP server**. Name the private plugin

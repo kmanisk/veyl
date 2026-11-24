@@ -549,13 +549,13 @@ pub fn authenticate(clients: &[Client], header: Option<&HeaderValue>, now: u64) 
     found
 }
 
-pub(super) fn token_digest(token: &str) -> Option<[u8; 32]> {
-    if token.len() != 64
-        || !token
+pub(super) fn token_shape(token: &str) -> bool {
+    token.len() == 64
+        && token
             .bytes()
             .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
-    {
-        return None;
-    }
-    Some(Sha256::digest(token.as_bytes()).into())
+}
+
+pub(super) fn token_digest(token: &str) -> Option<[u8; 32]> {
+    token_shape(token).then(|| Sha256::digest(token.as_bytes()).into())
 }

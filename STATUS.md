@@ -1030,3 +1030,22 @@ back up the original binaries and both configurations, move the Codex
 helper to `~/.codex/veyl-helpers/`, apply the dedicated Funnel verifier,
 restart only Veyl and test the public route from outside the tailnet.
 The [ChatGPT guide](docs/CHATGPT.md) covers connector setup and revocation.
+
+## Veyl v0.1.2-beta public MCP CORS candidate
+
+Base `13351c676c7ce91a2f8f1085d69dbaa5191531e5`. Brave reproduced
+the cross-origin failure against the existing production Funnel.
+The candidate adds exact ChatGPT Origins and bounded, bodyless POST
+preflight on the configured public MCP route. OPTIONS shares the public
+rate limit and never authenticates or creates a session. Actual requests
+retain credential and session checks. Private listeners retain their
+existing policies.
+
+The consolidated verifier passed 287 cases with all 28 pins unchanged.
+The 37 Rust tests, 5 product probes, 12 Linux probes, Clippy and the
+release build passed. See `target/v0.1.2-beta/` and
+`target/gate3d/v0.1.2-beta/` for test evidence. Use the public HTTPS
+browser probe after the independent review and rollout. ChatGPT account
+discovery requires a separate observation. Current documentation does
+not establish a browser-only connector transport or a restriction on
+port 8443.

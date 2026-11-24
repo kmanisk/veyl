@@ -355,6 +355,96 @@ class LinuxFeatures(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(peer.configuration, paired)
 
+    def test_funnel_cors_preflight_and_authenticated_session(self):
+        token, _ = self.prepare_public_client()
+        self.start()
+        authority = f"{TAIL['hostname']}:{TAIL['mcp_https_port']}"
+        public = {"Host": authority, "Tailscale-Funnel-Request": "?1"}
+        origin = "https://chatgpt.com"
+        browser = {**public, "Origin": origin}
+        headers = {"Access-Control-Request-Method": "POST",
+                   "Access-Control-Request-Headers": "authorization, Content-Type, Mcp-Session-Id, Mcp-Protocol-Version"}
+        path = "/mcp/" + token
+        audit_before = self.f.audit.read_bytes()
+        for source in (origin, "https://chat.openai.com"):
+            for route in ("/mcp", path, "/mcp/" + secrets.token_hex(32)):
+                status, response, body = self.f.request(
+                    self.f.mcp, "OPTIONS", route, **public, Origin=source, **headers)
+                self.assertEqual((status, body), (204, b""))
+                self.assertEqual(response["Access-Control-Allow-Origin"], source)
+                self.assertEqual(response["Access-Control-Allow-Methods"], "POST")
+                vary = ",".join(response.get_all("Vary")).lower()
+                self.assertIn("origin", vary)
+                self.assertIn("access-control-request-headers", vary)
+                self.assertIsNone(response["Access-Control-Allow-Credentials"])
+                self.assertIsNone(response["Mcp-Session-Id"])
+        self.assertEqual(self.f.audit.read_bytes(), audit_before)
+        for field, value in [("Access-Control-Request-Method", "DELETE"),
+                             ("Access-Control-Request-Headers", "X-Unapproved"),
+                             ("Access-Control-Request-Headers", "accept," * 40 + "accept")]:
+            status, response, _ = self.f.request(
+                self.f.mcp, "OPTIONS", path, **browser, **{**headers, field: value})
+            self.assertEqual(status, 403)
+            self.assertIsNone(response["Access-Control-Allow-Methods"])
+        self.assertEqual(self.f.request(self.f.mcp, "OPTIONS", path, {"unexpected": True},
+                                        **browser, **headers)[0], 403)
+        self.assertEqual(self.f.request(self.f.mcp, "OPTIONS", "/mcp/malformed",
+                                        **browser, **headers)[0], 404)
+
+        init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "cors-fixture", "version": "1"},
+        }}
+        for rejected in ["https://chatgpt.com.evil.invalid", "http://chatgpt.com",
+                         "https://chatgpt.com/", "null"]:
+            status, response, _ = self.f.request(self.f.mcp, "POST", path, init,
+                                                 **public, Origin=rejected)
+            self.assertEqual(status, 403)
+            self.assertIsNone(response["Access-Control-Allow-Origin"])
+        connection = http.client.HTTPConnection("127.0.0.1", self.f.mcp, timeout=5)
+        self.addCleanup(connection.close)
+        connection.putrequest("OPTIONS", "/mcp", skip_host=True)
+        for name, value in {**browser, **headers}.items():
+            connection.putheader(name, value)
+        connection.putheader("Origin", "https://chat.openai.com")
+        connection.endheaders()
+        duplicate = connection.getresponse()
+        self.assertEqual(duplicate.status, 403)
+        self.assertIsNone(duplicate.getheader("Access-Control-Allow-Origin"))
+        duplicate.read()
+        self.assertEqual(self.f.request(self.f.mcp, "OPTIONS", "/mcp",
+                                        Host=authority, Origin=origin, **headers)[0], 403)
+        admin_host = f"{TAIL['hostname']}:{TAIL['admin_https_port']}"
+        _, admin, _ = self.f.request(self.f.admin, "OPTIONS", "/dashboard",
+                                     **{**browser, "Host": admin_host}, **headers)
+        self.assertIsNone(admin["Access-Control-Allow-Origin"])
+        for bad, extra in [("/mcp", {"Authorization": "Bearer " + product.TOKEN}),
+                           ("/mcp/" + secrets.token_hex(32), {})]:
+            status, response, _ = self.f.request(self.f.mcp, "POST", bad, init, **browser, **extra)
+            self.assertEqual(status, 404)
+            self.assertIsNone(response["Mcp-Session-Id"])
+        status, response, _ = self.f.request(self.f.mcp, "POST", path, init, **browser)
+        self.assertEqual(status, 200)
+        self.assertEqual(response["Access-Control-Allow-Origin"], origin)
+        self.assertEqual(response["Mcp-Protocol-Version"], "2025-11-25")
+        exposed = response["Access-Control-Expose-Headers"].lower()
+        self.assertIn("mcp-session-id", exposed)
+        self.assertIn("mcp-protocol-version", exposed)
+        session = {**browser, "Mcp-Session-Id": response["Mcp-Session-Id"],
+                   "Mcp-Protocol-Version": response["Mcp-Protocol-Version"]}
+        notice = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+        self.assertEqual(self.f.request(self.f.mcp, "POST", path, notice, **session)[0], 202)
+        listing = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+        status, _, content = self.f.request(self.f.mcp, "POST", path, listing, **session)
+        self.assertEqual(status, 200)
+        self.assertIn("read_file", [tool["name"] for tool in json.loads(content)["result"]["tools"]])
+        log = (self.f.base / "gateway.log").read_text()
+        self.assertIn("funnel.response method=OPTIONS origin=chatgpt status=204", log)
+        self.assertIn("funnel.response method=POST origin=rejected status=403", log)
+        self.assertIn("funnel.rpc_tools_list", log)
+        self.assertNotIn("evil.invalid", log)
+        self.assertNotIn(token, log)
+
     def test_broad_rejects_visible_mount_alias_and_nested_mount(self):
         _, env = self.prepare_public_client()
         state = self.f.config.parent

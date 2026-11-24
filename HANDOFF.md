@@ -765,3 +765,15 @@ Production promotion requires AGY acceptance and BridgeDev verification
 of this candidate. Publish the private prerelease only after the
 deployment and external MCP call pass. Preserve the prior release and
 BridgeDev's port 443 route.
+
+## v0.1.2-beta CORS review
+
+Review the change against `v0.1.1-beta` and run
+`LinuxFeatures.test_funnel_cors_preflight_and_authenticated_session`
+plus the existing public-authentication and private dashboard tests.
+Check that allowed Origins and OPTIONS are limited to validated public
+MCP requests, that POST credentials and public/private session separation
+still apply, and that telemetry omits URLs and raw headers.
+Use the deployment checks in [STATUS.md](STATUS.md). The Brave
+production probe exercises browser CORS, while ChatGPT connector
+discovery must be observed separately.

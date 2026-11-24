@@ -24,6 +24,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
+#[cfg(target_os = "linux")]
+use hyper::body::Body as _;
 use hyper::body::Incoming;
 use hyper::header::{self, HeaderValue};
 use hyper::server::conn::http1;
@@ -365,7 +367,8 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
         .and_then(|settings| settings.funnel.as_ref())
         .filter(|_| {
             host.is_some() && host == remote.as_deref() && funnel::marked(request.headers())
-        });
+        })
+        .map(|settings| settings.allow_secret_path);
     if request.uri().authority().is_some()
         || request.headers().get_all(header::HOST).iter().count() != 1
         || !host.is_some_and(|h| h == expected || h == local_alias || remote.as_deref() == Some(h))
@@ -385,6 +388,11 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     } else {
         format!("http://{}", host.unwrap_or_default())
     };
+    #[cfg(target_os = "linux")]
+    if let Some(allow_secret_path) = public {
+        let origin = funnel::Origin::parse(request.headers(), &origin);
+        return serve_public(request, state, peer, origin, allow_secret_path).await;
+    }
     if request.headers().get_all(header::ORIGIN).iter().count() > 1
         || request
             .headers()
@@ -393,20 +401,22 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     {
         return simple(StatusCode::FORBIDDEN, "Invalid Origin");
     }
-    if request
-        .headers()
-        .get("MCP-Protocol-Version")
-        .is_some_and(|value| value.as_bytes() != MCP_VERSION.as_bytes())
-    {
-        return simple(StatusCode::BAD_REQUEST, "Unsupported protocol version");
-    }
+    serve_admitted(request, state, peer, false, None).await
+}
 
-    // Admission precedes reading even one byte of an untrusted request body.
-    let now = unix_seconds();
-    #[cfg(target_os = "linux")]
-    if public.is_some() {
-        // Funnel exits share a loopback peer. Keep its aggregate budget
-        // separate from private clients and ignore claimed source IPs.
+#[cfg(target_os = "linux")]
+async fn serve_public(
+    request: Request<Incoming>,
+    state: Arc<State>,
+    peer: IpAddr,
+    origin: funnel::Origin,
+    allow_secret_path: bool,
+) -> Reply {
+    let options = request.method() == Method::OPTIONS;
+    let valid_path = funnel::route_matches(request.uri().path(), allow_secret_path);
+    {
+        // Charge all requests on the validated public route to one budget,
+        // including rejected origins and preflights. Private admission is separate.
         let mut rate = state.funnel_rate.lock().await;
         let instant = Instant::now();
         if instant >= rate.until {
@@ -414,13 +424,85 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
             rate.count = 0;
         }
         if rate.count >= 60 {
-            return simple(
+            let mut response = simple(
                 StatusCode::TOO_MANY_REQUESTS,
                 "Too many public MCP requests",
             );
+            if valid_path {
+                funnel::cors_headers(response.headers_mut(), origin, options);
+            }
+            return response;
         }
         rate.count += 1;
     }
+    let method = match *request.method() {
+        Method::OPTIONS => "OPTIONS",
+        Method::POST => "POST",
+        Method::GET => "GET",
+        _ => "other",
+    };
+    let mut response = if !valid_path {
+        simple(StatusCode::NOT_FOUND, "Not found")
+    } else if matches!(origin, funnel::Origin::Rejected) {
+        simple(StatusCode::FORBIDDEN, "Invalid Origin")
+    } else if options {
+        if origin.value().is_none()
+            || !request.body().is_end_stream()
+            || !funnel::options_allowed(request.headers())
+        {
+            simple(StatusCode::FORBIDDEN, "Invalid MCP preflight")
+        } else {
+            let mut response = Response::new(Full::default());
+            *response.status_mut() = StatusCode::NO_CONTENT;
+            funnel::preflight_headers(response.headers_mut());
+            response
+        }
+    } else {
+        let proof = funnel::proof(request.uri().path(), request.headers(), allow_secret_path);
+        serve_admitted(request, state, peer, true, proof).await
+    };
+    if valid_path {
+        funnel::cors_headers(response.headers_mut(), origin, options);
+    }
+    if !options && response.status().is_success() {
+        response.headers_mut().insert(
+            "Mcp-Protocol-Version",
+            HeaderValue::from_static(MCP_VERSION),
+        );
+    }
+    // Only fixed classifications and an HTTP status. In particular, the
+    // request target, raw Origin and client-supplied identity are sensitive.
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "MCP_HTTP_EVENT=funnel.response method={method} origin={} status={}",
+        origin.label(),
+        response.status().as_u16()
+    );
+    response
+}
+
+async fn serve_admitted(
+    request: Request<Incoming>,
+    state: Arc<State>,
+    peer: IpAddr,
+    marker: bool,
+    proof: Option<[u8; 32]>,
+) -> Reply {
+    #[cfg(not(target_os = "linux"))]
+    let _ = proof;
+    if request
+        .headers()
+        .get("MCP-Protocol-Version")
+        .is_some_and(|value| value.as_bytes() != MCP_VERSION.as_bytes())
+    {
+        if marker {
+            let _ = audit("funnel.unsupported_protocol");
+        }
+        return simple(StatusCode::BAD_REQUEST, "Unsupported protocol version");
+    }
+
+    // Admission precedes reading even one byte of an untrusted request body.
+    let now = unix_seconds();
     if !marker {
         let locks = state.failures.lock().await;
         if locks
@@ -453,9 +535,6 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     let clients = &state.clients;
 
     let bearer = request.headers().get(header::AUTHORIZATION).cloned();
-    #[cfg(target_os = "linux")]
-    let proof = public
-        .and_then(|settings| funnel::proof(path, request.headers(), settings.allow_secret_path));
     #[cfg(target_os = "linux")]
     let client_index = if marker {
         funnel::authenticate(&settings, proof.as_ref(), now)
@@ -541,6 +620,17 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
         _ => return simple(StatusCode::BAD_REQUEST, "Malformed JSON-RPC request"),
     };
     let method = payload.get("method").and_then(Value::as_str);
+    if marker {
+        match method {
+            Some("initialize") => {
+                let _ = audit("funnel.rpc_initialize");
+            }
+            Some("tools/list") => {
+                let _ = audit("funnel.rpc_tools_list");
+            }
+            _ => {}
+        }
+    }
 
     if method == Some("initialize") && session_header.is_none() {
         let Ok(files) = FileAccess::new(&client.root) else {
