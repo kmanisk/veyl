@@ -1,5 +1,40 @@
 # BridgeDev capability comparison
 
+## Native context and subsystem checkpoint (local candidate)
+
+Compared BridgeDev b21616a `src/tools/context.ts`, `src/tools/system.ts`,
+`src/tools/chezmoi.ts`, and `src/lib/system-inspect.ts` to Veyl.
+Added independently granted `project_context` and `system_context`.
+They read a fixed Markdown allowlist through the granted workspace
+descriptor, not arbitrary agent settings or host paths. Project context
+supports bounded relative-directory traversal; system context reads four
+known configuration documents from an explicitly granted workspace.
+This is intentionally not BridgeDev's context-token admission protocol.
+Live system inspection adds Sway outputs/workspaces, Pulse-compatible
+audio sinks/sources, Bluetooth connected names, failed systemd units and
+kernel pressure. Commands are fixed absolute executable paths, bounded,
+on demand and read-only. A paired local dashboard has a subsystem inspector
+and skill search/detail views. The existing 106-entry marketplace candidate
+is included. No credential or grant changes on the production host.
+
+Remaining: operator-configured cross-root system context, chezmoi/drift,
+focused-window and detailed NVIDIA diagnostics without waking suspended
+devices, general process sessions/Git workflows, package import/approval
+and REA runtime compatibility, project skill discovery/instruction packs,
+and persistent Nightshift agent orchestration. Durable job primitives
+already exist; full overnight model-driven execution is not verified.
+
+## Local marketplace candidate (unreleased)
+
+Marketplace, Custom and Extensions views now support the bundled
+BridgeDev metadata snapshot (106 entries), search, filters, paging,
+configuration form prefilling, on-demand provider probes and existing
+grant controls. Catalog registration matching does not certify identity,
+installation or connectivity. REA example guidance tools are listed;
+the actual disposable Veyl probe was unavailable. Automated package
+installation, source proposal/approval workflows, instruction packs and
+full BridgeDev provider parity remain unimplemented.
+
 ## v0.2.2-alpha candidate additions
 The terminal monitor now offers live keyboard-controlled activity and job
 views, and the dashboard uses individual sidebar tabs. Admin job rows

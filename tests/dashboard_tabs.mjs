@@ -57,7 +57,7 @@ try {
   assert.equal(await evaluate("location.hash"),"");
   const visible = "Array.from(document.querySelectorAll('[role=tabpanel]')).filter(p=>getComputedStyle(p).display!=='none').map(p=>p.querySelector('h1,h2').id)";
   assert.deepEqual(await evaluate(visible),["health"]);
-  for(const id of ["jobs","clients","audit","skills","servers","configuration","protection","health"]){
+  for(const id of ["jobs","clients","audit","skills","servers","marketplace","custom","configuration","protection","health"]){
     await evaluate("document.querySelector('nav a[href=\"#"+id+"\"]').click()");
     assert.deepEqual(await evaluate(visible),[id]);
     assert.equal(await evaluate("document.querySelector('[role=tab][aria-selected=true]').hash"),"#"+id);
@@ -75,6 +75,30 @@ try {
   await evaluate("document.querySelector('#theme').click()");
   assert.equal(await evaluate("document.documentElement.dataset.theme"),"dark");
   assert.equal(await evaluate("document.querySelector('link[rel=icon]').getAttribute('href')"),"/dashboard/icon.svg");
+  await evaluate("document.querySelector('nav a[href=\"#diagnostics\"]').click()");
+  assert.deepEqual(await evaluate(visible),["diagnostics"]);
+  await evaluate("document.querySelector('#diagnostics-run').click()");
+  await until(()=>evaluate("document.querySelector('#diagnostics-output').textContent.includes('memory_total_kib')"));
+  await evaluate("document.querySelector('nav a[href=\"#marketplace\"]').click()");
+  await until(()=>evaluate("document.querySelectorAll('#catalog-cards article').length === 20"));
+  assert.match(await evaluate("document.querySelector('#catalog-count').textContent"), /106 matching resources/);
+  const first = await evaluate("document.querySelector('#catalog-cards article').dataset.entry");
+  await evaluate("document.querySelector('#catalog-next').click()");
+  assert.notEqual(await evaluate("document.querySelector('#catalog-cards article').dataset.entry"), first);
+  await evaluate("document.querySelector('#catalog-query').value='Reverse Engineer Anything';document.querySelector('#catalog-query').dispatchEvent(new Event('input'))");
+  assert.equal(await evaluate("document.querySelectorAll('#catalog-cards article[data-entry=rea]').length"),1);
+  await evaluate("document.querySelector('article[data-entry=rea] button').click()");
+  assert.match(await evaluate("document.querySelector('#detail-json').textContent"), /search_guidance/);
+  await evaluate("document.querySelector('#detail-close').click()");
+  await evaluate("Array.from(document.querySelectorAll('article[data-entry=rea] button')).find(b=>b.textContent==='Configure').click()");
+  assert.deepEqual(await evaluate(visible),["custom"]);
+  assert.equal(await evaluate("document.querySelector('#server-add').elements.namedItem('id').value"),"rea");
+  assert.equal(await evaluate("document.querySelector('#server-add').elements.namedItem('argv').value"),'["mcp"]');
+  assert.equal(await evaluate("document.querySelector('#server-add').elements.namedItem('command').value"),"");
+  await evaluate("document.querySelector('nav a[href=\"#marketplace\"]').click()");
+  await evaluate("document.querySelector('#catalog-query').value='no-such-entry';document.querySelector('#catalog-query').dispatchEvent(new Event('input'))");
+  assert.equal(await evaluate("document.querySelectorAll('#catalog-cards article').length"),0);
+  await evaluate("document.querySelector('nav a[href=\"#audit\"]').click()");
   await send("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
   assert.deepEqual(await evaluate(visible),["audit"]);
   console.log("DASHBOARD_TABS_AND_KEYBOARD_PASS");

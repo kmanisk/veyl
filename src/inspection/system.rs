@@ -8,7 +8,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const SECTIONS: [&str; 8] = [
+#[path = "live.rs"]
+mod live;
+const SECTIONS: [&str; 9] = [
     "resources",
     "gpu",
     "storage",
@@ -16,6 +18,7 @@ const SECTIONS: [&str; 8] = [
     "audio",
     "bluetooth",
     "desktop",
+    "sway",
     "services",
 ];
 const MAX_ENTRIES: usize = 48;
@@ -95,6 +98,11 @@ fn resources(root: Option<&MutationRoot>) -> Value {
     };
     v["swap_total_kib"] = json!(field("SwapTotal:"));
     v["swap_free_kib"] = json!(field("SwapFree:"));
+    v["pressure"] = json!({
+        "cpu": text("/proc/pressure/cpu"),
+        "memory": text("/proc/pressure/memory"),
+        "io": text("/proc/pressure/io")
+    });
     let mut cpuinfo = String::new();
     if let Ok(file) = File::open("/proc/cpuinfo") {
         let _ = file.take(8192).read_to_string(&mut cpuinfo);
@@ -205,7 +213,7 @@ pub(super) fn inspect(
             let list = value
                 .as_array()
                 .filter(|v| !v.is_empty() && v.len() <= SECTIONS.len())
-                .ok_or("Expected 1 to 8 subsystem names")?;
+                .ok_or("Expected 1 to 9 subsystem names")?;
             let mut sections = Vec::new();
             for v in list {
                 let s = v
@@ -229,17 +237,18 @@ pub(super) fn inspect(
                 "gpu" => gpu(),
                 "storage" => storage(root),
                 "network" => network(),
-                "audio" => audio(),
-                "bluetooth" => bluetooth(),
+                "audio" => { let mut v=audio();v["session"]=live::audio();v },
+                "bluetooth" => { let mut v=bluetooth();v["session"]=live::bluetooth();v },
                 "desktop" => desktop(),
-                "services" => json!({"veyl":crate::service_cli::health()}),
+                "sway" => live::sway(),
+                "services" => live::services(),
                 _ => unreachable!(),
             },
         );
     }
     Ok(
         json!({"schema_version":1,"read_only":true,"sections":result,
-        "limitations":"Kernel inventory; GPU driver-specific counters may be unavailable. Desktop is DRM connectors, not compositor state; audio is ALSA cards, not PipeWire streams; services covers Veyl only."}),
+        "limitations":"Kernel inventory plus fixed read-only session probes. Unavailable components are explicit. GPU telemetry does not wake suspended GPUs. No journal contents or arbitrary commands."}),
     )
 }
 

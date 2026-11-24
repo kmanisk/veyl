@@ -17,6 +17,8 @@ pub enum Action {
     GitInspect,
     SystemInfo,
     SystemInspect,
+    ProjectContext,
+    SystemContext,
     ServiceStatus,
     WriteFile,
     ApplyPatch,
@@ -150,6 +152,8 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
         | Action::GitInspect
         | Action::SystemInfo
         | Action::SystemInspect
+        | Action::ProjectContext
+        | Action::SystemContext
         | Action::ServiceStatus
         | Action::ListTools
         | Action::WriteFile

@@ -1,5 +1,19 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Next independent acceptance — context, live diagnostics, marketplace
+
+Use ~/Projects/veyl, main; see latest STATUS.md and docs/PARITY.md.
+Build in a fresh target directory, review prior local UI changes together
+with new context and diagnostic tools. Check protected-file alias and
+mount boundaries, explicit grants, malformed/bounded inputs, missing
+desktop dependencies, fixed argv/environment, loopback-only diagnostic
+endpoint and CSRF, browser skills and marketplace workflows. Verify all
+external pins, run trusted acceptance without rewriting its oracles;
+review archived harness repository binding first. Test actual Nightshift
+primitives, but do not certify autonomous overnight execution. On failure,
+return a reproducible finding to implementation owner; only promote
+the exact independently accepted commit. No version bump or crate publish.
+
 ## Current product and UI checkpoint
 
 Use ~/Projects/veyl on main. Development documents live in

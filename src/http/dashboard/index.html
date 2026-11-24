@@ -32,9 +32,12 @@
       <a href="#health" role="tab">Overview</a>
       <a href="#audit" role="tab">Activity monitor</a>
       <a href="#jobs" role="tab">Running jobs</a>
-      <a href="#clients">Clients</a>
+      <a id="diagnostics-nav" href="#diagnostics">System diagnostics</a>
+      <a href="#marketplace">Marketplace</a>
+      <a href="#custom">Custom</a>
+      <a href="#servers">Extensions</a>
       <a id="skills-nav" href="#skills" hidden>Skills</a>
-      <a href="#servers">Extensions / MCP</a>
+      <a href="#clients">Clients</a>
       <a href="#configuration">Connection & settings</a>
       <a href="#protection">Access & security</a>
     </nav>
@@ -54,6 +57,16 @@
         </div>
         <p id="client-empty" hidden>No clients configured.</p>
       </section>
+      <section aria-labelledby="diagnostics" class="panel">
+        <h2 id="diagnostics">System diagnostics</h2>
+        <p class="muted">On-demand read-only Linux inspection. No continuous polling or GPU wakeup for telemetry.</p>
+        <form id="diagnostics-form" class="row">
+          <label for="diagnostics-section">Subsystem</label>
+          <select id="diagnostics-section"><option>resources</option><option>gpu</option><option>storage</option><option>network</option><option>audio</option><option>bluetooth</option><option>desktop</option><option>sway</option><option>services</option></select>
+          <button id="diagnostics-run" type="submit">Inspect</button>
+        </form>
+        <pre id="diagnostics-output" aria-live="polite">Select a subsystem and inspect.</pre>
+      </section>
       <section aria-labelledby="jobs" class="panel">
         <h2 id="jobs">Jobs</h2>
         <div id="job-controls" class="row">
@@ -68,6 +81,8 @@
       </section>
       <section id="skill-panel" aria-labelledby="skills" class="panel" hidden>
         <h2 id="skills">Skills</h2>
+        <p class="muted">Browse validated instruction packages, inspect their contents and grant them individually to clients.</p>
+        <div class="row"><label for="skill-filter">Search skills</label><input id="skill-filter" type="search" placeholder="Name, description, status"><span id="skill-count" class="muted" role="status"></span></div>
         <form id="import-skill" class="row">
           <label for="skill-source">Local skill folder</label>
           <input id="skill-source" placeholder="/absolute/path/skill-name" required>
@@ -78,11 +93,27 @@
         <ul id="skill-rows"></ul>
         <pre id="skill-document" hidden></pre>
       </section>
-      <section aria-labelledby="servers" class="panel">
-        <h2 id="servers">Upstream MCP</h2>
-        <ul id="server-rows"></ul>
-        <details>
-          <summary>Add an upstream server</summary>
+      <section aria-labelledby="marketplace" class="panel">
+        <div class="section-toolbar"><h2 id="marketplace">Integration marketplace</h2><button id="catalog-refresh" type="button">Reload catalog</button></div>
+        <p class="muted">Browse the bundled BridgeDev metadata snapshot. Listings do not establish installation, compatibility or connection. No packages are installed by browsing.</p>
+        <div class="catalog-filters row">
+          <input id="catalog-query" type="search" aria-label="Search integrations" placeholder="Search integrations…">
+          <select id="catalog-category" aria-label="Category"></select>
+          <select id="catalog-type" aria-label="Type"></select>
+          <select id="catalog-maintainer" aria-label="Maintainer"></select>
+          <select id="catalog-platform" aria-label="Platform"></select>
+          <select id="catalog-status" aria-label="Registration"><option value="">Any registration</option><option value="registered">Registered ID</option><option value="unregistered">Not registered</option></select>
+        </div>
+        <p id="catalog-count" class="muted" role="status">Loading catalog…</p>
+        <div id="catalog-cards" class="catalog-grid"></div>
+        <div class="row catalog-pagination"><button id="catalog-prev" type="button">Previous</button><span id="catalog-page"></span><button id="catalog-next" type="button">Next</button></div>
+      </section>
+      <section aria-labelledby="custom" class="panel">
+        <h2 id="custom">Custom integration</h2>
+        <p class="muted">Register a reviewed, already installed MCP executable or a supported HTTP endpoint. Veyl does not download packages or execute installation scripts.</p>
+        <p id="catalog-selection" class="muted"></p>
+        <div class="section-card">
+          <h3>Configure upstream MCP</h3>
           <form id="server-add" class="config-form">
             <label>Server ID <input name="id" required pattern="[a-z0-9_\-]{1,24}"></label>
             <label>Transport <select name="action" id="server-transport"><option value="add-http">HTTP / HTTPS</option><option value="add-stdio">Sandboxed stdio</option></select></label>
@@ -96,13 +127,20 @@
             </div>
             <button type="submit">Add server</button>
           </form>
-        </details>
+        </div>
+        <div class="section-card"><h3>Local skill / instructions</h3><p class="muted">Import a validated SKILL.md folder and manage client grants from Skills.</p><button id="custom-skills" type="button">Open Skills</button></div>
+      </section>
+      <section aria-labelledby="servers" class="panel">
+        <div class="section-toolbar"><h2 id="servers">Configured providers &amp; upstreams</h2><button id="open-custom" type="button">Add custom</button><button id="open-marketplace" type="button">Browse marketplace</button></div>
+        <p class="muted">Probe registered providers to inspect actual tools, then grant individual tools to a client.</p>
+        <ul id="server-rows"></ul>
         <details>
           <summary>Manage client tool grants</summary>
           <form id="server-grant" class="config-form">
             <label>Client <select name="client" id="server-client" required></select></label>
             <label>Server <select name="id" id="server-grant-server" required></select></label>
-            <label>Upstream tool name <input name="tool" required></label>
+            <label>Upstream tool name <input name="tool" list="server-tool-options" required></label>
+            <datalist id="server-tool-options"></datalist>
             <label>Action <select name="action"><option>grant</option><option>revoke</option></select></label>
             <button type="submit">Update grant</button>
           </form>

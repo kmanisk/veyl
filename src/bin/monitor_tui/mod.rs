@@ -132,8 +132,33 @@ fn row(out: &mut String, text: &str, width: usize, color: &str) {
     out.push_str(&cell(text, width));
     out.push_str("\x1b[0m\r\n");
 }
-// Inherit the terminal's live foreground/background. Accent only the
-// selection/status marker; never paint a bright or fixed background.
+// Use the terminal's own ANSI palette for status text, never a fixed
+// background. Selection adds weight without hiding the outcome color.
+fn phase_color(phase: &str) -> &'static str {
+    match phase {
+        "success" => "\x1b[32m",
+        "failure" | "denied" => "\x1b[31m",
+        "running" => "\x1b[36m",
+        "uncertain" | "pending" => "\x1b[33m",
+        _ => "",
+    }
+}
+fn job_color(state: &str, exit: &Value, signal: &Value) -> &'static str {
+    match state {
+        "completed"
+            if exit.as_i64().is_some_and(|code| code != 0)
+                || signal.as_i64().is_some_and(|code| code != 0) =>
+        {
+            "\x1b[31m"
+        }
+        "completed" if exit.as_i64() == Some(0) => "\x1b[32m",
+        "completed" => "\x1b[33m",
+        "running" => "\x1b[36m",
+        "starting" | "canceled" | "uncertain" => "\x1b[33m",
+        "failed" | "timed_out" | "interrupted" | "lost" => "\x1b[31m",
+        _ => "",
+    }
+}
 fn record_row(out: &mut String, text: &str, width: usize, color: &str, selected: bool) {
     out.push_str(if selected { "\x1b[1;36m" } else { color });
     out.push_str(if selected {
@@ -147,6 +172,7 @@ fn record_row(out: &mut String, text: &str, width: usize, color: &str, selected:
     if selected {
         out.push_str("\x1b[1m");
     }
+    out.push_str(color);
     out.push_str(&cell(text, width.saturating_sub(2)));
     out.push_str("\x1b[0m\r\n");
 }
@@ -319,7 +345,7 @@ impl View {
                     (
                         format!("Audit ledger          {}", strval(&v["audit"])),
                         if v["audit"] == "verified" {
-                            ""
+                            "\x1b[32m"
                         } else {
                             "\x1b[33m"
                         },
@@ -354,13 +380,7 @@ impl View {
                 .iter()
                 .map(|v| {
                     let state = strval(&v["state"]);
-                    let color = match state.as_str() {
-                        "completed" => "\x1b[32m",
-                        "running" | "starting" => "\x1b[36m",
-                        "failed" => "\x1b[31m",
-                        "canceled" | "uncertain" => "\x1b[33m",
-                        _ => "",
-                    };
+                    let color = job_color(&state, &v["exit_code"], &v["signal"]);
                     (
                         format!(
                             "{:<33} {:<11} {:<6} {:<10} {} {}",
@@ -397,12 +417,7 @@ impl View {
                                 strval(&v["cwd"])
                             }
                         ),
-                        match phase.as_str() {
-                            "failure" => "\x1b[31m",
-                            "uncertain" => "\x1b[33m",
-                            "success" => "\x1b[32m",
-                            _ => "",
-                        },
+                        phase_color(&phase),
                     )
                 })
                 .collect(),
@@ -985,10 +1000,40 @@ mod tests {
     fn record_colors_keep_terminal_background_and_text_readable() {
         let mut rendered = String::new();
         record_row(&mut rendered, "success", 12, "\x1b[32m", false);
-        assert_eq!(rendered, "\x1b[32m* \x1b[0msuccess   \x1b[0m\r\n");
+        assert_eq!(rendered, "\x1b[32m* \x1b[0m\x1b[32msuccess   \x1b[0m\r\n");
         rendered.clear();
         record_row(&mut rendered, "selected", 12, "\x1b[31m", true);
-        assert_eq!(rendered, "\x1b[1;36m> \x1b[0m\x1b[1mselected  \x1b[0m\r\n");
+        assert_eq!(
+            rendered,
+            "\x1b[1;36m> \x1b[0m\x1b[1m\x1b[31mselected  \x1b[0m\r\n"
+        );
+        rendered.clear();
+        record_row(&mut rendered, "intent", 12, phase_color("intent"), false);
+        assert_eq!(rendered, "  \x1b[0mintent    \x1b[0m\r\n");
+    }
+    #[test]
+    fn outcomes_use_semantic_palette_and_nonzero_exit_is_failure() {
+        use serde_json::json;
+        assert_eq!(phase_color("success"), "\x1b[32m");
+        assert_eq!(phase_color("failure"), "\x1b[31m");
+        assert_eq!(phase_color("running"), "\x1b[36m");
+        assert_eq!(phase_color("uncertain"), "\x1b[33m");
+        assert_eq!(phase_color("intent"), "");
+        assert_eq!(job_color("completed", &json!(0), &Value::Null), "\x1b[32m");
+        assert_eq!(job_color("completed", &json!(3), &Value::Null), "\x1b[31m");
+        assert_eq!(job_color("completed", &Value::Null, &json!(15)), "\x1b[31m");
+        assert_eq!(
+            job_color("completed", &Value::Null, &Value::Null),
+            "\x1b[33m"
+        );
+        assert_eq!(job_color("running", &Value::Null, &Value::Null), "\x1b[36m");
+        assert_eq!(
+            job_color("starting", &Value::Null, &Value::Null),
+            "\x1b[33m"
+        );
+        for state in ["failed", "timed_out", "interrupted", "lost"] {
+            assert_eq!(job_color(state, &Value::Null, &Value::Null), "\x1b[31m");
+        }
     }
     #[test]
     fn panel_borders_preserve_width_and_sanitize_contents() {

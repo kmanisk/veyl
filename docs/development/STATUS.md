@@ -1,5 +1,50 @@
 # Gate 3d status
 
+## 2026-11-24 — BridgeDev context/diagnostics parity checkpoint
+
+Preserved prior local palette/marketplace changes on main, base b68f6c2.
+Source reference BridgeDev b21616a. Added two explicit read-only grants
+project_context and system_context with descriptor-relative Markdown
+inspection (24 files, 48,000 aggregate content bytes, 16,000 bytes/file
+maximum, depth 3, 1,024 scanned entries, bounded traversal). No agent
+settings, arbitrary document keys, symlinks, hardlinks or nested mounts.
+System context reads the four known docs within the granted workspace;
+it does not issue a context token or automatically grant host roots.
+Extended system_inspect with fixed, bounded session probes and pressure;
+added local-only paired dashboard diagnostics and skill search/details.
+No new runtime dependency or persistent worker. Existing grants and
+production configuration untouched. Version remains 0.2.2-alpha.
+
+Verification: initial targeted context/marketplace/diagnostics probes
+passed (mwuxi0km-ks2v6z). Existing target test build encountered a stale
+library-artifact error; an isolated target/parity-check build resolved it
+and passed 91 Rust test executions (mwuxjxtz-yq57f6), Clippy, 16 Linux,
+8 product and real Brave pairing/navigation/diagnostics/marketplace tests
+(mwuxkkus-tslyds). Subsequent context limit alias/subset correction passed
+the focused integration probe and Clippy; all 28 historical suite pins
+matched (mwuxlq5k-nt1yjf). Actual disposable live system_inspect returned
+1 Sway output, 2 workspaces, 4 audio sinks, 6 sources, Bluetooth available,
+and zero failed user/system units (mwuxm0fk-y2ok92). Full external
+acceptance remains AGY-owned; no push, publication or deployment.
+
+## 2026-11-24 — local UI review, no release or version bump
+
+Operator approved the semantic terminal palette and requested that
+further UI changes accumulate locally before push. Version remains
+0.2.2-alpha. Added Marketplace (106-entry attributed BridgeDev metadata
+snapshot), Custom registration, Extensions detail/probe and grant-tool
+selection. No package download or automatic execution. REA example
+contains three observed BridgeDev guidance tools, not a verified Veyl
+connection. Disposable registration of the local launcher succeeded;
+probe unavailable, zero tools. No changes to BridgeDev or live REA.
+Clippy, release build, authenticated marketplace/no-mutation probe,
+existing real upstream grant probe, and browser navigation/search/page/
+details/configuration tests passed (mwuw1xrf-5m2wn4, initial browser
+failure fixed by guarding asynchronous dialog close; mwuw2lvi-fjme8s
+browser rerun passed; mwuw2w92-5g7mkz REA probe).
+No push, publish or version change. Remaining: REA transport compatibility,
+package installation, approval workflows and instruction packs.
+
 ## 2026-11-24 — public crate and live deployment
 
 Crates.io veyl 0.2.2-alpha (MIT) published successfully from commit

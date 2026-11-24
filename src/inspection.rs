@@ -23,6 +23,11 @@ use crate::tools::{
 };
 #[path = "inspection/system.rs"]
 mod system_details;
+#[path = "inspection/context.rs"]
+mod context;
+pub(crate) fn local_diagnostics(section: &str) -> Result<Value,String> {
+    system_details::inspect(json!({"sections":[section]}).as_object().unwrap(),None)
+}
 
 const MAX_ENTRIES: usize = 16_384;
 const MAX_COPY: u64 = 64 * 1024 * 1024;
@@ -195,6 +200,9 @@ fn inspect(
     }
     let directory = open_beneath_dir(root.directory(), relative)
         .map_err(|_| "Directory unavailable or outside workspace")?;
+    if matches!(tool, Tool::ProjectContext | Tool::SystemContext) {
+        return context::inspect(&directory, relative, args, tool == Tool::SystemContext, &reserved);
+    }
     let mut walk = Walk {
         reserved: &reserved,
         seen: 0,

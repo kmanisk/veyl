@@ -385,6 +385,18 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
     if method == Method::GET && path == "/api/dashboard/servers" {
         return manage(admin, vec!["list".into()], crate::upstream::admin::manage).await;
     }
+    if method == Method::GET && path == "/api/dashboard/marketplace" {
+        return asset(include_str!("dashboard/marketplace.json"), "application/json; charset=utf-8");
+    }
+    if method == Method::GET && path == "/api/dashboard/diagnostics" {
+        if remote || !csrf_matches { return forbidden(); }
+        let Some(section) = parameter(&query,"section").map(str::to_owned) else { return bad(); };
+        return match tokio::task::spawn_blocking(move || crate::inspection::local_diagnostics(&section)).await {
+            Ok(Ok(value))=>ok(value),
+            Ok(Err(_))=>bad(),
+            Err(_)=>unavailable(),
+        };
+    }
     if method == Method::POST && path == "/api/dashboard/servers" {
         let Ok(body) = body(request).await else {
             return bad();

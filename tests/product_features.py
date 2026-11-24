@@ -254,6 +254,76 @@ class ProductFeatures(unittest.TestCase):
         self.assertEqual(status, 200, body)
         self.assertEqual(json.loads(body)["state"], "canceled")
 
+    def test_project_and_system_context_scoped_and_bounded(self):
+        self.doc["clients"][0]["tools"].extend(["project_context","system_context"])
+        self.write_config()
+        (self.workspace / "AGENTS.md").write_text("project instructions")
+        (self.workspace / "README.md").write_text("a" * 17000)
+        nested = self.workspace / "docs" / "system"
+        nested.mkdir(parents=True)
+        (nested / "SYSTEM_CONTEXT.md").write_text("synthetic system context")
+        (nested / "system-philosophy.md").write_text("test philosophy")
+        (nested / "AGENTS.md").write_text("nested instructions")
+        outside = self.base / "outside.md"
+        outside.write_text("OUTSIDE_CANARY")
+        (self.workspace / "CLAUDE.md").symlink_to(outside)
+        os.link(outside, self.workspace / "SPEC.md")
+        (self.workspace / "target").mkdir()
+        (self.workspace / "target" / "AGENTS.md").write_text("BUILD_CANARY")
+        self.start()
+        session = self.connect()
+        def result(tool, args):
+            reply = self.call(tool,args,session)
+            self.assertFalse(reply["isError"],reply)
+            return json.loads(reply["content"][0]["text"])
+        project = result("project_context",{"max_depth":2,"max_bytes_per_file":100})
+        docs = {f["path"]:f for f in project["files"]}
+        self.assertEqual(docs["AGENTS.md"]["content"],"project instructions")
+        self.assertTrue(docs["README.md"]["truncated"])
+        self.assertEqual(len(docs["README.md"]["content"]),100)
+        self.assertIn("docs/system/AGENTS.md",docs)
+        self.assertNotIn("OUTSIDE_CANARY",json.dumps(project))
+        self.assertNotIn("BUILD_CANARY",json.dumps(project))
+        system = result("system_context",{})
+        self.assertTrue(system["configured"])
+        self.assertIn("subsystem_map",system["missing"])
+        self.assertNotIn("context_token",system)
+        one = result("system_context",{"docs":["agents"],"max_bytes_each":5})
+        self.assertTrue(one["configured"])
+        self.assertEqual(one["files"][0]["content"],"proje")
+        self.assertTrue(self.call("system_context",{"max_bytes_each":5,"max_bytes_per_file":5},session)["isError"])
+        for tool,args in [("project_context",{"path":".."}),("project_context",{"path":str(self.base)}),("project_context",{"max_depth":4}),("project_context",{"max_bytes_per_file":0}),("system_context",{"docs":["unknown"]}),("system_context",{"docs":["agents","agents"]})]:
+            self.assertTrue(self.call(tool,args,session)["isError"])
+        foreign=self.connect(OTHER_TOKEN)
+        for tool in ("project_context","system_context"):
+            self.assertTrue(self.call(tool,{},foreign,OTHER_TOKEN)["isError"])
+        self.assertIn('"tool":"project_context"',self.audit.read_text())
+
+    def test_marketplace_metadata_only_authenticated(self):
+        self.start()
+        path = "/api/dashboard/marketplace"
+        self.assertEqual(self.request(self.admin, "GET", path)[0], 401)
+        headers = self.pair()
+        status, _, body = self.request(self.admin, "GET", path, **headers)
+        self.assertEqual(status, 200, body[:200])
+        entries = json.loads(body)["entries"]
+        self.assertEqual(len(entries), 106)
+        self.assertEqual(len({entry["id"] for entry in entries}), len(entries))
+        rea = next(entry for entry in entries if entry["id"] == "rea")
+        self.assertEqual(rea["example_tools"], ["search_guidance", "read_guidance_section", "guided_workflows"])
+        self.assertIn("not verified on Veyl", rea["example_note"])
+        self.assertEqual(json.loads(self.request(self.admin, "GET", "/api/dashboard/servers", **headers)[2])["servers"], [])
+        self.assertNotEqual(self.request(self.mcp, "GET", path)[0], 200)
+        self.assertNotEqual(self.request(self.admin, "POST", path, {"id":"rea","confirm":True}, **headers)[0], 200)
+        diag="/api/dashboard/diagnostics?section=resources"
+        self.assertEqual(self.request(self.admin,"GET",diag)[0],401)
+        self.assertEqual(self.request(self.admin,"GET",diag,Cookie=headers["Cookie"])[0],403)
+        status,_,body=self.request(self.admin,"GET",diag,**headers)
+        self.assertEqual(status,200)
+        self.assertGreater(json.loads(body)["sections"]["resources"]["memory_total_kib"],0)
+        self.assertNotEqual(self.request(self.admin,"GET","/api/dashboard/diagnostics?section=unknown",**headers)[0],200)
+        self.assertEqual(json.loads(self.request(self.admin, "GET", "/api/dashboard/servers", **headers)[2])["servers"], [])
+
     def test_upstream_sandbox_and_per_tool_grants(self):
         probe = self.base / "probe.py"
         probe.write_text(STDIO_PEER)

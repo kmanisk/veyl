@@ -272,6 +272,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
                     | Action::GitInspect
                     | Action::SystemInfo
                     | Action::SystemInspect
+                    | Action::ProjectContext
+                    | Action::SystemContext
             )
         }) {
             Some(

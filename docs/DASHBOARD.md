@@ -44,6 +44,33 @@ Activity timestamps are UTC; raw timestamps remain in the JSON record.
 Scripts retain
 one-shot JSON with `veyl monitor --view health`.
 
+## Marketplace and custom integrations
+
+System diagnostics is a paired-loopback-only view. Select a subsystem and
+press Inspect to retrieve live JSON; nothing polls automatically. Skills
+now provides name/description/status search, metadata details and a
+document viewer alongside existing import and per-client grants.
+
+Marketplace is a bundled 106-entry metadata snapshot derived from
+BridgeDev's MIT-licensed catalog, with attribution in
+`src/http/dashboard/marketplace-LICENSE.txt`. Search and filter by
+category, type, maintainer, platform and matching registered ID.
+Browse 20 entries per page and inspect source, version and requirements
+in Details. Browsing is read-only, offline and does not launch providers.
+Registration status is an exact ID match, not proof of provider identity
+or compatibility. Custom opens the existing registration form for an
+operator-reviewed executable or supported HTTP endpoint. Extensions shows
+configured providers, explicit health probes, discovered tool names and
+existing per-client grant/revoke operations. Skills retains validated local
+package import and instruction reading.
+
+REA is an example catalog entry, with three guidance tool names observed
+on the existing BridgeDev installation. A disposable Veyl registration
+of the installed REA launcher succeeded but probe health was unavailable;
+no REA tools were discovered. The current isolated stdio transport does
+not mount arbitrary Node package trees. Do not claim REA compatibility
+until an independently tested provider transport is available.
+
 Optional local command tracing: on the Activity tab press t and confirm with
 y, or use the local dashboard's Capture button. The trace captures supported
 HTTP command, job and diagnostic tool arguments and actual tool results,
@@ -59,7 +86,11 @@ captured. Historical commands cannot be reconstructed from hashes.
 
 The terminal interface inherits the current terminal foreground and
 background. Thin, dim panel borders and footer separators organize the
-views; palette-based accents identify the active tab and status markers.
+views; palette-based accents identify the active tab and outcome text.
+Success (including jobs exiting zero) is green, failures and nonzero exits
+are red, running calls cyan, and starting/canceled/uncertain states amber.
+Intent records remain neutral. Selection uses a cyan marker and bold text
+without replacing semantic colors or painting the terminal background.
 
 The admin listener uses exact Host and browser Origin checks, a single-use
 hashed pairing verifier, an eight-hour in-memory session, SameSite=Strict and

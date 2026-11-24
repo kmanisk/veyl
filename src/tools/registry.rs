@@ -13,6 +13,8 @@ pub(crate) enum Tool {
     GitInspect,
     SystemInfo,
     SystemInspect,
+    ProjectContext,
+    SystemContext,
     ServiceStatus,
     WriteFile,
     ApplyPatch,
@@ -39,12 +41,14 @@ pub(crate) enum Tool {
 }
 
 impl Tool {
-    pub(crate) const ALL: [Self; 28] = [
+    pub(crate) const ALL: [Self; 30] = [
         Self::ReadFile,
         Self::SearchFiles,
         Self::GitInspect,
         Self::SystemInfo,
         Self::SystemInspect,
+        Self::ProjectContext,
+        Self::SystemContext,
         Self::ServiceStatus,
         Self::WriteFile,
         Self::ApplyPatch,
@@ -77,6 +81,8 @@ impl Tool {
             "git_inspect" => Some(Self::GitInspect),
             "system_info" => Some(Self::SystemInfo),
             "system_inspect" => Some(Self::SystemInspect),
+            "project_context" => Some(Self::ProjectContext),
+            "system_context" => Some(Self::SystemContext),
             "service_status" => Some(Self::ServiceStatus),
             "write_file" => Some(Self::WriteFile),
             "apply_patch" => Some(Self::ApplyPatch),
@@ -111,6 +117,8 @@ impl Tool {
             Self::GitInspect => Action::GitInspect,
             Self::SystemInfo => Action::SystemInfo,
             Self::SystemInspect => Action::SystemInspect,
+            Self::ProjectContext => Action::ProjectContext,
+            Self::SystemContext => Action::SystemContext,
             Self::ServiceStatus => Action::ServiceStatus,
             Self::WriteFile => Action::WriteFile,
             Self::ApplyPatch => Action::ApplyPatch,
@@ -141,6 +149,8 @@ impl Tool {
                 | Self::GitInspect
                 | Self::SystemInfo
                 | Self::SystemInspect
+                | Self::ProjectContext
+                | Self::SystemContext
                 | Self::ServiceStatus
                 | Self::ListDirectory
                 | Self::DirectoryTree
@@ -232,8 +242,18 @@ impl Tool {
             }
             Self::SystemInspect => json!({
                 "name":"system_inspect",
-                "description":"Read structured Linux subsystem status without arbitrary commands. Missing data is null; desktop and audio are kernel-level inventory, not compositor or sound-server state.",
-                "inputSchema":{"type":"object","additionalProperties":false,"properties":{"sections":{"type":"array","minItems":1,"maxItems":8,"uniqueItems":true,"items":{"enum":["resources","gpu","storage","network","audio","bluetooth","desktop","services"]}}}},
+                "description":"Read structured Linux subsystem status with bounded fixed read-only probes, including Sway outputs/workspaces, audio devices and failed systemd units. Missing components report unavailable.",
+                "inputSchema":{"type":"object","additionalProperties":false,"properties":{"sections":{"type":"array","minItems":1,"maxItems":9,"uniqueItems":true,"items":{"enum":["resources","gpu","storage","network","audio","bluetooth","desktop","sway","services"]}}}},
+                "annotations":{"readOnlyHint":true,"destructiveHint":false}
+            }),
+            Self::ProjectContext => json!({
+                "name":"project_context","description":"Read bounded AGENTS.md, CLAUDE.md, README.md and project handoff documents within the granted workspace. No agent configuration or credential scanning.",
+                "inputSchema":{"type":"object","additionalProperties":false,"properties":{"path":{"type":"string"},"max_depth":{"type":"integer","minimum":0,"maximum":3},"max_bytes_per_file":{"type":"integer","minimum":1,"maximum":16000}}},
+                "annotations":{"readOnlyHint":true,"destructiveHint":false}
+            }),
+            Self::SystemContext => json!({
+                "name":"system_context","description":"Read explicitly named system documentation from a granted workspace containing the host configuration repository. No host context token or permission elevation.",
+                "inputSchema":{"type":"object","additionalProperties":false,"properties":{"path":{"type":"string"},"docs":{"type":"array","minItems":1,"maxItems":4,"uniqueItems":true,"items":{"enum":["agents","current_state","philosophy","subsystem_map"]}},"max_bytes_per_file":{"type":"integer","minimum":1,"maximum":16000},"max_bytes_each":{"type":"integer","minimum":1,"maximum":16000}}},
                 "annotations":{"readOnlyHint":true,"destructiveHint":false}
             }),
             Self::ServiceStatus => {

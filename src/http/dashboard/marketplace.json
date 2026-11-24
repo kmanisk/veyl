@@ -1,0 +1,2550 @@
+{
+  "version": 1,
+  "attribution": "Derived from BridgeDev profiles/marketplace.v1.json (MIT); copyright 2026 hoangcoderr and kmanisk. Metadata provenance only.",
+  "entries": [
+    {
+      "id": "rea",
+      "name": "Reverse Engineer Anything",
+      "description": "Reverse engineer anything from your terminal or agent with one CLI and MCP server.",
+      "category": "Reverse engineering",
+      "maintainer": "morluto",
+      "type": "mcp",
+      "source": "https://github.com/morluto/rea",
+      "license": "MIT",
+      "version": "6.9.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js ^22.23.4 || ^24.22.1 || >=26.12.1",
+        "Review transitive dependencies and executable entrypoint",
+        "REA MCP: rea mcp; Ghidra, Hopper, JADX and other engines are optional and installed separately",
+        "Installed skill provides guidance only; it does not connect the MCP server"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:rea-agents@6.9.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested",
+      "example_tools": [
+        "search_guidance",
+        "read_guidance_section",
+        "guided_workflows"
+      ],
+      "example_note": "Observed on BridgeDev 6.9.0, not verified on Veyl. Guidance tools only. Review REA runtime/package-tree requirements before configuring."
+    },
+    {
+      "id": "npm-modelcontextprotocol-server-filesystem",
+      "name": "@modelcontextprotocol/server-filesystem",
+      "description": "MCP server for filesystem access",
+      "category": "Local development",
+      "maintainer": "modelcontextprotocol",
+      "type": "mcp",
+      "source": "https://github.com/modelcontextprotocol/servers",
+      "license": "SEE LICENSE IN LICENSE",
+      "version": "2.3.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=24",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.3.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-modelcontextprotocol-server-memory",
+      "name": "@modelcontextprotocol/server-memory",
+      "description": "MCP server for enabling memory for Claude through a knowledge graph",
+      "category": "Specialized developer tools",
+      "maintainer": "modelcontextprotocol",
+      "type": "mcp",
+      "source": "https://github.com/modelcontextprotocol/servers",
+      "license": "SEE LICENSE IN LICENSE",
+      "version": "2.1.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=24",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@modelcontextprotocol/server-memory@2.1.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-modelcontextprotocol-server-sequential-thinking",
+      "name": "@modelcontextprotocol/server-sequential-thinking",
+      "description": "MCP server for sequential thinking and problem solving",
+      "category": "Specialized developer tools",
+      "maintainer": "modelcontextprotocol",
+      "type": "mcp",
+      "source": "https://github.com/modelcontextprotocol/servers",
+      "license": "SEE LICENSE IN LICENSE",
+      "version": "2.1.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=24",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@modelcontextprotocol/server-sequential-thinking@2.1.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-modelcontextprotocol-server-everything",
+      "name": "@modelcontextprotocol/server-everything",
+      "description": "MCP server that exercises all the features of the MCP protocol",
+      "category": "Specialized developer tools",
+      "maintainer": "modelcontextprotocol",
+      "type": "mcp",
+      "source": "https://github.com/modelcontextprotocol/servers",
+      "license": "SEE LICENSE IN LICENSE",
+      "version": "2.3.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=24",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@modelcontextprotocol/server-everything@2.3.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-playwright-mcp",
+      "name": "@playwright/mcp",
+      "description": "Playwright Tools for MCP",
+      "category": "Browser automation",
+      "maintainer": "microsoft",
+      "type": "mcp",
+      "source": "https://github.com/microsoft/playwright-mcp",
+      "license": "Apache-2.0",
+      "version": "0.0.85",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@playwright/mcp@0.0.85"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-sentry-mcp-server",
+      "name": "@sentry/mcp-server",
+      "description": "Sentry MCP server over stdio: the CLI's `sentry mcp` server, bundled without the rest of the CLI",
+      "category": "Monitoring and observability",
+      "maintainer": "getsentry",
+      "type": "mcp",
+      "source": "https://github.com/getsentry/toolkit",
+      "license": "FSL-1.1-ALv2",
+      "version": "0.49.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=22.15",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@sentry/mcp-server@0.49.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-supabase-mcp-server-supabase",
+      "name": "@supabase/mcp-server-supabase",
+      "description": "MCP server for interacting with Supabase",
+      "category": "Specialized developer tools",
+      "maintainer": "supabase",
+      "type": "mcp",
+      "source": "https://github.com/supabase/mcp",
+      "license": "Apache-2.0",
+      "version": "0.17.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@supabase/mcp-server-supabase@0.17.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-upstash-context7-mcp",
+      "name": "@upstash/context7-mcp",
+      "description": "MCP server for Context7",
+      "category": "Documentation and research",
+      "maintainer": "upstash",
+      "type": "mcp",
+      "source": "https://github.com/upstash/context7",
+      "license": "MIT",
+      "version": "4.7.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=20.18.1",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@upstash/context7-mcp@4.7.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-upstash-redis-mcp",
+      "name": "@upstash/redis-mcp",
+      "description": "MCP server for Upstash Redis — run Redis commands and look up Upstash Redis Search docs over HTTP or TCP",
+      "category": "Databases",
+      "maintainer": "upstash",
+      "type": "mcp",
+      "source": "https://github.com/upstash/redis-mcp",
+      "license": "MIT",
+      "version": "0.1.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@upstash/redis-mcp@0.1.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-mongodb-js-mongodb-mcp-server",
+      "name": "@mongodb-js/mongodb-mcp-server",
+      "description": "MongoDB Model Context Protocol Server",
+      "category": "Databases",
+      "maintainer": "mongodb-js",
+      "type": "mcp",
+      "source": "https://github.com/mongodb-js/mongodb-mcp-server",
+      "license": "Apache-2.0",
+      "version": "0.0.3",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=20.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@mongodb-js/mongodb-mcp-server@0.0.3"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-azure-mcp",
+      "name": "@azure/mcp",
+      "description": "Azure MCP Server - Model Context Protocol implementation for Azure",
+      "category": "Cloud and deployment",
+      "maintainer": "microsoft",
+      "type": "mcp",
+      "source": "https://github.com/microsoft/mcp",
+      "license": "MIT",
+      "version": "4.0.0-beta.7",
+      "platforms": [
+        "linux",
+        "darwin",
+        "win32"
+      ],
+      "requirements": [
+        "Node.js >=22.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@azure/mcp@4.0.0-beta.7"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-azure-devops-mcp",
+      "name": "@azure-devops/mcp",
+      "description": "MCP server for interacting with Azure DevOps",
+      "category": "Cloud and deployment",
+      "maintainer": "microsoft",
+      "type": "mcp",
+      "source": "https://github.com/microsoft/azure-devops-mcp",
+      "license": "MIT",
+      "version": "2.11.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@azure-devops/mcp@2.11.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-netlify-mcp",
+      "name": "@netlify/mcp",
+      "description": "[Netlify MCP Server](https://docs.netlify.com/welcome/build-with-ai/netlify-mcp-server/) follows the [Model Context Protocol (MCP)](https://modelcontextprotocol.org) to enable code agents to use the Netlify API and CLI—so they can create new projects, bui",
+      "category": "Cloud and deployment",
+      "maintainer": "netlify",
+      "type": "mcp",
+      "source": "https://github.com/netlify/netlify-mcp",
+      "license": "ISC",
+      "version": "1.22.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@netlify/mcp@1.22.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-stripe-mcp",
+      "name": "@stripe/mcp",
+      "description": "Stripe local MCP proxy (deprecated; connect directly to Stripe MCP)",
+      "category": "Specialized developer tools",
+      "maintainer": "stripe",
+      "type": "mcp",
+      "source": "https://github.com/stripe/ai",
+      "license": "MIT",
+      "version": "0.3.4",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@stripe/mcp@0.3.4"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-executeautomation-playwright-mcp-server",
+      "name": "@executeautomation/playwright-mcp-server",
+      "description": "Model Context Protocol servers for Playwright",
+      "category": "Browser automation",
+      "maintainer": "executeautomation",
+      "type": "mcp",
+      "source": "https://github.com/executeautomation/mcp-playwright",
+      "license": "MIT",
+      "version": "1.0.12",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@executeautomation/playwright-mcp-server@1.0.12"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-firecrawl-mcp",
+      "name": "firecrawl-mcp",
+      "description": "Firecrawl MCP server, the context API for AI agents: search, scrape, parse, crawl, map, and interact with the web, run Agent and Monitor jobs, and search scientific papers (PubMed, bioRxiv, medRxiv, arXiv). Works with Firecrawl cloud or a self-hosted inst",
+      "category": "Documentation and research",
+      "maintainer": "firecrawl",
+      "type": "mcp",
+      "source": "https://github.com/firecrawl/firecrawl-mcp-server",
+      "license": "MIT",
+      "version": "3.40.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=22.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:firecrawl-mcp@3.40.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-tavily-mcp",
+      "name": "tavily-mcp",
+      "description": "MCP server for advanced web search using Tavily",
+      "category": "Documentation and research",
+      "maintainer": "tavily-ai",
+      "type": "mcp",
+      "source": "https://github.com/tavily-ai/tavily-mcp",
+      "license": "MIT",
+      "version": "0.2.22",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:tavily-mcp@0.2.22"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-exa-mcp-server",
+      "name": "exa-mcp-server",
+      "description": "Connect AI agents to Exa for web search, content fetching, and multi-step research.",
+      "category": "Documentation and research",
+      "maintainer": "exa-labs",
+      "type": "mcp",
+      "source": "https://github.com/exa-labs/exa-mcp-server",
+      "license": "MIT",
+      "version": "3.4.3",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=20.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:exa-mcp-server@3.4.3"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-perplexity-ai-mcp-server",
+      "name": "@perplexity-ai/mcp-server",
+      "description": "Real-time web search, reasoning, and research through Perplexity's API",
+      "category": "AI and machine learning",
+      "maintainer": "perplexityai",
+      "type": "mcp",
+      "source": "https://github.com/perplexityai/modelcontextprotocol",
+      "license": "MIT",
+      "version": "1.3.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@perplexity-ai/mcp-server@1.3.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-apify-actors-mcp-server",
+      "name": "@apify/actors-mcp-server",
+      "description": "Apify MCP Server",
+      "category": "AI and machine learning",
+      "maintainer": "apify",
+      "type": "mcp",
+      "source": "https://github.com/apify/apify-mcp-server",
+      "license": "MIT",
+      "version": "0.21.10",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=22.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@apify/actors-mcp-server@0.21.10"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-brightdata-mcp",
+      "name": "@brightdata/mcp",
+      "description": "An MCP interface into the Bright Data toolset",
+      "category": "AI and machine learning",
+      "maintainer": "brightdata",
+      "type": "mcp",
+      "source": "https://github.com/brightdata/brightdata-mcp",
+      "license": "MIT",
+      "version": "4.8.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@brightdata/mcp@4.8.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-contentful-mcp-server",
+      "name": "@contentful/mcp-server",
+      "description": "Contentful MCP Server - Model Context Protocol server for Contentful",
+      "category": "Productivity and collaboration",
+      "maintainer": "contentful",
+      "type": "mcp",
+      "source": "https://github.com/contentful/contentful-mcp-server",
+      "license": "MIT",
+      "version": "1.24.9",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@contentful/mcp-server@1.24.9"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-pinecone-database-mcp",
+      "name": "@pinecone-database/mcp",
+      "description": "Model Context Protocol server for Pinecone - enables AI assistants to interact with Pinecone indexes and documentation",
+      "category": "Databases",
+      "maintainer": "pinecone-io",
+      "type": "mcp",
+      "source": "https://github.com/pinecone-io/pinecone-mcp",
+      "license": "Apache-2.0",
+      "version": "0.4.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=22.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@pinecone-database/mcp@0.4.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-microsoft-clarity-mcp-server",
+      "name": "@microsoft/clarity-mcp-server",
+      "description": "MCP Server for Microsoft Clarity based on data export API",
+      "category": "Monitoring and observability",
+      "maintainer": "microsoft",
+      "type": "mcp",
+      "source": "https://github.com/microsoft/clarity-mcp-server",
+      "license": "MIT",
+      "version": "2.0.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@microsoft/clarity-mcp-server@2.0.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-googleworkspace-cli",
+      "name": "@googleworkspace/cli",
+      "description": "Google Workspace CLI — dynamic command surface from Discovery Service",
+      "category": "Google services",
+      "maintainer": "googleworkspace",
+      "type": "tool",
+      "source": "https://github.com/googleworkspace/cli",
+      "license": "Apache-2.0",
+      "version": "0.22.5",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@googleworkspace/cli@0.22.5"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-agentdeskai-browser-tools-mcp",
+      "name": "@agentdeskai/browser-tools-mcp",
+      "description": "MCP server exposing live browser telemetry (console logs, network requests, screenshots, Lighthouse audits) from your real Chrome session",
+      "category": "Browser automation",
+      "maintainer": "AgentDeskAI",
+      "type": "mcp",
+      "source": "https://github.com/AgentDeskAI/browser-tools-mcp",
+      "license": "MIT",
+      "version": "2.0.4",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=22.19",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@agentdeskai/browser-tools-mcp@2.0.4"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-wonderwhy-er-desktop-commander",
+      "name": "@wonderwhy-er/desktop-commander",
+      "description": "MCP server for terminal operations and file editing",
+      "category": "Local development",
+      "maintainer": "wonderwhy-er",
+      "type": "mcp",
+      "source": "https://github.com/wonderwhy-er/DesktopCommanderMCP",
+      "license": "MIT",
+      "version": "0.3.3",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=22.12.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@wonderwhy-er/desktop-commander@0.3.3"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-mcp-remote",
+      "name": "mcp-remote",
+      "description": "Remote proxy for Model Context Protocol, allowing local-only clients to connect to remote servers using oAuth",
+      "category": "Specialized developer tools",
+      "maintainer": "punkpeye",
+      "type": "tool",
+      "source": "https://github.com/punkpeye/mcp-remote",
+      "license": "MIT",
+      "version": "0.16.6",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:mcp-remote@0.16.6"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-mcp-server-docker",
+      "name": "mcp-server-docker",
+      "description": "MCP server for executing commands in Docker containers",
+      "category": "DevOps and containers",
+      "maintainer": "adamdude828",
+      "type": "mcp",
+      "source": "https://github.com/adamdude828/mcp-server-docker",
+      "license": "MIT",
+      "version": "1.0.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:mcp-server-docker@1.0.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-mcp-server-kubernetes",
+      "name": "mcp-server-kubernetes",
+      "description": "MCP server for interacting with Kubernetes clusters via kubectl",
+      "category": "DevOps and containers",
+      "maintainer": "Flux159",
+      "type": "mcp",
+      "source": "https://github.com/Flux159/mcp-server-kubernetes",
+      "license": "MIT",
+      "version": "4.2.3",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:mcp-server-kubernetes@4.2.3"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-mcp-server-sqlite",
+      "name": "mcp-server-sqlite",
+      "description": "Model Context Protocol (MCP) server for SQLite database operations",
+      "category": "Databases",
+      "maintainer": "madnh",
+      "type": "mcp",
+      "source": "https://github.com/madnh/mcp-server-sqlite",
+      "license": "MIT",
+      "version": "0.0.2",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:mcp-server-sqlite@0.0.2"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-mcp-server-trello",
+      "name": "mcp-server-trello",
+      "description": "A Model Context Protocol (MCP) server for interacting with Trello boards",
+      "category": "Productivity and collaboration",
+      "maintainer": "Infall-Insurance",
+      "type": "mcp",
+      "source": "https://github.com/Infall-Insurance/mcp-server-trello",
+      "license": "MIT",
+      "version": "1.0.4",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=16.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:mcp-server-trello@1.0.4"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-mcp-server-ssh",
+      "name": "mcp-server-ssh",
+      "description": "MCP server for SSH remote access: execute commands, transfer files via SFTP, generate SSH key pairs",
+      "category": "Local development",
+      "maintainer": "bacarrdy",
+      "type": "mcp",
+      "source": "https://github.com/bacarrdy/mcp-ssh-server",
+      "license": "MIT",
+      "version": "1.0.5",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:mcp-server-ssh@1.0.5"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-mcp-server-ftp",
+      "name": "mcp-server-ftp",
+      "description": "Model Context Protocol server for FTP access",
+      "category": "Local development",
+      "maintainer": "alxspiker",
+      "type": "mcp",
+      "source": "https://github.com/alxspiker/mcp-server-ftp",
+      "license": "MIT",
+      "version": "1.4.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18.14.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:mcp-server-ftp@1.4.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-mcp-server-wikipedia",
+      "name": "mcp-server-wikipedia",
+      "description": "Progressive-retrieval MCP server for Wikipedia",
+      "category": "Documentation and research",
+      "maintainer": "surendranb",
+      "type": "mcp",
+      "source": "https://github.com/surendranb/wikipedia-mcp-server",
+      "license": "MIT",
+      "version": "0.5.3",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:mcp-server-wikipedia@0.5.3"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-automatalabs-mcp-server-playwright",
+      "name": "@automatalabs/mcp-server-playwright",
+      "description": "MCP server for browser automation using Playwright",
+      "category": "Browser automation",
+      "maintainer": "Automata-Labs-team",
+      "type": "mcp",
+      "source": "https://github.com/Automata-Labs-team/MCP-Server-Playwright",
+      "license": "MIT",
+      "version": "1.2.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@automatalabs/mcp-server-playwright@1.2.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-21st-dev-magic",
+      "name": "@21st-dev/magic",
+      "description": "Magic MCP is now the 21st MCP. This package is a compatibility proxy kept for old configs - new setups should use `npx @21st-dev/cli@latest init`. Setup: https://21st.dev/mcp",
+      "category": "Design and prototyping",
+      "maintainer": "21st-dev",
+      "type": "mcp",
+      "source": "https://github.com/21st-dev/magic-mcp",
+      "license": "ISC",
+      "version": "0.2.3",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@21st-dev/magic@0.2.3"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-magicuidesign-mcp",
+      "name": "@magicuidesign/mcp",
+      "description": "Official MCP server for Magic UI.",
+      "category": "Design and prototyping",
+      "maintainer": "magicuidesign",
+      "type": "mcp",
+      "source": "https://github.com/magicuidesign/mcp",
+      "license": "ISC",
+      "version": "2.1.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@magicuidesign/mcp@2.1.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-mui-mcp",
+      "name": "@mui/mcp",
+      "description": "MUI MCP Server",
+      "category": "Design and prototyping",
+      "maintainer": "mui",
+      "type": "mcp",
+      "source": "https://github.com/mui/mui-x",
+      "license": "MIT",
+      "version": "0.1.10",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=22.12",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@mui/mcp@0.1.10"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-angular-cli",
+      "name": "@angular/cli",
+      "description": "CLI tool for Angular",
+      "category": "Specialized developer tools",
+      "maintainer": "angular",
+      "type": "tool",
+      "source": "https://github.com/angular/angular-cli",
+      "license": "MIT",
+      "version": "22.2.7",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js ^22.22.3 || ^24.15.0 || >=26.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@angular/cli@22.2.7"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-sveltejs-mcp",
+      "name": "@sveltejs/mcp",
+      "description": "The CLI version of the Svelte MCP.",
+      "category": "Specialized developer tools",
+      "maintainer": "sveltejs",
+      "type": "mcp",
+      "source": "https://github.com/sveltejs/ai-tools",
+      "license": "MIT",
+      "version": "0.1.30",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@sveltejs/mcp@0.1.30"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-auth0-auth0-mcp-server",
+      "name": "@auth0/auth0-mcp-server",
+      "description": "Auth0 Model Context Protocol (MCP) Server (Beta) — A secure and extendable implementation of an MCP server that provides AI assistants with controlled access to the Auth0 Management API through natural language. This project is in beta and not intended fo",
+      "category": "Security and testing",
+      "maintainer": "auth0",
+      "type": "mcp",
+      "source": "https://github.com/auth0/auth0-mcp-server",
+      "license": "MIT",
+      "version": "0.1.0-beta.19",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@auth0/auth0-mcp-server@0.1.0-beta.19"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-mailgun-mcp-server",
+      "name": "@mailgun/mcp-server",
+      "description": "An MCP server that gives AI agents a practical interface to Mailgun workflows for sending, diagnosing deliverability, and taking account actions safely.",
+      "category": "Productivity and collaboration",
+      "maintainer": "mailgun",
+      "type": "mcp",
+      "source": "https://github.com/mailgun/mailgun-mcp-server",
+      "license": "Apache-2.0",
+      "version": "2.3.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=20.20.2",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@mailgun/mcp-server@2.3.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-testomatio-mcp",
+      "name": "@testomatio/mcp",
+      "description": "Model Context Protocol server for Testomatio API",
+      "category": "Security and testing",
+      "maintainer": "testomatio",
+      "type": "mcp",
+      "source": "https://github.com/testomatio/mcp",
+      "license": "MIT",
+      "version": "3.2.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@testomatio/mcp@3.2.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-circleci-mcp-server-circleci",
+      "name": "@circleci/mcp-server-circleci",
+      "description": "A Model Context Protocol (MCP) server implementation for CircleCI, enabling natural language interactions with CircleCI functionality through MCP-enabled clients",
+      "category": "DevOps and containers",
+      "maintainer": "CircleCI-Public",
+      "type": "mcp",
+      "source": "https://github.com/CircleCI-Public/mcp-server-circleci",
+      "license": "Apache-2.0",
+      "version": "0.20.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18.0.0",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@circleci/mcp-server-circleci@0.20.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-launchdarkly-mcp-server",
+      "name": "@launchdarkly/mcp-server",
+      "description": "The local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for [LaunchDarkly](https://launchdarkly.com/) federal and European Union (EU) environments.",
+      "category": "Specialized developer tools",
+      "maintainer": "launchdarkly",
+      "type": "mcp",
+      "source": "https://github.com/launchdarkly/mcp-server",
+      "license": "MIT",
+      "version": "0.7.2",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream supported versions)",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@launchdarkly/mcp-server@0.7.2"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-unleash-mcp",
+      "name": "@unleash/mcp",
+      "description": "MCP server for Unleash: an AI-agent-friendly interface to Unleash",
+      "category": "Specialized developer tools",
+      "maintainer": "Unleash",
+      "type": "mcp",
+      "source": "https://github.com/Unleash/unleash-mcp",
+      "license": "MIT",
+      "version": "0.6.4",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=24",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@unleash/mcp@0.6.4"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "npm-growthbook-mcp",
+      "name": "@growthbook/mcp",
+      "description": "Thin MCP server for GrowthBook — skill loader + authenticated API passthrough",
+      "category": "Specialized developer tools",
+      "maintainer": "growthbook",
+      "type": "mcp",
+      "source": "https://github.com/growthbook/growthbook-mcp",
+      "license": "MIT",
+      "version": "2.2.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js >=18",
+        "Review transitive dependencies and executable entrypoint"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@growthbook/mcp@2.2.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-git",
+      "name": "mcp-server-git",
+      "description": "A Model Context Protocol server providing tools to read, search, and manipulate Git repositories programmatically via LLMs",
+      "category": "Programming and Git",
+      "maintainer": "modelcontextprotocol",
+      "type": "mcp",
+      "source": "https://github.com/modelcontextprotocol/servers",
+      "license": "MIT",
+      "version": "2026.11.11",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-git@2026.11.11"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-fetch",
+      "name": "mcp-server-fetch",
+      "description": "A Model Context Protocol server providing tools to fetch and convert web content for usage by LLMs",
+      "category": "Documentation and research",
+      "maintainer": "modelcontextprotocol",
+      "type": "mcp",
+      "source": "https://github.com/modelcontextprotocol/servers",
+      "license": "MIT",
+      "version": "2026.11.11",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-fetch@2026.11.11"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-time",
+      "name": "mcp-server-time",
+      "description": "A Model Context Protocol server providing tools for time queries and timezone conversions for LLMs",
+      "category": "Specialized developer tools",
+      "maintainer": "modelcontextprotocol",
+      "type": "mcp",
+      "source": "https://github.com/modelcontextprotocol/servers",
+      "license": "MIT",
+      "version": "2026.11.11",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-time@2026.11.11"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-docker",
+      "name": "mcp-server-docker",
+      "description": "A Docker MCP Server",
+      "category": "DevOps and containers",
+      "maintainer": "ckreiling",
+      "type": "mcp",
+      "source": "https://github.com/ckreiling/mcp-server-docker",
+      "license": "GPL-3.0",
+      "version": "0.3.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.12",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-docker@0.3.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-milvus",
+      "name": "mcp-server-milvus",
+      "description": "MCP server for Milvus",
+      "category": "Databases",
+      "maintainer": "danchev",
+      "type": "mcp",
+      "source": "https://github.com/danchev/mcp-server-milvus",
+      "license": "Apache Software License",
+      "version": "0.1.1.dev9",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-milvus@0.1.1.dev9"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-duckdb",
+      "name": "mcp-server-duckdb",
+      "description": "A DuckDB MCP server",
+      "category": "Databases",
+      "maintainer": "ktanaka101",
+      "type": "mcp",
+      "source": "https://github.com/ktanaka101/mcp-server-duckdb",
+      "license": "MIT",
+      "version": "1.1.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-duckdb@1.1.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-youtube",
+      "name": "mcp-server-youtube",
+      "description": "MCP server for YouTube — search videos, get transcripts, read comments and more",
+      "category": "Google services",
+      "maintainer": "vaporif",
+      "type": "mcp",
+      "source": "https://github.com/vaporif/mcp-server-youtube",
+      "license": "GPL-3.0-or-later",
+      "version": "0.1.2",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.8",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-youtube@0.1.2"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-blender-mcp",
+      "name": "blender-mcp",
+      "description": "Renamed to mcp-for-blender. Installing this package installs it for you.",
+      "category": "Design and prototyping",
+      "maintainer": "ahujasid",
+      "type": "mcp",
+      "source": "https://github.com/ahujasid/mcp-for-blender",
+      "license": "MIT",
+      "version": "2.0.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:blender-mcp@2.0.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-jupyter",
+      "name": "mcp-server-jupyter",
+      "description": "MCP server for Jupyter notebooks",
+      "category": "Specialized developer tools",
+      "maintainer": "ihrpr",
+      "type": "mcp",
+      "source": "https://github.com/ihrpr/mcp-server-jupyter",
+      "license": "MIT",
+      "version": "0.1.9",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-jupyter@0.1.9"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-arxiv-mcp-server",
+      "name": "arxiv-mcp-server",
+      "description": "A flexible arXiv search and analysis service with MCP protocol support",
+      "category": "Documentation and research",
+      "maintainer": "blazickjp",
+      "type": "mcp",
+      "source": "https://github.com/blazickjp/arxiv-mcp-server#readme",
+      "license": "Apache-2.0",
+      "version": "0.8.2",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.11",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:arxiv-mcp-server@0.8.2"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-wikipedia",
+      "name": "mcp-server-wikipedia",
+      "description": "Progressive-retrieval MCP server for Wikipedia",
+      "category": "Documentation and research",
+      "maintainer": "surendranb",
+      "type": "mcp",
+      "source": "https://github.com/surendranb/wikipedia-mcp-server/blob/main/CHANGELOG.md",
+      "license": "MIT",
+      "version": "0.5.6",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-wikipedia@0.5.6"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-wikipedia-mcp",
+      "name": "wikipedia-mcp",
+      "description": "MCP server for Wikipedia API",
+      "category": "Documentation and research",
+      "maintainer": "rudra-ravi",
+      "type": "mcp",
+      "source": "https://github.com/rudra-ravi/wikipedia-mcp#readme",
+      "license": "MIT",
+      "version": "2.0.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:wikipedia-mcp@2.0.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-duckduckgo-mcp-server",
+      "name": "duckduckgo-mcp-server",
+      "description": "MCP Server for searching via DuckDuckGo",
+      "category": "Documentation and research",
+      "maintainer": "nickclyde",
+      "type": "mcp",
+      "source": "https://github.com/nickclyde/duckduckgo-mcp-server",
+      "license": "MIT License",
+      "version": "0.7.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:duckduckgo-mcp-server@0.7.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-selenium",
+      "name": "mcp-server-selenium",
+      "description": "A Model Context Protocol server for Selenium web automation",
+      "category": "Browser automation",
+      "maintainer": "PhungXuanAnh",
+      "type": "mcp",
+      "source": "https://github.com/PhungXuanAnh/selenium-mcp-server",
+      "license": "MIT",
+      "version": "0.1.8",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-selenium@0.1.8"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-android",
+      "name": "mcp-server-android",
+      "description": "MCP server for Android device automation via ADB",
+      "category": "Specialized developer tools",
+      "maintainer": "minhalvp",
+      "type": "mcp",
+      "source": "https://github.com/minhalvp/android-mcp-server#readme",
+      "license": "MIT",
+      "version": "0.3.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.11",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-android@0.3.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-nmap",
+      "name": "mcp-server-nmap",
+      "description": "MCP server for python-nmap network scanning",
+      "category": "Security and testing",
+      "maintainer": "daedalus",
+      "type": "mcp",
+      "source": "https://github.com/daedalus/mcp-server-nmap",
+      "license": "MIT",
+      "version": "0.1.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.11",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-nmap@0.1.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-grafana",
+      "name": "mcp-grafana",
+      "description": "Grafana MCP server - interact with Grafana via the Model Context Protocol",
+      "category": "Monitoring and observability",
+      "maintainer": "grafana",
+      "type": "mcp",
+      "source": "https://github.com/grafana/mcp-grafana",
+      "license": "Apache-2.0",
+      "version": "2.2.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-grafana@2.2.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-mcp-server-jaeger",
+      "name": "mcp-server-jaeger",
+      "description": "Context-efficient Model Context Protocol (MCP) server for Jaeger distributed tracing",
+      "category": "Monitoring and observability",
+      "maintainer": "chahatsagarmain",
+      "type": "mcp",
+      "source": "https://github.com/chahatsagarmain/jaeger-mcp#readme",
+      "license": "MIT",
+      "version": "0.1.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.11",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:mcp-server-jaeger@0.1.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-aws-documentation-mcp-server",
+      "name": "awslabs.aws-documentation-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for AWS Documentation",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp",
+      "license": "Apache-2.0",
+      "version": "1.2.5",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.aws-documentation-mcp-server@1.2.5"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-aws-api-mcp-server",
+      "name": "awslabs.aws-api-mcp-server",
+      "description": "Model Context Protocol (MCP) server for interacting with AWS",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/aws-api-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "1.6.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.aws-api-mcp-server@1.6.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-cdk-mcp-server",
+      "name": "awslabs.cdk-mcp-server",
+      "description": "An AWS CDK MCP server that provides guidance on AWS Cloud Development Kit best practices, infrastructure as code patterns, and security compliance with CDK Nag. This server offers tools to validate infrastructure designs, explain CDK Nag rules, analyze suppressions, generate Bedrock Agent schemas, and discover Solutions Constructs patterns.",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp",
+      "license": "Apache-2.0",
+      "version": "1.0.15",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.cdk-mcp-server@1.0.15"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-eks-mcp-server",
+      "name": "awslabs.eks-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for EKS",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/eks-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "0.2.2",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.eks-mcp-server@0.2.2"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-ecs-mcp-server",
+      "name": "awslabs.ecs-mcp-server",
+      "description": "AWS ECS MCP Server for automating containerization and deployment of web applications to AWS ECS",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp",
+      "license": "Apache-2.0",
+      "version": "0.1.38",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.ecs-mcp-server@0.1.38"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-lambda-tool-mcp-server",
+      "name": "awslabs.lambda-tool-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for AWS Lambda Tools",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp",
+      "license": "Apache-2.0",
+      "version": "2.1.2",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.lambda-tool-mcp-server@2.1.2"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-cost-analysis-mcp-server",
+      "name": "awslabs.cost-analysis-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for Cost Analysis of the AWS services",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp",
+      "license": "Apache-2.0",
+      "version": "1.0.5",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.cost-analysis-mcp-server@1.0.5"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-cloudwatch-mcp-server",
+      "name": "awslabs.cloudwatch-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for cloudwatch",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/cloudwatch-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "0.3.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.cloudwatch-mcp-server@0.3.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-aws-diagram-mcp-server",
+      "name": "awslabs.aws-diagram-mcp-server",
+      "description": "An MCP server that seamlessly creates diagrams using the Python diagrams package DSL",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp",
+      "license": "Apache-2.0",
+      "version": "1.0.23",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.12",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.aws-diagram-mcp-server@1.0.23"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-bedrock-kb-retrieval-mcp-server",
+      "name": "awslabs.bedrock-kb-retrieval-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for Bedrock Knowledge Base Retrieval",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp",
+      "license": "Apache-2.0",
+      "version": "1.1.2",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.bedrock-kb-retrieval-mcp-server@1.1.2"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-amazon-qbusiness-anonymous-mcp-server",
+      "name": "awslabs.amazon-qbusiness-anonymous-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for Amazon Q Business anonymous mode application.",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/amazon-qbusiness-anonymous-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "0.1.2",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.amazon-qbusiness-anonymous-mcp-server@0.1.2"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-aws-dataprocessing-mcp-server",
+      "name": "awslabs.aws-dataprocessing-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for dataprocessing",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/aws-dataprocessing-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "0.2.3",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.aws-dataprocessing-mcp-server@0.2.3"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-dynamodb-mcp-server",
+      "name": "awslabs.dynamodb-mcp-server",
+      "description": "The official MCP Server for interacting with AWS DynamoDB",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/dynamodb-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "2.1.10",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.dynamodb-mcp-server@2.1.10"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-amazon-neptune-mcp-server",
+      "name": "awslabs.amazon-neptune-mcp-server",
+      "description": "An Amazon Neptune MCP server that allows for fetching status, schema, and querying using openCypher, Gremlin, and SPARQL for Neptune Database and openCypher for Neptune Analytics.",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/amazon-neptune-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "1.1.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.amazon-neptune-mcp-server@1.1.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-postgres-mcp-server",
+      "name": "awslabs.postgres-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for postgres",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/postgres-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "1.2.4",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.postgres-mcp-server@1.2.4"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-mysql-mcp-server",
+      "name": "awslabs.mysql-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for mysql",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/mysql-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "1.1.5",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.mysql-mcp-server@1.1.5"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-redshift-mcp-server",
+      "name": "awslabs.redshift-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for Redshift",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/redshift-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "0.1.3",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.redshift-mcp-server@0.1.3"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-s3-tables-mcp-server",
+      "name": "awslabs.s3-tables-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for awslabs.s3-tables-mcp-server",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/s3-tables-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "0.1.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.11",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.s3-tables-mcp-server@0.1.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-aws-location-mcp-server",
+      "name": "awslabs.aws-location-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for AWS Location Service",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp",
+      "license": "Apache-2.0",
+      "version": "2.1.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.aws-location-mcp-server@2.1.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-core-mcp-server",
+      "name": "awslabs.core-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for aswlabs Core MCP Server",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp",
+      "license": "Apache-2.0",
+      "version": "1.0.27",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.core-mcp-server@1.0.27"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-valkey-mcp-server",
+      "name": "awslabs.valkey-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for valkey",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/valkey-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "1.1.3",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.valkey-mcp-server@1.1.3"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-memcached-mcp-server",
+      "name": "awslabs.memcached-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for Amazon ElastiCache Memcached",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/memcached-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "1.1.2",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.memcached-mcp-server@1.1.2"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-documentdb-mcp-server",
+      "name": "awslabs.documentdb-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for documentdb",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/documentdb-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "2.0.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.documentdb-mcp-server@2.0.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-amazon-kendra-index-mcp-server",
+      "name": "awslabs.amazon-kendra-index-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for amazon-kendra-index-mcp-server",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/amazon-kendra-index-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "1.1.2",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.amazon-kendra-index-mcp-server@1.1.2"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-amazon-mq-mcp-server",
+      "name": "awslabs.amazon-mq-mcp-server",
+      "description": "A Model Context Protocol server for AmazonMQ to provision and manage your AMQ brokers",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp",
+      "license": "Apache-2.0",
+      "version": "2.1.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.amazon-mq-mcp-server@2.1.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-aws-iot-sitewise-mcp-server",
+      "name": "awslabs.aws-iot-sitewise-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for aws-iot-sitewise",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/aws-iot-sitewise-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "11.0.23",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.aws-iot-sitewise-mcp-server@11.0.23"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "pypi-awslabs-aws-healthomics-mcp-server",
+      "name": "awslabs.aws-healthomics-mcp-server",
+      "description": "An AWS Labs Model Context Protocol (MCP) server for AWS HealthOmics",
+      "category": "Cloud and deployment",
+      "maintainer": "awslabs",
+      "type": "mcp",
+      "source": "https://github.com/awslabs/mcp/blob/main/src/aws-healthomics-mcp-server/CHANGELOG.md",
+      "license": "Apache-2.0",
+      "version": "0.1.7",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Python >=3.10",
+        "Review wheel entrypoints, optional native runtimes and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "pypi",
+        "source": "pypi:awslabs.aws-healthomics-mcp-server@0.1.7"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "skill-algorithmic-art",
+      "name": "algorithmic-art",
+      "description": "Creating algorithmic art using p5.js with seeded randomness and interactive parameter exploration. Use this when users request creating art using code, generative art, algorithmic art, flow fields, or particle systems. Create original algorithmic art rather than copying existing artists' work to avoid copyright violations.",
+      "category": "Specialized developer tools",
+      "maintainer": "anthropics",
+      "type": "skill",
+      "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/algorithmic-art",
+      "license": "Apache-2.0",
+      "version": "1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064",
+      "platforms": [
+        "Any client supporting SKILL.md"
+      ],
+      "requirements": [
+        "Guidance only; references and any scripts require separate review"
+      ],
+      "installation": {
+        "mechanism": "git",
+        "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/algorithmic-art"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "skill-brand-guidelines",
+      "name": "brand-guidelines",
+      "description": "Applies Anthropic's official brand colors and typography to any sort of artifact that may benefit from having Anthropic's look-and-feel. Use it when brand colors or style guidelines, visual formatting, or company design standards apply.",
+      "category": "Specialized developer tools",
+      "maintainer": "anthropics",
+      "type": "skill",
+      "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/brand-guidelines",
+      "license": "Apache-2.0",
+      "version": "1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064",
+      "platforms": [
+        "Any client supporting SKILL.md"
+      ],
+      "requirements": [
+        "Guidance only; references and any scripts require separate review"
+      ],
+      "installation": {
+        "mechanism": "git",
+        "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/brand-guidelines"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "skill-canvas-design",
+      "name": "canvas-design",
+      "description": "Create beautiful visual art in .png and .pdf documents using design philosophy. You should use this skill when the user asks to create a poster, piece of art, design, or other static piece. Create original visual designs, never copying existing artists' work to avoid copyright violations.",
+      "category": "Design and prototyping",
+      "maintainer": "anthropics",
+      "type": "skill",
+      "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/canvas-design",
+      "license": "Apache-2.0",
+      "version": "1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064",
+      "platforms": [
+        "Any client supporting SKILL.md"
+      ],
+      "requirements": [
+        "Guidance only; references and any scripts require separate review"
+      ],
+      "installation": {
+        "mechanism": "git",
+        "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/canvas-design"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "skill-doc-coauthoring",
+      "name": "doc-coauthoring",
+      "description": "Guide users through a structured workflow for co-authoring documentation. Use when user wants to write documentation, proposals, technical specs, decision docs, or similar structured content. This workflow helps users efficiently transfer context, refine content through iteration, and verify the doc works for readers. Trigger when user mentions writing docs, creating proposals, drafting specs, or similar documentation tasks.",
+      "category": "Specialized developer tools",
+      "maintainer": "anthropics",
+      "type": "skill",
+      "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/doc-coauthoring",
+      "license": "Apache-2.0",
+      "version": "1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064",
+      "platforms": [
+        "Any client supporting SKILL.md"
+      ],
+      "requirements": [
+        "Guidance only; references and any scripts require separate review"
+      ],
+      "installation": {
+        "mechanism": "git",
+        "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/doc-coauthoring"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "skill-frontend-design",
+      "name": "frontend-design",
+      "description": "Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults.",
+      "category": "Design and prototyping",
+      "maintainer": "anthropics",
+      "type": "skill",
+      "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/frontend-design",
+      "license": "Apache-2.0",
+      "version": "1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064",
+      "platforms": [
+        "Any client supporting SKILL.md"
+      ],
+      "requirements": [
+        "Guidance only; references and any scripts require separate review"
+      ],
+      "installation": {
+        "mechanism": "git",
+        "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/frontend-design"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "skill-internal-comms",
+      "name": "internal-comms",
+      "description": "A set of resources to help me write all kinds of internal communications, using the formats that my company likes to use. Claude should use this skill whenever asked to write some sort of internal communications (status reports, leadership updates, 3P updates, company newsletters, FAQs, incident reports, project updates, etc.).",
+      "category": "Specialized developer tools",
+      "maintainer": "anthropics",
+      "type": "skill",
+      "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/internal-comms",
+      "license": "Apache-2.0",
+      "version": "1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064",
+      "platforms": [
+        "Any client supporting SKILL.md"
+      ],
+      "requirements": [
+        "Guidance only; references and any scripts require separate review"
+      ],
+      "installation": {
+        "mechanism": "git",
+        "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/internal-comms"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "skill-mcp-builder",
+      "name": "mcp-builder",
+      "description": "Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. Use when building MCP servers to integrate external APIs or services, whether in Python (FastMCP) or Node/TypeScript (MCP SDK).",
+      "category": "Specialized developer tools",
+      "maintainer": "anthropics",
+      "type": "skill",
+      "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/mcp-builder",
+      "license": "Apache-2.0",
+      "version": "1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064",
+      "platforms": [
+        "Any client supporting SKILL.md"
+      ],
+      "requirements": [
+        "Guidance only; references and any scripts require separate review"
+      ],
+      "installation": {
+        "mechanism": "git",
+        "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/mcp-builder"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "skill-skill-creator",
+      "name": "skill-creator",
+      "description": "Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy.",
+      "category": "Reverse engineering",
+      "maintainer": "anthropics",
+      "type": "skill",
+      "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/skill-creator",
+      "license": "Apache-2.0",
+      "version": "1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064",
+      "platforms": [
+        "Any client supporting SKILL.md"
+      ],
+      "requirements": [
+        "Guidance only; references and any scripts require separate review"
+      ],
+      "installation": {
+        "mechanism": "git",
+        "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/skill-creator"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "skill-webapp-testing",
+      "name": "webapp-testing",
+      "description": "Toolkit for interacting with and testing local web applications using Playwright. Supports verifying frontend functionality, debugging UI behavior, capturing browser screenshots, and viewing browser logs.",
+      "category": "Security and testing",
+      "maintainer": "anthropics",
+      "type": "skill",
+      "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/webapp-testing",
+      "license": "Apache-2.0",
+      "version": "1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064",
+      "platforms": [
+        "Any client supporting SKILL.md"
+      ],
+      "requirements": [
+        "Guidance only; references and any scripts require separate review"
+      ],
+      "installation": {
+        "mechanism": "git",
+        "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/webapp-testing"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "skill-web-artifacts-builder",
+      "name": "web-artifacts-builder",
+      "description": "Suite of tools for creating elaborate, multi-component claude.ai HTML artifacts using modern frontend web technologies (React, Tailwind CSS, shadcn/ui). Use for complex artifacts requiring state management, routing, or shadcn/ui components - not for simple single-file HTML/JSX artifacts.",
+      "category": "Specialized developer tools",
+      "maintainer": "anthropics",
+      "type": "skill",
+      "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/web-artifacts-builder",
+      "license": "Apache-2.0",
+      "version": "1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064",
+      "platforms": [
+        "Any client supporting SKILL.md"
+      ],
+      "requirements": [
+        "Guidance only; references and any scripts require separate review"
+      ],
+      "installation": {
+        "mechanism": "git",
+        "source": "https://github.com/anthropics/skills/tree/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/web-artifacts-builder"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "github",
+      "name": "GitHub MCP Server",
+      "description": "Official GitHub MCP server; use only as an explicitly reviewed fallback to suitable connected ChatGPT GitHub capabilities.",
+      "category": "Programming and Git",
+      "maintainer": "github",
+      "type": "mcp",
+      "source": "https://github.com/github/github-mcp-server",
+      "license": "MIT",
+      "version": "v2.1.0",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Reviewed release binary or container; GitHub credentials with least-privilege scopes",
+        "Hosted endpoint is a separate operator-reviewed HTTP configuration"
+      ],
+      "installation": {
+        "mechanism": "git",
+        "source": "https://github.com/github/github-mcp-server#v2.1.0"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    },
+    {
+      "id": "notion",
+      "name": "Notion MCP Server",
+      "description": "Official MCP server for Notion API",
+      "category": "Productivity and collaboration",
+      "maintainer": "makenotion",
+      "type": "mcp",
+      "source": "https://github.com/makenotion/notion-mcp-server",
+      "license": "MIT",
+      "version": "2.6.1",
+      "platforms": [
+        "Upstream runtime/platform review required"
+      ],
+      "requirements": [
+        "Node.js (review upstream runtime)",
+        "Review exact Notion API permissions and transitive dependencies"
+      ],
+      "installation": {
+        "mechanism": "npm",
+        "source": "npm:@notionhq/notion-mcp-server@2.6.1"
+      },
+      "verified_at": "2026-11-15",
+      "verification": "BridgeDev metadata snapshot; Veyl compatibility untested"
+    }
+  ]
+}
