@@ -170,6 +170,73 @@ fn version_three_independent_client_activation_preserves_mode() {
 }
 
 #[test]
+fn new_user_init_and_default_commands_need_no_manual_json() {
+    use sha2::{Digest, Sha256};
+    let f = Fixture::new("standard");
+    let home = f.0.join("new-home");
+    DirBuilder::new().mode(0o700).create(&home).unwrap();
+    let workspace = f.0.join("workspace");
+    let invoke = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+            .env("HOME", &home)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let result = ok(invoke(&[
+        "init",
+        "--root",
+        workspace.to_str().unwrap(),
+        "--tailscale-host",
+        "demo.example.ts.net",
+    ]));
+    let state = home.join(".local/state/veyl");
+    let config = state.join("clients.json");
+    let document: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    let bearer = fs::read_to_string(state.join("dev.bearer")).unwrap();
+    assert_eq!(bearer.len(), 64);
+    assert!(!result.contains(&bearer));
+    assert_eq!(
+        fs::metadata(&state).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(state.join("dev.bearer"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert_eq!(
+        document["clients"][0]["token_sha256"],
+        format!("{:x}", Sha256::digest(bearer.as_bytes()))
+    );
+    assert_eq!(document["clients"][0]["mode"], "standard");
+    assert!(ok(invoke(&["mode", "get", "dev"])).contains("mode=standard"));
+    assert!(ok(invoke(&["service", "validate"])).contains("Configuration valid"));
+    let pair = ok(invoke(&["dashboard", "pair"]));
+    assert!(pair.starts_with("PAIRING_TOKEN="));
+    assert!(
+        !invoke(&["init", "--root", workspace.to_str().unwrap()])
+            .status
+            .success()
+    );
+    assert_eq!(
+        fs::read_to_string(state.join("dev.bearer")).unwrap(),
+        bearer
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&config).unwrap()).unwrap(),
+        document
+    );
+}
+
+#[test]
 fn reset_recovers_disabled_to_standard_and_preserves_credentials() {
     let f = Fixture::new("disabled");
     let previous = f.read();

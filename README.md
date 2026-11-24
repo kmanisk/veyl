@@ -1,96 +1,137 @@
-# Veyl · Rust MCP Gateway
+# Veyl
 
-A local MCP server with per-client tool grants, bounded file access, supervised
-jobs, and a tamper-evident audit ledger. The HTTP server listens on loopback
-and uses per-client bearer credentials. The foreground stdio server provides
-read-only file access within an explicitly selected root.
+A lightweight, Rust-native MCP gateway for local and remote AI agents. Connect
+ChatGPT, Codex or other MCP clients to authorized files, commands, durable jobs,
+system inspection, skills and upstream MCP servers on your Linux machine.
 
-## Build and run
+## Quick start (Linux x86-64)
 
-Use Rust 2024 and Linux x86_64 for the supported HTTP and jobs configuration.
-Managed job isolation also requires unprivileged Bubblewrap and Linux
-namespaces. A cached dependency graph permits offline builds.
+The commands below require v0.2.1-alpha or newer. Download a verified
+Linux archive from the [releases page](https://github.com/kmanisk/veyl/releases)
+or build from source.
+
+**Requirements:** Linux, Bubblewrap (`bwrap`), and Git for Git tools.
+Tailscale is only needed for remote clients; systemd is optional.
+
+Build from source with Rust 2024 or extract a verified Linux release archive.
+For a source build:
 
 ```sh
-cargo build --release --offline --locked
-target/release/mcp-gateway --help
-target/release/mcp-gateway --root /absolute/path/to/workspace
-target/release/mcp-gateway http --listen 127.0.0.1:7331 --config "$config"
+cargo build --release --locked
+install -Dm755 target/release/mcp-gateway ~/.local/bin/mcp-gateway
+install -Dm755 target/release/veyl-monitor ~/.local/bin/veyl-monitor
+ln -s mcp-gateway ~/.local/bin/veyl
 ```
 
-Set `config` to an absolute path to an owner-only JSON client configuration.
-Use a separate private directory for the audit ledger and job store. Store the
-SHA-256 verifier of each independently generated bearer in the configuration.
-Keep bearer values outside source, command arguments, and logs. See the
-[configuration and profile contract](SPEC.md#phase-a-durable-supervised-jobs-on-linux).
+For a downloaded archive, verify SHA-256 and install the two extracted
+executables instead. Ensure `~/.local/bin` is on PATH. The symlink command
+is for a fresh installation; do not overwrite an existing executable.
 
-## Client modes
+### ChatGPT in two steps
 
-| Mode | File tools | Job filesystem and network |
+1. Log in to Tailscale once using the installed Tailscale client
+   (`tailscale up` if needed). The tailnet must allow HTTPS certificates,
+   MagicDNS and Funnel on port 443, and your local user must be authorized
+   to manage Serve routes.
+2. Run this from the workspace you want to grant:
+
+```sh
+veyl setup --root "$PWD" --chatgpt-yolo
+```
+
+Veyl generates its private configuration, creates separate local and
+public credentials, discovers the Tailscale hostname, starts its user
+service, publishes its own MCP route and opens the paired local dashboard.
+On Wayland it copies one private connector URL to your clipboard.
+
+Open ChatGPT's custom MCP/plugin creation form, choose direct Streamable
+HTTP and No authentication, paste that URL once, then connect. The secret
+URL itself authenticates the dedicated client. No manual JSON editing or
+dashboard pairing code is required.
+
+The public setup option explicitly selects network-enabled YOLO for the
+dedicated ChatGPT client. The local `dev` client remains Standard. The
+new-user public route uses port 443; it refuses collisions rather than
+taking over existing services. Existing shared Funnel installations keep
+their current routes and credentials. Do not rerun setup over an existing
+installation. Use `veyl connect` to activate or recopy its configured
+connector URL. On systems without `wl-copy`, the command identifies the
+private connector URL file instead.
+
+### Local-only or portable
+
+```sh
+veyl init --root "$PWD"
+veyl run
+```
+
+The gateway runs in the foreground. From another terminal, run `veyl ui`
+to open and pair your browser automatically. Ctrl+C ends foreground
+operation. No systemd unit or Tailscale route is required.
+
+For private tailnet-only access, use `veyl setup --root "$PWD" --tailscale`
+after signing in to Tailscale. Use `veyl ui --remote` from a host that can
+resolve and reach the private tailnet hostname.
+
+## Daily commands
+
+| Command | What it does |
+| --- | --- |
+| `veyl ui` or `veyl dashboard` | Open and pair the local dashboard |
+| `veyl ui --remote` | Open and pair the private Tailscale dashboard |
+| `veyl monitor` | Open the automatically paired terminal monitor |
+| `veyl monitor --view health` | Print structured health JSON |
+| `veyl connect` | Activate or recopy the configured public connector URL |
+| `veyl service on` | Install, start and enable the matching user service |
+| `veyl service status` | Inspect the service |
+| `veyl portable` | Stop and disable the matching user service, then run in the terminal |
+| `veyl run` | Run in the foreground without changing service activation |
+| `veyl mode get chatgpt` | Inspect the client's mode |
+| `veyl mode set chatgpt yolo` | Enable persistent YOLO |
+| `veyl mode set chatgpt standard` | Return to Standard |
+| `veyl mode disable chatgpt` | Disable access, retain selected mode |
+| `veyl mode enable chatgpt` | Re-enable the client |
+
+If a foreground gateway is running, stop it with Ctrl+C before
+`veyl service on`. Portable switching deliberately leaves login startup
+disabled until you restore service mode. Both modes use the same state.
+Existing jobs are managed by the durable runner, not by the terminal.
+
+Configuration defaults to `~/.local/state/veyl/clients.json`; existing
+legacy configurations are discovered when unambiguous. All management
+commands can take an explicit `--config PATH` where applicable. A fresh
+local setup stores its MCP bearer in the owner-only `dev.bearer` file.
+Never paste a bearer or private connector URL into chat or logs.
+
+## Modes
+
+| Mode | Files | Execution |
 | --- | --- | --- |
-| Managed Standard | Client root and explicit grants | Workspace sandbox, offline |
-| Legacy scoped YOLO | Approved roots and explicit grants | Bubblewrap, approved roots, offline |
-| Broad YOLO | Granted host-user file access with protected state | Bubblewrap, protected mounts, host IP networking |
-| FULL | Host-user access through granted tools | Supervised host execution using the gateway UID |
-| Disabled | Denied | Denied |
+| Standard | Workspace and explicit extra roots | Sandboxed, offline |
+| YOLO | Host-wide authorized paths, protected state excluded | Sandboxed, network-enabled |
+| FULL | Host-user access | Supervised, unsandboxed |
 
-Mode settings persist until a local operator changes them. Credential expiry
-and grants remain separate from mode settings. FULL requires explicit
-confirmation and a verifiable audit transition. FULL workloads have the same
-Unix authority as the gateway operator and can compromise credentials, policy
-and the ledger. Legacy unversioned configurations with operator-trusted job
-profiles predate managed sandboxing.
+FULL requires `veyl mode set CLIENT full --confirm-full` and does not
+grant root. Permissions persist until changed. Client activation and tool
+grants are independent of the mode. For existing version 1/2 policies,
+use the reviewed `veyl mode migrate --config PATH` before switching
+to the version 3 schema.
 
-```sh
-mcp-gateway yolo status --client dev --config "$config"
-mcp-gateway yolo enable --client dev --config "$config"
-mcp-gateway yolo set --client dev --mode full --confirm-full --config "$config"
-mcp-gateway yolo disable --client dev --config "$config"
-mcp-gateway protected-paths list --config "$config"
-mcp-gateway state check --state-root "$state" --config "$config"
-mcp-gateway audit verify --config "$config"
-```
+## More capabilities
 
-Broad network-enabled YOLO uses a dedicated private state layout.
-`yolo set --mode yolo` is the explicit opt-in. `yolo enable` still selects
-scoped, offline YOLO. See the [broad mode and migration guide](docs/BROAD-YOLO.md).
-AGY independently accepted 229 of 229 required cases for the separate Gate 3d execution-mode beta at commit `9d79200`.
+- [Dashboard and pairing](docs/DASHBOARD.md)
+- [Linux install, service and rollback](docs/LINUX.md)
+- [Local Codex and Gemini clients](docs/CLIENTS.md)
+- [Private Tailscale access](docs/TAILSCALE.md)
+- [ChatGPT connector](docs/CHATGPT.md)
+- [Skills](docs/SKILLS.md)
+- [External MCP servers](docs/UPSTREAM-MCP.md)
+- [Mode migration and protection](docs/BROAD-YOLO.md)
+- [BridgeDev parity](docs/PARITY.md)
+- [Current implementation and verification](STATUS.md)
+- [Protocol and implementation specification](SPEC.md)
 
-## State and service
-
-Job receipts survive the gateway process under the supervised runner.
-The audit chain is local and can be rewritten by its owner. A retained
-`audit export-head` checkpoint outside that owner's control can verify the
-previously recorded prefix.
-
-```sh
-mcp-gateway service print-unit --config "$config"
-mcp-gateway service install --dry-run --config "$config"
-mcp-gateway service uninstall --confirm --dry-run --config "$config"
-mcp-gateway serve plan --config "$config"
-```
-
-The service workflow prepares a systemd user unit. Installing a unit file is explicit. Uninstall removes only a matching gateway unit file and
-leaves credentials, audit and jobs in place. The verified service supports
-separate start, stop, restart, enable, disable and diagnostics commands. `serve plan` previews an MCP loopback route
-without contacting or changing Tailscale. An optional `--state-file`
-provides a read-only inventory of existing routes. Read the
-[security and rollback notes](GATE3_BETA.md) before using a service.
-
-## Local management and upstreams
-
-Enable the optional [loopback dashboard](docs/DASHBOARD.md) to inspect
-clients, jobs, resource usage, audit events, skills and external MCP
-servers. Manage skills without executing package contents and expose
-specific upstream tools to approved clients.
-
-- [Skill import and per-client grants](docs/SKILLS.md)
-- [Sandboxed stdio and Streamable HTTP upstream setup](docs/UPSTREAM-MCP.md)
-- [Connect ChatGPT over authenticated Tailscale Funnel](docs/CHATGPT.md)
-- [Implementation checkpoints and verification status](STATUS.md)
-
-The Linux candidate also includes the authenticated `veyl-monitor`,
-bounded workspace search, read-only Git inspection, optional systemd
-lifecycle and private Tailscale Serve configuration. See the
-[Linux installation and rollback guide](docs/LINUX.md), the
-[BridgeDev comparison](docs/PARITY.md) and [release evidence](STATUS.md).
+Veyl's daemon, CLI and monitor are native Rust; dashboard assets are
+embedded. The gateway stays on loopback, and only explicitly configured
+MCP ingress is made public. The dashboard remains local or private
+tailnet-only.

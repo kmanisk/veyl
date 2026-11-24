@@ -496,6 +496,34 @@ class LinuxFeatures(unittest.TestCase):
             self.assertEqual(peer.configuration["Web"][authority]["Handlers"]["/veyl-other"], {"Text":"another app"})
             self.assertNotEqual(command("funnel-retire-dedicated", "--confirm").returncode, 0)
 
+    def test_standalone_funnel_first_run_and_rollback(self):
+        _, env = self.prepare_public_client(shared=True)
+        self.f.doc["tailscale_serve"]["standalone_funnel"] = True
+        self.f.doc["admin_listen"] = "127.0.0.1:7332"
+        self.f.write_config()
+        authority = TAIL["hostname"] + ":443"
+        with self.tail_peer() as (socket, peer):
+            def command(action, *args):
+                return self.cli("serve", action, "--socket", socket, *args, env=env)
+            # A fresh Veyl installation must not rely on a BridgeDev proxy.
+            peer.configuration = {}
+            result = command("apply", "--confirm")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            private = copy.deepcopy(peer.configuration)
+            result = command("funnel-apply", "--confirm")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(peer.configuration["AllowFunnel"], {authority: True})
+            self.assertEqual(peer.configuration["Web"][authority]["Handlers"]["/veyl/"], {"Proxy": "http://127.0.0.1:7331"})
+            self.assertEqual(json.loads(command("inspect").stdout)["mcp"], "https://node.demo.ts.net/veyl/mcp")
+            posts = peer.posts
+            self.assertEqual(command("funnel-apply", "--confirm").returncode, 0)
+            self.assertEqual(peer.posts, posts)
+            result = command("funnel-rollback", "--confirm")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(peer.configuration, private)
+            self.assertEqual(command("rollback", "--confirm").returncode, 0)
+            self.assertFalse(peer.configuration.get("Web"))
+
     def test_shared_funnel_host_requires_marker_public_proof_and_origin(self):
         token, _ = self.prepare_public_client(shared=True)
         self.start()

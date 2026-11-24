@@ -1,5 +1,106 @@
 # Gate 3d status
 
+## 2026-11-24 — v0.2.1-alpha production upgrade
+
+Independently verified the packaged candidate against AGY's recorded
+checksums, all 28 historical pins and the current six-case mode suite.
+The candidate passed 15 Linux probes, five product probes, the disposable
+Nightshift demo and the Brave automatic-pairing probe. The live source
+also passed Rust tests and Clippy; formatting was normalized and the
+release binary hashes remained identical. The historical full 287-case
+battery was not rerun during this upgrade.
+
+Installed both reviewed binaries and restarted only mcp-gateway.service.
+BridgeDev remains active, and existing policy, credentials and Tailscale
+routes were retained. Production service, local dashboard endpoint,
+automatic monitor pairing, audit verification and actual ChatGPT
+system_info/service_status calls passed. Live state layout is valid.
+Upgrade receipt: mwusrhl8-yeiqux, exit 0.
+Prior binaries: `~/.local/share/veyl-rollback-v0.2.0-alpha.LFwxqA/`.
+The current ChatGPT conversation still advertises 16 tools; refresh
+client discovery to use the expanded catalog. Next: structured Linux
+diagnostics, remaining parity and a real multi-hour model-driven
+Nightshift trial. Do not retire BridgeDev yet.
+
+## 2026-11-24 — v0.2.1-alpha Release Candidate & Onboarding Verification Complete
+
+Base: published v0.2.0-alpha, commit 364e954701a950dbaced6dec3dc1678388016c5c on `milestone3/broad-yolo`.
+Candidate Version: `v0.2.1-alpha`.
+
+### Release Checksums and Artifacts
+Built with Rust 2024 (`cargo build --release --bin mcp-gateway --bin veyl-monitor`):
+- `target/release/mcp-gateway` (`veyl-linux-x86_64.bin`): `500680a212b35d72dd9d15f6036e9994a9e25b0cc27cd49bea452adb927e7fc5` (6.2 MB)
+- `target/release/veyl-monitor` (`veyl-monitor-linux-x86_64.bin`): `7b9e7e33f0cd442853e67d55e2e7293f84857dfdd89288f7605329c0a61a734f` (1.4 MB)
+- `dist/v0.2.1-alpha/veyl-linux-x86_64.tar.gz`: `2f9c579dbfe4407c9046d2ec4b644ee80be534ac934ab17b2f01bd9419e9da59` (3.0 MB)
+
+### Independent Verification Receipts
+1. **Rust Tests:** 52/52 passed cleanly across unit and integration targets:
+   - `src/main.rs`: 30/30 passed.
+   - `tests/bridgedev_parity_and_nightshift.rs`: 3/3 passed (inspection, mutation, nightshift primitives).
+   - `tests/gate3_operator.rs`: 11/11 passed (mode CLI, legacy migration, audit anchors, activation).
+   - `tests/onboarding.rs`: 4/4 passed (fresh setup, duplicate refusal, mode transitions, connector tampering).
+   - `tests/pass2_mutation.rs`: 4/4 passed (file mutations, atomic overwrites, limits).
+2. **Clippy:** `cargo clippy --all-targets -- -D warnings` passed with 0 warnings.
+3. **Locked External Acceptance:**
+   - All 28 external acceptance files match their pinned SHA-256 digests.
+   - `acceptance_pass4_three_modes/locked_three_modes.py`: 6/6 PASS in 1.38s.
+4. **Product & Linux Probes:**
+   - `PYTHONPATH=tests python3 -m unittest tests/product_features.py`: 5/5 PASS in 2.81s.
+   - `PYTHONPATH=tests python3 -m unittest tests/linux_features.py`: 15/15 PASS in 4.77s.
+   - `tests/gate3_runtime.py`: 3/3 modes PASS (FULL supervised UID 1000, Standard TCP denied, Legacy TCP denied).
+   - `tests/systemd_lifecycle.sh`: 7/7 user manager lifecycle steps PASS in 5.13s.
+5. **Browser Pairing Timeout Investigation:**
+   - Root cause identified: disposable `--user-data-dir` launches in headless Brave block virtual time waiting for CRX3 extension updates and D-Bus portal SecretService calls.
+   - Resolution: `--incognito` bypasses network updates while maintaining isolated cookies and storage.
+   - Result: `tests/onboarding_browser.py` completes in ~1.5s with `FIRST_RUN_BROWSER_PAIRING_PASS`.
+6. **Leaked Descriptor Isolation:**
+   - Bubblewrap Broad YOLO preflight (`check_inherited_fds`) rejects non-CLOEXEC file descriptors from parent environments. Added `pre_exec` syscall `sys_close_range(3, 1024, 0)` in test runners to guarantee descriptor cleanliness.
+7. **Nightshift Demo Project:**
+   - Implemented in `examples/nightshift_demo/demo.py` and `examples/nightshift_demo/README.md`.
+   - Verified end-to-end execution: `system_info` and `service_status` diagnostics, `task_run` with `ephemeral_worktree: true` creating automatic branch checkpoint and cleaning up worktree, `task_run` with `request_id` returning `idempotent_replay: true`, `start_job` and `job_logs` streaming, and `cancel_job` cleanly terminating the child process tree.
+
+### Upgrade and Rollback Protocol
+- **To Upgrade (when authorized):**
+  1. Stop service: `systemctl --user stop mcp-gateway.service`
+  2. Backup binary: `cp ~/.local/bin/mcp-gateway ~/.local/bin/mcp-gateway.v0.2.0-alpha.bak`
+  3. Install release: `install -Dm755 target/release/mcp-gateway ~/.local/bin/mcp-gateway` and `install -Dm755 target/release/veyl-monitor ~/.local/bin/veyl-monitor`
+  4. Restart service: `systemctl --user restart mcp-gateway.service`
+  5. Check status: `veyl service status`
+- **To Rollback:**
+  1. `cp ~/.local/bin/mcp-gateway.v0.2.0-alpha.bak ~/.local/bin/mcp-gateway`
+  2. `systemctl --user restart mcp-gateway.service`
+  3. State directory `~/.local/state/veyl/clients.json` retains backward-compatible version-3 policy.
+
+Note: Installed production binary (`~/.local/bin/mcp-gateway`) and GitHub remote remain UNMODIFIED.
+
+Base: published v0.2.0-alpha, commit 364e954701a950dbaced6dec3dc1678388016c5c.
+Installed binaries matched release checksums. Independently reran the six
+three-mode locked cases and three parity/Nightshift integration cases.
+All passed. ChatGPT's existing connector still advertised the old 16-tool schema.
+
+The working tree now implements native `init`, `setup`, `connect`, automatic
+browser and monitor pairing, default config lookup, `service on`, `run`,
+and `portable`. Fresh public setup discovers the signed-in Tailscale node,
+creates separate credentials, selects explicitly requested YOLO, and
+provisions its own collision-checked 443 Funnel route. Existing shared
+routes are retained. The README describes both local and remote first-run flows.
+
+A pre-existing v0.2.0-alpha regression treated private Tailscale user
+headers as public Funnel requests. Restored strict Funnel marker
+classification. The rebuilt candidate passed all 15 Linux integration
+probes and all 5 product probes (process mwuqnr3a-dbz93p, exit 0).
+The onboarding candidate previously passed 49 Rust tests and Clippy;
+the final marker-only correction still requires a confirmed full Rust
+regression receipt. Browser pairing CLI and private verifier generation
+were exercised; the original headless browser probe timed out. Real
+first-run public provisioning and service/foreground transitions still
+need end-to-end independent acceptance. No locked suite was changed.
+
+Do not promote or replace the installed release until the independent
+acceptance and live ingress checks are complete. No host service, route,
+or existing credential was changed by this checkpoint.
+
+
 Base: `ca1167356d512a3fd62d30b1f782cc68752a07d6` on `milestone3/broad-yolo`.
 The 28 pins matched. Session 50143 ran the correct hook build for audit
 (13/13). Required baseline was 218/229 in the trusted namespace.

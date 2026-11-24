@@ -338,8 +338,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
 }
 
 async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> Reply {
-    let marker = request.headers().contains_key("Tailscale-Funnel-Request")
-        || request.headers().contains_key("Tailscale-User-Login");
+    let marker = request.headers().contains_key("Tailscale-Funnel-Request");
     let raw_path = request.uri().path();
     let path = raw_path.strip_prefix("/veyl").unwrap_or(raw_path);
     if path != "/mcp" && !(marker && path.starts_with("/mcp/")) {

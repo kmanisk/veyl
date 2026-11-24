@@ -23,7 +23,7 @@ use crate::tools::registry::Tool;
 const COOKIE: &str = "mcp_dash_session";
 const PAIR_TTL: u64 = 300;
 const SESSION_TTL: Duration = Duration::from_secs(8 * 60 * 60);
-const HELP: &str = "usage: mcp-gateway dashboard <pair|servers> --config PATH";
+const HELP: &str = "usage: veyl dashboard open [--remote] [--config PATH] | veyl dashboard <pair|servers> [--config PATH]";
 const INDEX: &str = include_str!("dashboard/index.html");
 const STYLE: &str = include_str!("dashboard/style.css");
 const SCRIPT: &str = include_str!("dashboard/app.js");
@@ -74,6 +74,59 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         println!("{HELP}");
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "open") {
+        let mut remote = false;
+        let mut config = None;
+        let mut options = args[1..].iter();
+        while let Some(option) = options.next() {
+            match option.to_str() {
+                Some("--remote") if !remote => remote = true,
+                Some("--config") if config.is_none() => config = options.next(),
+                _ => return Err(HELP.into()),
+            }
+        }
+        let path = Path::new(config.ok_or(HELP)?);
+        if rustix::process::geteuid().is_root() {
+            return Err("Dashboard pairing requires the unprivileged gateway owner".into());
+        }
+        let (token, address) = {
+            let policy = PolicyFile::lock(path, true)?;
+            let settings = policy.snapshot()?;
+            verify_approvals(&settings)?;
+            let listen = settings
+                .admin_listen
+                .ok_or("Configure admin_listen before pairing")?;
+            if listen.port() == 0 {
+                return Err("Automatic opening requires a fixed admin port".into());
+            }
+            let address = if remote {
+                format!(
+                    "https://{}",
+                    settings
+                        .tailnet
+                        .as_ref()
+                        .ok_or("Private Tailscale dashboard is not configured")?
+                        .authority(true)
+                )
+            } else {
+                format!("http://{listen}")
+            };
+            let token = issue_pairing(&policy)?;
+            (token, address)
+        };
+        // A fragment is never sent in the HTTP request. The dashboard removes
+        // it before redeeming the single-use code through its normal POST.
+        let url = format!("{address}/dashboard/login#pair={token}");
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|_| "Cannot open the default browser; use veyl dashboard pair")?;
+        println!("Opening {address}/dashboard");
+        return Ok(());
+    }
     let [operation, key, path] = args else {
         return Err(HELP.into());
     };
@@ -93,16 +146,21 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         return Err("Configure admin_listen before pairing".into());
     }
     verify_approvals(&settings)?;
-    let token = new_session_id().map_err(|_| "Secure randomness unavailable")?;
-    let expiry = unix_seconds() + PAIR_TTL;
-    policy
-        .write_pairing(format!("{expiry} {}", digest(&token)).as_bytes())
-        .map_err(|_| "Cannot persist the pairing verifier")?;
+    let token = issue_pairing(&policy)?;
     println!("PAIRING_TOKEN={token}");
     eprintln!(
         "Open /dashboard at ADMIN_HTTP_LISTEN and enter this one-time code within five minutes."
     );
     Ok(())
+}
+
+pub(crate) fn issue_pairing(policy: &PolicyFile) -> Result<String, String> {
+    let token = new_session_id().map_err(|_| "Secure randomness unavailable")?;
+    let expiry = unix_seconds() + PAIR_TTL;
+    policy
+        .write_pairing(format!("{expiry} {}", digest(&token)).as_bytes())
+        .map_err(|_| "Cannot persist the pairing verifier")?;
+    Ok(token)
 }
 
 fn digest(value: &str) -> String {

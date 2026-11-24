@@ -35,6 +35,8 @@ pub(crate) struct Settings {
     pub funnel: Option<crate::http::funnel::Settings>,
     #[serde(default)]
     pub shared_funnel: bool,
+    #[serde(default)]
+    pub standalone_funnel: bool,
 }
 
 impl Settings {
@@ -67,6 +69,11 @@ impl Settings {
         }
         if parsed.shared_funnel && parsed.funnel.is_none() {
             return Err("Shared Funnel requires a configured public MCP credential".into());
+        }
+        if parsed.standalone_funnel && !parsed.shared_funnel {
+            return Err(
+                "Standalone port 443 requires shared_funnel and its public MCP credential".into(),
+            );
         }
         Ok(parsed)
     }
@@ -273,6 +280,91 @@ fn shared_marker(routes: &Routes) -> Value {
     json!({"Text":format!("Veyl route {}", routes.id)})
 }
 
+fn standalone_root(routes: &Routes) -> Value {
+    json!({"Text":format!("Veyl MCP gateway {}", routes.id)})
+}
+
+/// Only provision a fresh 443 listener when no other handler, TCP route,
+/// Funnel flag, or foreground Serve session occupies the port.
+fn free_443(state: &Value) -> Result<bool, String> {
+    let port = |key: &str| {
+        key.rsplit_once(':')
+            .is_some_and(|(_, value)| value == "443")
+    };
+    if entries(state, "TCP")?.any(|(key, _)| key == "443")
+        || entries(state, "Web")?.any(|(key, _)| port(key))
+        || entries(state, "AllowFunnel")?.any(|(key, _)| port(key))
+    {
+        return Ok(false);
+    }
+    for (_, foreground) in entries(state, "Foreground")? {
+        if entries(foreground, "TCP")?.any(|(key, _)| key == "443")
+            || entries(foreground, "Web")?.any(|(key, _)| port(key))
+            || entries(foreground, "AllowFunnel")?.any(|(key, _)| port(key))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn standalone_transition(state: &Value, routes: &Routes, enable: bool) -> Result<Value, String> {
+    let authority = shared_authority(routes);
+    if free_443(state)? {
+        if !enable {
+            return Ok(state.clone());
+        }
+        let mut next = state.clone();
+        next["TCP"]["443"] = json!({"HTTPS":true});
+        next["Web"][&authority] = json!({"Handlers":{
+            "/":standalone_root(routes),
+            "/veyl/":shared_backend(routes),
+            "/veyl/.well-known/veyl-serve":shared_marker(routes)
+        }});
+        next["AllowFunnel"][&authority] = true.into();
+        return Ok(next);
+    }
+    // Standalone setup never adopts another service's root, even if the
+    // shared path is vacant. That remains a separate, explicit shared mode.
+    if state["Web"][&authority]["Handlers"]["/"] != standalone_root(routes) {
+        return Err("Port 443 is already owned by another service".into());
+    }
+    let competing =
+        |key: &str| key != authority && key.rsplit_once(':').is_some_and(|(_, port)| port == "443");
+    if entries(state, "Web")?.any(|(key, _)| competing(key))
+        || entries(state, "AllowFunnel")?.any(|(key, _)| competing(key))
+    {
+        return Err("Another authority occupies port 443".into());
+    }
+    let status = shared_state(state, routes)?;
+    if !matches!(status, SharedState::Enabled | SharedState::Disabled) {
+        return Err("Standalone Funnel ownership marker is missing".into());
+    }
+    if enable {
+        return shared_transition(state, routes, true, false);
+    }
+    if state["Web"][&authority]["Handlers"]
+        .as_object()
+        .is_some_and(|map| map.len() != 3)
+    {
+        // Do not remove somebody else's later additions.
+        return shared_transition(state, routes, false, false);
+    }
+    let mut next = state.clone();
+    next["TCP"].as_object_mut().unwrap().remove("443");
+    next["Web"].as_object_mut().unwrap().remove(&authority);
+    next["AllowFunnel"]
+        .as_object_mut()
+        .unwrap()
+        .remove(&authority);
+    for field in ["TCP", "Web", "AllowFunnel"] {
+        if next[field].as_object().is_some_and(|map| map.is_empty()) {
+            next.as_object_mut().unwrap().remove(field);
+        }
+    }
+    Ok(next)
+}
+
 fn shared_state(state: &Value, routes: &Routes) -> Result<SharedState, String> {
     let authority = shared_authority(routes);
     let handlers = state["Web"][&authority]["Handlers"]
@@ -282,7 +374,7 @@ fn shared_state(state: &Value, routes: &Routes) -> Result<SharedState, String> {
         || state["AllowFunnel"][&authority] != true
         || !handlers
             .get("/")
-            .is_some_and(|root| root["Proxy"].is_string())
+            .is_some_and(|root| root["Proxy"].is_string() || *root == standalone_root(routes))
     {
         return Err("Shared Funnel requires an existing public HTTPS root proxy on 443".into());
     }
@@ -371,6 +463,30 @@ fn node_allows_funnel(status: &Value, port: u16) -> bool {
                     .is_some_and(|(first, last)| (first..=last).contains(&port)),
                 None => entry.parse::<u16>() == Ok(port),
             })
+}
+
+/// Discover the node after the operator has logged into Tailscale once.
+/// Never expose account details, login URLs or peer inventory.
+pub(crate) fn discover_hostname() -> Result<String, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "Cannot initialize LocalAPI client")?;
+    let (status, _) = runtime.block_on(local_request(
+        Path::new(SOCKET),
+        Method::GET,
+        "/localapi/v0/status?peers=false",
+        None,
+        vec![],
+    ))?;
+    if status["BackendState"] != "Running" {
+        return Err("Log in to Tailscale once, then rerun Veyl setup".into());
+    }
+    status["Self"]["DNSName"]
+        .as_str()
+        .map(|name| name.trim_end_matches('.').to_owned())
+        .filter(|name| !name.is_empty())
+        .ok_or("Enable Tailscale MagicDNS first".into())
 }
 
 async fn local_request(
@@ -524,6 +640,13 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         .tailnet
         .as_ref()
         .is_some_and(|serve| serve.shared_funnel);
+    let standalone = settings
+        .tailnet
+        .as_ref()
+        .is_some_and(|serve| serve.standalone_funnel);
+    if standalone && adapter {
+        return Err("Standalone Funnel cannot adopt an adapter".into());
+    }
     if !shared && (adapter || retire_dedicated) {
         return Err("This command requires tailscale_serve.shared_funnel".into());
     }
@@ -540,6 +663,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             .iter()
             .find(|client| {
                 public.is_some_and(|public| client.id == public.client)
+                    && !client.disabled
                     && client.mode == mcp_gateway::security::policy::ExecutionMode::BroadYolo
                     && now < client.expires_at
             })
@@ -665,7 +789,11 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             if !disable_funnel && (!owned[0] || !owned[1]) {
                 return Err("Shared Funnel needs the owned private Serve route pair".into());
             }
-            shared_transition(&state, &routes, !disable_funnel, adapter)?
+            if standalone {
+                standalone_transition(&state, &routes, !disable_funnel)?
+            } else {
+                shared_transition(&state, &routes, !disable_funnel, adapter)?
+            }
         } else {
             funnel_transition(&state, &routes, !disable_funnel)?
         }
@@ -843,6 +971,55 @@ pub(crate) fn health(config: &Path, settings: Option<&Settings>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standalone_funnel_creates_only_free_443_and_rolls_back_its_own_route() {
+        let routes = Routes::of(
+            &Settings::parse(&json!({
+                "hostname":"node.demo.ts.net","mcp_https_port":8443,"admin_https_port":9443
+            }))
+            .unwrap(),
+            "127.0.0.1:7331".parse().unwrap(),
+            "127.0.0.1:7332".parse().unwrap(),
+            "owner-proof".into(),
+        );
+        let initial = json!({"TCP":{"10000":{"HTTPS":true}},"Web":{"other.demo.ts.net:10000":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8000"}}}}});
+        let active = standalone_transition(&initial, &routes, true).unwrap();
+        assert_eq!(
+            active["Web"]["node.demo.ts.net:443"]["Handlers"]["/veyl/"],
+            shared_backend(&routes)
+        );
+        assert_eq!(active["AllowFunnel"]["node.demo.ts.net:443"], true);
+        assert_eq!(
+            standalone_transition(&active, &routes, true).unwrap(),
+            active
+        );
+        assert_eq!(
+            standalone_transition(&active, &routes, false).unwrap(),
+            initial
+        );
+        let mut addition = active.clone();
+        addition["Web"]["node.demo.ts.net:443"]["Handlers"]["/other/"] =
+            json!({"Text":"other owner"});
+        let disabled = standalone_transition(&addition, &routes, false).unwrap();
+        assert_eq!(
+            disabled["Web"]["node.demo.ts.net:443"]["Handlers"]["/other/"],
+            json!({"Text":"other owner"})
+        );
+        assert_eq!(
+            disabled["Web"]["node.demo.ts.net:443"]["Handlers"]["/veyl/"],
+            json!({"Text":SHARED_DISABLED})
+        );
+        for collision in [
+            json!({"TCP":{"443":{"HTTPS":true}}}),
+            json!({"Web":{"other.demo.ts.net:443":{"Handlers":{}}}}),
+            json!({"Foreground":{"session":{"TCP":{"443":{"HTTPS":true}}}}}),
+            json!({"AllowFunnel":{"other.demo.ts.net:443":true}}),
+            json!({"TCP":{"443":{"HTTPS":true}},"Web":{"node.demo.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}},"AllowFunnel":{"node.demo.ts.net:443":true}}),
+        ] {
+            assert!(standalone_transition(&collision, &routes, true).is_err());
+        }
+    }
 
     #[test]
     fn collision_check_and_rollback_preserve_other_ingress() {

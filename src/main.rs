@@ -11,6 +11,8 @@ mod jobs;
 #[cfg(target_os = "linux")]
 mod linux_command;
 #[cfg(target_os = "linux")]
+mod local_cli;
+#[cfg(target_os = "linux")]
 mod mode_cli;
 #[cfg(target_os = "linux")]
 mod protected_cli;
@@ -62,6 +64,8 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    #[cfg(target_os = "linux")]
+    let args = local_cli::normalize(args)?;
     if args.len() == 1 {
         if args[0] == "--version" {
             println!("mcp-gateway {}", env!("CARGO_PKG_VERSION"));
@@ -71,7 +75,7 @@ fn run() -> Result<(), String> {
             println!(
                 "mcp-gateway --root DIR | http --listen 127.0.0.1:PORT --config PATH
 \
-                      mcp-gateway mode --help | monitor --help | yolo --help | audit --help | service --help | protected-paths --help | state --help | serve --help | skills --help | dashboard --help | mcp-servers --help"
+                      veyl init --root DIR | veyl ui | veyl run | veyl portable | veyl service on | veyl mode --help | monitor --help | yolo --help | audit --help | service --help | protected-paths --help | state --help | serve --help | skills --help | dashboard --help | mcp-servers --help"
             );
             return Ok(());
         }
@@ -79,6 +83,22 @@ fn run() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "service") {
         return service_cli::run(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "init") {
+        return local_cli::init(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "setup") {
+        return local_cli::setup(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "connect") {
+        return local_cli::connect(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "portable") {
+        return service_cli::portable(&args[1..]);
     }
     #[cfg(target_os = "linux")]
     if args.len() == 1 && args[0] == "--job-runner" {
@@ -131,14 +151,12 @@ fn run() -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "monitor") {
-        use std::os::unix::process::CommandExt;
         let exe = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.join("veyl-monitor")))
             .filter(|p| p.is_file())
             .unwrap_or_else(|| std::path::PathBuf::from("veyl-monitor"));
-        let err = std::process::Command::new(exe).args(&args[1..]).exec();
-        return Err(format!("Cannot launch monitor: {err}"));
+        return local_cli::monitor(&exe, &args[1..]);
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "dashboard") {

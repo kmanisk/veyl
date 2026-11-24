@@ -1,5 +1,35 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current production checkpoint (2026-11-24)
+
+v0.2.1-alpha is installed and verified via the existing ChatGPT
+connection. See the latest STATUS.md entry for evidence and rollback.
+Next implement bounded native structured Linux diagnostics and
+project context using the current BridgeDev parity matrix; independently
+verify schema, scope, resource limits, and failures before granting new
+tools to production clients. Nightshift primitives have passed the
+disposable demonstration, but unattended multi-hour model execution
+still needs verification. Keep BridgeDev available.
+
+## Release Candidate v0.2.1-alpha Verification Complete (2026-11-24)
+
+Base commit: `364e954701a950dbaced6dec3dc1678388016c5c` (v0.2.0-alpha).
+All independent verification, onboarding hardening, and BridgeDev Nightshift parity objectives are complete.
+
+- **Rust Suite:** 52/52 tests passing (`cargo test` clean).
+- **Clippy:** Passed with zero warnings (`cargo clippy --all-targets -- -D warnings`).
+- **Locked Suites:** All 28 external pins match; `locked_three_modes.py` passed 6/6.
+- **Integration Probes:** 15/15 Linux probes passed; 5/5 product probes passed; `tests/systemd_lifecycle.sh` passed 7/7.
+- **Browser Pairing:** Resolved disposable profile stall via `--incognito`; `tests/onboarding_browser.py` passed (`FIRST_RUN_BROWSER_PAIRING_PASS`).
+- **Descriptor Cleanliness:** Sealed leaked file descriptors in sandbox preflights using `sys_close_range(3, 1024, 0)`.
+- **Nightshift Demo:** Validated in `examples/nightshift_demo/demo.py` covering system diagnostics, ephemeral Git worktrees, request idempotency, durable job streaming, and clean process tree cancellation.
+- **Release Artifacts:** Packaged in `dist/v0.2.1-alpha/` with verified SHA-256 sums:
+  - `veyl-linux-x86_64.bin`: `500680a212b35d72dd9d15f6036e9994a9e25b0cc27cd49bea452adb927e7fc5`
+  - `veyl-monitor-linux-x86_64.bin`: `7b9e7e33f0cd442853e67d55e2e7293f84857dfdd89288f7605329c0a61a734f`
+  - `veyl-linux-x86_64.tar.gz`: `2f9c579dbfe4407c9046d2ec4b644ee80be534ac934ab17b2f01bd9419e9da59`
+- **Safety Invariant:** Production binaries and GitHub remote remain unchanged pending explicit user authorization.
+
+
 This is a separate greenfield product, **not** the harness project and not
 production BridgeDev. See `AGENTS.md` and `SPEC.md` for constraints.
 

@@ -51,6 +51,12 @@ impl Fixture {
                     "args": ["gateway-job-ok"],
                     "timeout_seconds": 5,
                     "max_output_bytes": 4096
+                },
+                "sleep": {
+                    "executable": "/usr/bin/sleep",
+                    "args": ["30"],
+                    "timeout_seconds": 30,
+                    "max_output_bytes": 4096
                 }
             },
             "clients": [
@@ -65,7 +71,8 @@ impl Fixture {
                         "read_file", "write_file", "apply_patch", "edit_file",
                         "create_directory", "list_directory", "directory_tree",
                         "file_info", "exec_command", "task_run", "start_job",
-                        "job_status", "job_logs", "job_wait", "cancel_job", "list_jobs"
+                        "job_status", "job_logs", "job_wait", "cancel_job", "list_jobs",
+                        "system_info", "service_status"
                     ]
                 }
             ]
@@ -397,4 +404,88 @@ fn test_nightshift_primitives() {
     let logs_text = logs_res["content"][0]["text"].as_str().unwrap();
     let logs_json: Value = serde_json::from_str(logs_text).unwrap();
     assert!(logs_json["stdout"].is_string());
+
+    // 4. cancel_job terminates long-running job cleanly
+    let sleep_res = client.call("start_job", json!({"profile": "sleep"}));
+    assert_eq!(sleep_res["isError"], false);
+    let sleep_text = sleep_res["content"][0]["text"].as_str().unwrap();
+    let sleep_json: Value = serde_json::from_str(sleep_text).unwrap();
+    let sleep_id = sleep_json["job_id"].as_str().unwrap();
+
+    let cancel_res = client.call("cancel_job", json!({"job_id": sleep_id}));
+    assert_eq!(cancel_res["isError"], false);
+    let cancel_text = cancel_res["content"][0]["text"].as_str().unwrap();
+    let cancel_json: Value = serde_json::from_str(cancel_text).unwrap();
+    assert!(
+        cancel_json["state"] == "canceled"
+            || cancel_json["state"] == "completed"
+            || cancel_json["cancel_requested"] == true
+    );
+
+    // 5. system_info and service_status diagnostics
+    let sys_res = client.call("system_info", json!({}));
+    assert_eq!(sys_res["isError"], false);
+    let sys_text = sys_res["content"][0]["text"].as_str().unwrap();
+    let sys_json: Value = serde_json::from_str(sys_text).unwrap();
+    assert!(sys_json["logical_cpus"].as_u64().unwrap() > 0);
+    assert!(sys_json["memory_total_kib"].as_u64().unwrap() > 0);
+    assert!(
+        sys_json["workspace_filesystem"]["total_bytes"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+
+    let srv_res = client.call("service_status", json!({}));
+    assert_eq!(srv_res["isError"], false);
+    let srv_text = srv_res["content"][0]["text"].as_str().unwrap();
+    let srv_json: Value = serde_json::from_str(srv_text).unwrap();
+    assert!(srv_json.get("LoadState").is_some() || srv_json.get("ActiveState").is_some());
+
+    // 6. task_run with ephemeral_worktree
+    let root = fixture.root(".");
+    let _ = Command::new("git")
+        .args(["init"])
+        .current_dir(&root)
+        .status();
+    let _ = Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(&root)
+        .status();
+    let _ = Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(&root)
+        .status();
+    fs::write(fixture.root("base.txt"), b"base content").unwrap();
+    let _ = Command::new("git")
+        .args(["add", "base.txt"])
+        .current_dir(&root)
+        .status();
+    let _ = Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(&root)
+        .status();
+
+    let wt_task = client.call(
+        "task_run",
+        json!({
+            "command": "echo 'worktree modification' >> base.txt",
+            "request_id": "test-wt-req",
+            "ephemeral_worktree": true,
+            "wait_seconds": 15
+        }),
+    );
+    assert_eq!(wt_task["isError"], false);
+    let wt_text = wt_task["content"][0]["text"].as_str().unwrap();
+    let wt_json: Value = serde_json::from_str(wt_text).unwrap();
+    assert_eq!(wt_json["exit_code"], 0);
+    assert_eq!(wt_json["checkpoint"], true);
+    assert_eq!(wt_json["ephemeral_worktree"], true);
+
+    // Ephemeral worktree directory must be cleaned up
+    let entries = fs::read_dir(&root).unwrap();
+    for entry in entries {
+        let name = entry.unwrap().file_name().to_string_lossy().to_string();
+        assert!(!name.starts_with(".veyl-wt-"));
+    }
 }

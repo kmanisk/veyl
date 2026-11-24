@@ -19,7 +19,8 @@ use rustix::io::Errno;
 use crate::http::operator::{PolicyFile, verify_approvals};
 
 const UNIT: &str = "mcp-gateway.service";
-const HELP: &str = "usage: mcp-gateway service print-unit [--config PATH] [--listen IP:PORT]\n\
+const HELP: &str = "usage: veyl service on [--config PATH] [--listen IP:PORT]\n\
+                   mcp-gateway service print-unit [--config PATH] [--listen IP:PORT]\n\
                    mcp-gateway service install (--dry-run | --confirm) [--config PATH] [--listen IP:PORT]\n\
                    mcp-gateway service uninstall --confirm [--dry-run] [--config PATH] [--listen IP:PORT]\n\
                    mcp-gateway service <enable|disable|start|stop|restart> (--dry-run | --confirm) [--config PATH] [--listen IP:PORT]\n\
@@ -31,6 +32,23 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         return Ok(());
     }
     let action = args.first().and_then(|arg| arg.to_str()).ok_or(HELP)?;
+    if action == "on" {
+        // The verb is explicit operator consent. Use the same ownership,
+        // configuration validation and lifecycle checks as the individual steps.
+        let options = &args[1..];
+        if options
+            .iter()
+            .any(|arg| arg == "--confirm" || arg == "--dry-run")
+        {
+            return Err(HELP.into());
+        }
+        for step in ["install", "start", "enable"] {
+            let mut command = vec![OsString::from(step), "--confirm".into()];
+            command.extend_from_slice(options);
+            run(&command)?;
+        }
+        return Ok(());
+    }
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|path| valid_path(path))
@@ -166,6 +184,47 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Explicitly switch the matching installed unit to foreground operation.
+/// Never stop an unrelated or overridden service.
+pub(crate) fn portable(args: &[OsString]) -> Result<(), String> {
+    let (mut config, mut listen) = (None, None);
+    let mut options = args.iter();
+    while let Some(arg) = options.next() {
+        match arg.to_str() {
+            Some("--config") if config.is_none() => {
+                config = Some(PathBuf::from(options.next().ok_or(HELP)?))
+            }
+            Some("--listen") if listen.is_none() => {
+                listen = Some(
+                    options
+                        .next()
+                        .and_then(|v| v.to_str())
+                        .ok_or(HELP)?
+                        .parse::<SocketAddrV4>()
+                        .map_err(|_| "Invalid IPv4 listener")?,
+                )
+            }
+            _ => return Err(HELP.into()),
+        }
+    }
+    let config = config.ok_or("Missing configuration")?;
+    let listen = listen.ok_or("Missing listener")?;
+    let executable = env::current_exe().map_err(|_| "Gateway executable unavailable")?;
+    let expected = render(&executable, &config, listen)?;
+    verify_approvals(&PolicyFile::preview(&config)?)?;
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| valid_path(p))
+        .ok_or("HOME must be absolute")?;
+    let target = home.join(".config/systemd/user").join(UNIT);
+    if owned_unit(&target, expected.as_bytes(), false).map_err(|error| error.to_string())? {
+        lifecycle("stop", &target, expected.as_bytes())?;
+        lifecycle("disable", &target, expected.as_bytes())?;
+        println!("Veyl user service stopped and disabled. Use veyl service on to restore it.");
+    }
+    crate::http::run(args.to_vec())
 }
 
 fn render(executable: &Path, config: &Path, address: SocketAddrV4) -> Result<String, String> {

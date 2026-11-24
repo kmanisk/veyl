@@ -305,17 +305,22 @@ async function loadAudit() {
   ]));
 }
 
-byId("pair").addEventListener("submit", async event => {
-  event.preventDefault();
-  const code = byId("pairing-code");
+async function pairBrowser(token) {
   try {
-    const pairing = await request("pair", { pairing_token: code.value.trim() });
+    const pairing = await request("pair", { pairing_token: token });
     csrf = pairing.csrf;
     if (remote) sessionStorage.setItem(proofKey, csrf);
-    code.value = "";
+    byId("pairing-code").value = "";
     history.replaceState(null, "", "/dashboard");
     await refresh();
-  } catch (error) { notice.textContent = error.message; }
+  } catch (error) {
+    showPair();
+    notice.textContent = error.message;
+  }
+}
+byId("pair").addEventListener("submit", event => {
+  event.preventDefault();
+  pairBrowser(byId("pairing-code").value.trim());
 });
 byId("refresh").addEventListener("click", () => refresh().catch(error => notice.textContent = error.message));
 byId("job-client").addEventListener("change", () => loadJobs().catch(error => notice.textContent = error.message));
@@ -327,4 +332,11 @@ byId("logout").addEventListener("click", async () => {
     notice.textContent = "Signed out.";
   } catch (error) { notice.textContent = error.message; }
 });
-refresh().catch(error => notice.textContent = error.status === 401 ? "" : error.message);
+const automaticPair = location.hash.match(/^#pair=([a-f0-9]{48})$/);
+if (automaticPair) {
+  // Remove the fragment before any request or session navigation.
+  history.replaceState(null, "", "/dashboard/login");
+  pairBrowser(automaticPair[1]);
+} else {
+  refresh().catch(error => notice.textContent = error.status === 401 ? "" : error.message);
+}

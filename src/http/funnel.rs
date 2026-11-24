@@ -28,6 +28,12 @@ fn verifier<'de, D: serde::Deserializer<'de>>(input: D) -> Result<[u8; 32], D::E
 }
 
 impl Settings {
+    pub(crate) fn accepts_token(&self, token: &str) -> bool {
+        self.allow_secret_path
+            && super::admission::token_digest(token)
+                .is_some_and(|digest| bool::from(self.digest.ct_eq(&digest)))
+    }
+
     pub(crate) fn validate(&self, config: &Configuration) -> Result<(), String> {
         if config.audit_log.is_none()
             || !config.managed
@@ -48,8 +54,7 @@ impl Settings {
 
 pub(super) fn marked(headers: &HeaderMap) -> bool {
     let mut values = headers.get_all(MARKER).iter();
-    (values.next().is_some_and(|value| value == "?1") && values.next().is_none())
-        || headers.contains_key("Tailscale-User-Login")
+    values.next().is_some_and(|value| value == "?1") && values.next().is_none()
 }
 
 #[derive(Clone, Copy)]
