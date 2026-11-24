@@ -13,7 +13,7 @@ const VIEWS: [&str; 7] = [
     "health",
     "clients",
     "jobs",
-    "audit",
+    "activity",
     "skills",
     "upstreams",
     "integrations",
@@ -136,10 +136,11 @@ fn row(out: &mut String, text: &str, width: usize, color: &str) {
 // background. Selection adds weight without hiding the outcome color.
 fn phase_color(phase: &str) -> &'static str {
     match phase {
-        "success" => "\x1b[32m",
-        "failure" | "denied" => "\x1b[31m",
-        "running" => "\x1b[36m",
-        "uncertain" | "pending" => "\x1b[33m",
+        "success" | "SUCCESS" => "\x1b[32m",
+        "failure" | "denied" | "FAILED" => "\x1b[31m",
+        "running" | "RUNNING" => "\x1b[36m",
+        "uncertain" | "pending" | "canceled" | "CANCELED" => "\x1b[33m",
+        "timed_out" | "TIMED_OUT" => "\x1b[1;31m",
         _ => "",
     }
 }
@@ -199,13 +200,39 @@ fn table_rows(value: &Value, key: &str) -> Vec<Value> {
         value[key].as_array().cloned().unwrap_or_default()
     }
 }
-fn time_label(value: &Value) -> String {
-    let Some(seconds) = value.as_u64() else {
+fn local_time_label(value: &Value) -> String {
+    use jiff::tz::TimeZone;
+    static ZONE: std::sync::OnceLock<TimeZone> = std::sync::OnceLock::new();
+    time_in_zone(value, ZONE.get_or_init(TimeZone::system))
+}
+
+fn time_in_zone(value: &Value, zone: &jiff::tz::TimeZone) -> String {
+    value
+        .as_i64()
+        .and_then(|time| jiff::Timestamp::from_second(time).ok())
+        .map(|time| {
+            time.to_zoned(zone.clone())
+                .strftime("%I:%M:%S %p")
+                .to_string()
+        })
+        .unwrap_or_else(|| "-".into())
+}
+
+fn format_duration(ms: Option<u64>) -> String {
+    let Some(ms) = ms else {
         return "-".into();
     };
-    let day = seconds % 86400;
-    format!("{:02}:{:02}:{:02}", day / 3600, day / 60 % 60, day % 60)
+    if ms == 0 {
+        "<1ms".into()
+    } else if ms < 1000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        format!("{}.{:03}s", ms / 1000, ms % 1000)
+    } else {
+        format!("{}m{:02}.{:03}s", ms / 60_000, (ms / 1000) % 60, ms % 1000)
+    }
 }
+
 fn mouse_event(bytes: &[u8]) -> Option<(usize, usize, usize)> {
     let fields = bytes.strip_prefix(b"\x1b[<")?;
     let fields = fields
@@ -233,6 +260,10 @@ struct View {
     details: Option<Value>,
     detail_width: usize,
     trace_enabled: bool,
+    trace_rows: Value,
+    trace_until: Option<Instant>,
+    show_funnel: bool,
+    audit_ledger: bool,
     confirm: Option<String>,
     notice: String,
     cursor: String,
@@ -244,17 +275,75 @@ impl View {
             .to_ascii_lowercase()
             .contains(&self.filter.to_ascii_lowercase())
     }
-    fn audit_rows(&self) -> Vec<Value> {
+    fn activity_rows(&self) -> Vec<Value> {
         table_rows(&self.value, "events")
             .into_iter()
-            .rev()
-            .filter(|v| self.matches(v))
+            .filter(|value| self.matches(value))
             .collect()
+    }
+    fn trace_preview(&self, call: &Value) -> Option<String> {
+        if !self.trace_enabled || self.trace_until.is_none_or(|until| Instant::now() >= until) {
+            return None;
+        }
+        let id = call["call_id"].as_str()?;
+        let event = self
+            .trace_rows
+            .as_array()?
+            .iter()
+            .find(|v| v["call_id"] == id)?;
+        if let Some(path) = event["target_preview"].as_str() {
+            return Some(safe(path));
+        }
+        let args = &event["arguments"];
+        for key in ["command", "argv", "profile"] {
+            if !args[key].is_null() {
+                return Some(format!("{} {}", key, strval(&args[key])));
+            }
+        }
+        None
+    }
+
+    fn clear_trace_preview(&mut self) {
+        self.trace_rows = Value::Null;
+        self.trace_until = None;
+        if self
+            .details
+            .as_ref()
+            .is_some_and(|v| v.get("local_trace").is_some())
+        {
+            self.details = None;
+        }
+    }
+
+    fn refresh_interval(&self) -> Duration {
+        if (self.tab == 3 && !self.audit_ledger) || self.tab == 2 {
+            Duration::from_millis(500)
+        } else {
+            Duration::from_secs(2)
+        }
+    }
+
+    fn client_modes_summary(&self) -> String {
+        let clients = table_rows(&self.health, "clients");
+        if clients.is_empty() {
+            return "-".into();
+        }
+        clients
+            .iter()
+            .map(|c| {
+                format!(
+                    "{}: {}",
+                    strval(&c["id"]),
+                    strval(&c["mode"]).to_uppercase()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
     fn selected_record(&self) -> Option<Value> {
         match self.tab {
             2 => self.job_rows().get(self.selected).cloned(),
-            3 => self.audit_rows().get(self.selected).cloned(),
+            3 => self.activity_rows().get(self.selected).cloned(),
             1 => table_rows(&self.value, "clients")
                 .get(self.selected)
                 .cloned(),
@@ -267,11 +356,22 @@ impl View {
             _ => Some(self.value.clone()),
         }
     }
-    fn open_details(&mut self) {
+    fn open_details(&mut self, monitor: &Monitor) {
         if self.details.is_none()
             && self.logs.is_none()
-            && let Some(value) = self.selected_record()
+            && let Some(mut value) = self.selected_record()
         {
+            if self.tab == 3
+                && !self.audit_ledger
+                && self.trace_enabled
+                && let Some(id) = value["call_id"].as_str()
+                && let Ok((trace, _)) = monitor.request("trace", None)
+                && let Some(event) = table_rows(&trace, "events")
+                    .into_iter()
+                    .find(|event| event["call_id"] == id)
+            {
+                value["local_trace"] = event;
+            }
             self.details = Some(value);
             self.selected = 0;
         }
@@ -383,11 +483,16 @@ impl View {
                     let color = job_color(&state, &v["exit_code"], &v["signal"]);
                     (
                         format!(
-                            "{:<33} {:<11} {:<6} {:<10} {} {}",
+                            "{:<33} {:<11} {:<6} {:<12} {:<10} {} {}",
                             strval(&v["job_id"]),
                             state,
                             strval(&v["exit_code"]),
-                            time_label(&v["created_at"]),
+                            local_time_label(&v["created_at"]),
+                            format_duration(
+                                v["execution_duration_ms"]
+                                    .as_u64()
+                                    .or_else(|| v["live_elapsed_ms"].as_u64())
+                            ),
                             cell(&strval(&v["cwd"]), 26),
                             format_args!("{} {}", strval(&v["profile"]), strval(&v["executable"]))
                         ),
@@ -396,28 +501,41 @@ impl View {
                 })
                 .collect(),
             3 => self
-                .audit_rows()
+                .activity_rows()
                 .iter()
                 .map(|v| {
-                    let phase = strval(&v["phase"]);
+                    let phase = strval(if self.audit_ledger {
+                        &v["phase"]
+                    } else {
+                        &v["status"]
+                    });
+                    let status = match phase.as_str() {
+                        "success" => "SUCCESS",
+                        "running" => "RUNNING",
+                        "failure" | "denied" => "FAILED",
+                        "canceled" => "CANCELED",
+                        "timed_out" => "TIMED_OUT",
+                        other => other,
+                    };
+                    let duration = format_duration(v["duration_ms"].as_u64());
+                    let tool = strval(&v["tool"]);
+                    let summary = if self.audit_ledger {
+                        "Verified audit metadata".into()
+                    } else {
+                        self.trace_preview(v)
+                            .unwrap_or_else(|| strval(&v["target_summary"]))
+                    };
                     (
                         format!(
-                            "{} {} {} {} {}",
-                            cell(&time_label(&v["time"]), 13),
-                            cell(&strval(&v["tool"]), 23),
+                            "{} {} {} {} {} {}",
+                            cell(&local_time_label(&v["time"]), 13),
+                            cell(&tool, 22),
                             cell(&strval(&v["client"]), 14),
-                            cell(&phase, 11),
-                            if v["source"] == "live_trace" {
-                                format!(
-                                    "{} ms {}",
-                                    strval(&v["duration_ms"]),
-                                    strval(&v["arguments"])
-                                )
-                            } else {
-                                strval(&v["cwd"])
-                            }
+                            cell(status, 11),
+                            cell(&duration, 15),
+                            summary
                         ),
-                        phase_color(&phase),
+                        phase_color(status),
                     )
                 })
                 .collect(),
@@ -471,6 +589,15 @@ impl View {
         }
     }
     fn refresh(&mut self, monitor: &Monitor) {
+        let selected_call = (self.tab == 3 && !self.audit_ledger)
+            .then(|| {
+                self.activity_rows()
+                    .get(self.selected)?
+                    .get("call_id")?
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .flatten();
         let selected_job = if self.tab == 2 && self.logs.is_none() {
             self.job_rows()
                 .get(self.selected)
@@ -513,13 +640,28 @@ impl View {
                     )
                     .map(|(v, _)| v),
                 2 => Ok(Value::Null),
+                3 if self.audit_ledger => monitor.show("audit", None, None),
                 3 => {
-                    let mut value = monitor.show("audit", None, None)?;
-                    if let Ok((trace, _)) = monitor.request("trace", None) {
-                        self.trace_enabled = trace["enabled"] == true;
-                        if let Some(events) = value["events"].as_array_mut() {
-                            events.extend(table_rows(&trace, "events"));
-                            events.sort_by_key(|event| event["time"].as_u64().unwrap_or(0));
+                    let route = if self.show_funnel {
+                        "activity?funnel=1"
+                    } else {
+                        "activity"
+                    };
+                    let (value, _) = monitor.request(route, None)?;
+                    self.health["active_calls"] = value["active_calls"].clone();
+                    if self.trace_enabled {
+                        let requested = Instant::now();
+                        match monitor.request("trace", None) {
+                            Ok((trace, _)) if trace["enabled"] == true => {
+                                self.trace_rows = trace["events"].clone();
+                                self.trace_until = trace["remaining_ms"]
+                                    .as_u64()
+                                    .map(|ms| requested + Duration::from_millis(ms.min(600_000)));
+                            }
+                            _ => {
+                                self.trace_enabled = false;
+                                self.clear_trace_preview();
+                            }
                         }
                     }
                     Ok(value)
@@ -536,6 +678,14 @@ impl View {
         }
         if let Some(id) = selected_job
             && let Some(position) = self.job_rows().iter().position(|job| job["job_id"] == id)
+        {
+            self.selected = position;
+        }
+        if let Some(id) = selected_call
+            && let Some(position) = self
+                .activity_rows()
+                .iter()
+                .position(|row| row["call_id"] == id)
         {
             self.selected = position;
         }
@@ -572,14 +722,19 @@ impl View {
                 w,
                 "\x1b[1;36m",
             );
+            let active_calls = self.health["active_calls"]
+                .as_u64()
+                .map_or("-".to_owned(), |n| n.to_string());
+            let modes_summary = self.client_modes_summary();
             row(
                 &mut out,
                 &format!(
-                    "MCP: {} | Sessions: {} | RSS: {} KiB | Audit: {}",
+                    "Calls: {} active | Clients: {} | MCP: {} | Sessions: {} | RSS: {} KiB",
+                    active_calls,
+                    modes_summary,
                     strval(&self.health["listener"]),
                     strval(&self.health["sessions"]),
-                    strval(&self.health["rss_kib"]),
-                    strval(&self.health["audit"])
+                    strval(&self.health["rss_kib"])
                 ),
                 w,
                 "\x1b[2m",
@@ -608,6 +763,10 @@ impl View {
                         "details"
                     } else if self.logs.is_some() {
                         "logs"
+                    } else if self.tab == 3 && self.audit_ledger {
+                        "audit ledger"
+                    } else if self.tab == 3 && self.show_funnel {
+                        "activity + Funnel"
                     } else {
                         VIEWS[self.tab]
                     },
@@ -629,10 +788,10 @@ impl View {
                 match self.tab {
                     1 => "CLIENT             MODE             SESSIONS / GRANTS",
                     2 => {
-                        "JOB ID                            STATUS      EXIT   CREATED    DIRECTORY                  PROFILE"
+                        "JOB ID                            STATUS      EXIT   CREATED      JOB TIME   DIRECTORY       PROFILE"
                     }
                     3 => {
-                        "TIME (UTC)    OPERATION               CLIENT         PHASE       TARGET / DIRECTORY"
+                        "TIME          TOOL / EVENT            CLIENT         STATUS      ELAPSED         COMMAND / SUMMARY"
                     }
                     _ => LABELS[self.tab],
                 }
@@ -705,7 +864,11 @@ impl View {
             // Last line intentionally has no newline (avoids terminal scrolling).
             out.push_str("\x1b[2m");
             out.push_str(&cell(
-                "[n] Next page  [Esc] Back  [x] Cancel  [t] Trace  [r] Refresh  [q] Quit",
+                if self.tab == 3 {
+                    "[f] Funnel  [a] Audit ledger  [t] Trace  [r] Refresh  [q] Quit"
+                } else {
+                    "[n] Next page  [Esc] Back  [x] Cancel  [r] Refresh  [q] Quit"
+                },
                 w,
             ));
             out.push_str("\x1b[0m");
@@ -733,6 +896,10 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
         details: None,
         detail_width: 80,
         trace_enabled: false,
+        trace_rows: Value::Null,
+        trace_until: None,
+        show_funnel: false,
+        audit_ledger: false,
         confirm: None,
         notice: String::new(),
         cursor: String::new(),
@@ -742,10 +909,15 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
     let mut escape = Vec::new();
     loop {
         v.detail_width = screen.size().0.saturating_sub(4).max(1);
+        if v.trace_until.is_some_and(|until| Instant::now() >= until) {
+            v.trace_enabled = false;
+            v.clear_trace_preview();
+            redraw = true;
+        }
         if Instant::now() >= next && v.confirm.is_none() && !v.editing_filter && v.details.is_none()
         {
             v.refresh(monitor);
-            next = Instant::now() + Duration::from_secs(2);
+            next = Instant::now() + v.refresh_interval();
             redraw = true;
         }
         if redraw {
@@ -807,7 +979,7 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                                     let row = start + y - 7;
                                     if row < v.rows().len() {
                                         v.selected = row;
-                                        v.open_details();
+                                        v.open_details(monitor);
                                     }
                                 }
                             }
@@ -893,6 +1065,7 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                         ) {
                             Ok(_) => {
                                 v.trace_enabled = false;
+                                v.clear_trace_preview();
                                 next = Instant::now();
                             }
                             Err(e) => v.notice = e,
@@ -938,7 +1111,17 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                         next = Instant::now();
                     }
                 }
-                b'\r' | b'\n' if v.logs.is_none() => v.open_details(),
+                b'f' if v.tab == 3 && !v.audit_ledger && v.details.is_none() => {
+                    v.show_funnel = !v.show_funnel;
+                    v.selected = 0;
+                    next = Instant::now();
+                }
+                b'a' if v.tab == 3 && v.details.is_none() => {
+                    v.audit_ledger = !v.audit_ledger;
+                    v.selected = 0;
+                    next = Instant::now();
+                }
+                b'\r' | b'\n' if v.logs.is_none() => v.open_details(monitor),
                 b'l' if v.tab == 2 && v.logs.is_none() && v.details.is_none() => {
                     if let Some(id) = v
                         .job_rows()
@@ -981,7 +1164,7 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                 && v.details.is_none()
             {
                 v.refresh(monitor);
-                next = Instant::now() + Duration::from_secs(2);
+                next = Instant::now() + v.refresh_interval();
                 v.draw(&mut screen)?;
             }
         }
@@ -1046,10 +1229,38 @@ mod tests {
         assert!(rendered.contains("╰──────╯"));
     }
     #[test]
+    fn local_time_uses_historical_daylight_rules() {
+        let ny = jiff::tz::TimeZone::get("America/New_York").unwrap();
+        for (epoch, expected) in [
+            (1_705_320_000, "07:00:00 AM"),
+            (1_721_044_800, "08:00:00 AM"),
+            (1_730_611_800, "01:30:00 AM"),
+            (1_730_615_400, "01:30:00 AM"),
+        ] {
+            assert_eq!(time_in_zone(&serde_json::json!(epoch), &ny), expected);
+        }
+        assert_eq!(
+            time_in_zone(&serde_json::json!(43_200), &jiff::tz::TimeZone::UTC),
+            "12:00:00 PM"
+        );
+    }
+
+    #[test]
+    fn elapsed_preserves_millisecond_precision() {
+        assert_eq!(format_duration(None), "-");
+        assert_eq!(format_duration(Some(42)), "42ms");
+        assert_eq!(format_duration(Some(1234)), "1.234s");
+        assert_eq!(format_duration(Some(62345)), "1m02.345s");
+    }
+
+    #[test]
     fn mouse_and_timestamp_decoding() {
         assert_eq!(mouse_event(b"\x1b[<0;12;7M"), Some((0, 12, 7)));
         assert_eq!(mouse_event(b"\x1b[<0;0;7M"), None);
         assert_eq!(mouse_event(b"\x1b[<0;12;7;8M"), None);
-        assert_eq!(time_label(&serde_json::json!(3661)), "01:01:01");
+        assert_eq!(
+            time_in_zone(&serde_json::json!(3661), &jiff::tz::TimeZone::UTC),
+            "01:01:01 AM"
+        );
     }
 }

@@ -35,10 +35,11 @@ def main():
         config = home / ".local/state/veyl/clients.json"
         document = json.loads(config.read_text())
         admin_port = port()
+        mcp_port = port()
         document["admin_listen"] = f"127.0.0.1:{admin_port}"
         config.write_text(json.dumps(document))
         origin = f"http://127.0.0.1:{admin_port}"
-        gateway = subprocess.Popen([binary, "run", "--listen", "127.0.0.1:0"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        gateway = subprocess.Popen([binary, "run", "--listen", f"127.0.0.1:{mcp_port}"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             deadline = time.monotonic() + 8
             while time.monotonic() < deadline:
@@ -51,6 +52,26 @@ def main():
                     time.sleep(.1)
             else:
                 raise AssertionError("Disposable admin listener did not become ready")
+            bearer = (config.parent / "dev.bearer").read_text().strip()
+            def rpc(method, params=None, session=None):
+                headers = {"Authorization": "Bearer " + bearer, "Content-Type": "application/json"}
+                if session:
+                    headers["Mcp-Session-Id"] = session
+                data = {"jsonrpc": "2.0", "method": method}
+                if not method.startswith("notifications/"):
+                    data["id"] = 1
+                if params is not None:
+                    data["params"] = params
+                request = urllib.request.Request(f"http://127.0.0.1:{mcp_port}/mcp",
+                    data=json.dumps(data).encode(), headers=headers)
+                with urllib.request.urlopen(request, timeout=4) as response:
+                    return response.headers.get("Mcp-Session-Id")
+            session = rpc("initialize", {"protocolVersion":"2025-11-25","capabilities":{},
+                                     "clientInfo":{"name":"browser-fixture","version":"1"}})
+            assert session
+            rpc("notifications/initialized", session=session)
+            for arguments in ({}, {}, {"path":"BROWSER_SYNTHETIC_CREDENTIAL"}):
+                rpc("tools/call", {"name":"system_info","arguments":arguments}, session)
             # Capture only the local opener's single argument in private test
             # storage, never print it. The real browser redeems the fragment.
             opener = base / "bin"
@@ -72,21 +93,12 @@ def main():
             # The code is single-use and only the verifier is persisted.
             verifier = config.with_name(".clients.json.dashboard-pair").read_text()
             assert code not in verifier and hashlib.sha256(code.encode()).hexdigest() in verifier
-            try:
-                rendered = subprocess.run(
-                    [browser, "--headless", "--ozone-platform=headless",
-                     "--incognito",
-                     "--no-first-run", "--no-default-browser-check",
-                     "--disable-gpu", "--disable-background-networking", "--disable-sync",
-                     "--disable-extensions",
-                     "--dump-dom", "--virtual-time-budget=2000", url],
-                    capture_output=True, text=True, timeout=30,
-                )
-            except subprocess.TimeoutExpired:
-                raise AssertionError("Disposable browser probe timed out") from None
-            assert rendered.returncode == 0, "Headless browser failed"
-            assert '<div id="dashboard" class="dashboard">' in rendered.stdout, "Dashboard was not rendered as paired"
-            assert code not in rendered.stdout
+            tabs = subprocess.run(["node", str(Path(__file__).with_name("dashboard_tabs.mjs")), browser],
+                                  input=url, text=True, capture_output=True, timeout=35)
+            assert tabs.returncode == 0, "Real browser tab-navigation test failed: " + tabs.stderr[-1000:]
+            assert "DASHBOARD_TABS_AND_KEYBOARD_PASS" in tabs.stdout
+            print("FIRST_RUN_BROWSER_PAIRING_PASS")
+            print("DASHBOARD_TABS_AND_KEYBOARD_PASS")
             request = urllib.request.Request(origin + "/dashboard/api/pair",
                 data=json.dumps({"pairing_token": code}).encode(),
                 headers={"Origin": origin, "Content-Type": "application/json"})
@@ -96,15 +108,6 @@ def main():
                 assert error.code == 401
             else:
                 raise AssertionError("A consumed pairing code was replayable")
-            print("FIRST_RUN_BROWSER_PAIRING_PASS")
-            fresh = subprocess.run([binary, "dashboard", "pair"], env=env, check=True,
-                                   capture_output=True, text=True).stdout.strip().removeprefix("PAIRING_TOKEN=")
-            tabs_url = origin + "/dashboard/login#pair=" + fresh
-            tabs = subprocess.run(["node", str(Path(__file__).with_name("dashboard_tabs.mjs")), browser],
-                                  input=tabs_url, text=True, capture_output=True, timeout=35)
-            assert tabs.returncode == 0, "Real browser tab-navigation test failed: " + tabs.stderr[-1000:]
-            assert "DASHBOARD_TABS_AND_KEYBOARD_PASS" in tabs.stdout
-            print("DASHBOARD_TABS_AND_KEYBOARD_PASS")
         finally:
             gateway.terminate()
             try:

@@ -68,7 +68,13 @@ pub(super) struct Receipt {
     pub max_output_bytes: usize,
     pub state: State,
     pub created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_clock: Option<super::process::ElapsedClock>,
     pub launch_nonce: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_key: Option<String>,
     pub runner: Option<Identity>,
     pub child: Option<Identity>,
     pub cancel_requested: bool,
@@ -95,7 +101,7 @@ pub(super) struct Receipt {
 
 impl Receipt {
     pub fn status(&self) -> Value {
-        json!({
+        let mut status = json!({
             "job_id": self.job_id,
             "state": self.state,
             "exit_code": self.exit_code,
@@ -110,6 +116,15 @@ impl Receipt {
             "stderr_bytes": self.stderr_bytes,
             "output_truncated": self.stdout_truncated || self.stderr_truncated,
             "resource_ceilings": super::resources::status(self.resource_ceilings_enforced)
-        })
+        });
+        if let Some(duration) = self.execution_duration_ms {
+            status["execution_duration_ms"] = json!(duration);
+        } else if self.state == State::Running
+            && self.runner.as_ref().is_some_and(|r| r.presence() == super::process::Presence::Present)
+            && let Some(elapsed) = self.elapsed_clock.as_ref().and_then(|clock| clock.elapsed_ms())
+        {
+            status["live_elapsed_ms"] = json!(elapsed);
+        }
+        status
     }
 }

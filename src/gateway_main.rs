@@ -33,8 +33,6 @@ mod tools;
 mod transport;
 #[cfg(target_os = "linux")]
 mod upstream;
-#[cfg(target_os = "linux")]
-mod yolo_cli;
 
 use std::io;
 use std::path::PathBuf;
@@ -59,6 +57,7 @@ Daily use
   run                                            Run in the foreground
   portable                                       Switch to foreground operation
   mode                                           List client modes
+  mode get [CLIENT]                              Show a client mode and state
   mode standard|yolo|full [CLIENT]               Change a client mode
   mode enable|disable [CLIENT]                   Enable or disable a client
 
@@ -161,13 +160,17 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
         return jobs::run_worker().map_err(|_| "job runner unavailable".into());
     }
     #[cfg(target_os = "linux")]
+    if args.len() == 1 && args[0] == "--job-sandbox-probe" {
+        return jobs::probe_sandbox_worker().map_err(|_| "job sandbox unavailable".into());
+    }
+    #[cfg(target_os = "linux")]
     if args.len() == 2 && args[0] == "--job-scope-check" {
         return jobs::verify_scope(args[1].to_str().unwrap_or_default())
             .map_err(|_| "job resource ceilings unavailable".into());
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "yolo") {
-        return yolo_cli::run(&args[1..]);
+        return mode_cli::legacy(&args[1..]);
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "mode") {

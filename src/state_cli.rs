@@ -99,20 +99,33 @@ impl Layout {
             return Err("State verification requires the unprivileged gateway owner".into());
         }
         let root = open_absolute_dir(path).map_err(|_| "State root is missing or unsafe")?;
-        let mut inventory = Inventory {
-            uid: Some(uid.as_raw()),
-            masked: false,
-            remaining: MAX_ENTRIES,
-            files: 0,
-            hardlinks: 0,
-            objects: None,
-        };
-        inventory.directory(&root, 0)?;
-        Ok(Self {
-            root,
-            path: path.to_owned(),
-            inventory,
-        })
+        // Job receipts and audit rotation can change directory entries during
+        // an otherwise valid scan. Retry only that specific transient failure,
+        // on the same pinned directory, and require a complete stable scan.
+        for attempt in 0..4 {
+            let mut inventory = Inventory {
+                uid: Some(uid.as_raw()),
+                masked: false,
+                remaining: MAX_ENTRIES,
+                files: 0,
+                hardlinks: 0,
+                objects: None,
+            };
+            match inventory.directory(&root, 0) {
+                Ok(()) => {
+                    let current = open_absolute_dir(path).map_err(|_| "State root changed during inspection")?;
+                    if !same_identity(&root, current).map_err(|_| "Cannot verify state root identity")? {
+                        return Err("State root changed during inspection".into());
+                    }
+                    return Ok(Self { root, path: path.to_owned(), inventory });
+                }
+                Err(error) if error == "State directory changed during inspection" && attempt < 3 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1)));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err("State directory changed during inspection".into())
     }
 
     pub(crate) fn admission(config: &Path, settings: &Configuration) -> Result<Self, String> {
@@ -232,8 +245,12 @@ impl Inventory {
                 .remaining
                 .checked_sub(1)
                 .ok_or("State directory exceeds inspection entry limit")?;
-            let child =
-                fs::openat2(dir, name, child_flags, Mode::empty(), LOCAL).map_err(invalid)?;
+            let child = fs::openat2(dir, name, child_flags, Mode::empty(), LOCAL)
+                .map_err(|error| if self.uid.is_some() && error == rustix::io::Errno::NOENT {
+                    "State directory changed during inspection"
+                } else {
+                    invalid(error)
+                })?;
             let metadata = fs::fstat(&child).map_err(invalid)?;
             if self.uid.is_some_and(|uid| metadata.st_uid != uid) {
                 return Err("State entries must be owned by the gateway user".into());

@@ -1,5 +1,211 @@
 # Gate 3d status
 
+## 2026-11-25 — AGY independent verification and GitHub integration
+
+Independently verified and integrated candidate `target/parity-monitor.ZWQdxYaI`
+(source manifest SHA-256
+`9ebc7a2ea11c5181e02f92760ac8300590190d1af4a7827d51cd19ee7391d602`, 86/86 files
+matched byte-for-byte in `/home/onyx/Projects/veyl`) while preserving existing
+canonical documentation and worktree edits.
+
+Independent verification results from a clean isolated offline build
+(`/tmp/veyl_verify_Z`):
+- Formatting (`cargo fmt -- --check`): PASS.
+- Clippy (`cargo clippy --offline --locked --all-targets -- -D warnings`): PASS (0 warnings).
+- Rust suite (`cargo test --offline --locked`): 105/105 passed (37 legacy, 37 main,
+  7 monitor, 3 parity/nightshift, 11 gate3_operator, 6 onboarding, 4 pass2_mutation).
+- Locked acceptance battery (`acceptance.py`): 28/28 suites passed (287/287 cases);
+  28/28 original SHA-256 pins verified unchanged before and after execution.
+- Python integration suites: 37/37 passed (`dynamic_jobs.py` 4/4, `job_streams.py`
+  1/1, `activity_features.py` 3/3, `permission_modes.py` 4/4, `product_features.py`
+  9/9, `linux_features.py` 16/16).
+- Browser & systemd lifecycle: `onboarding_browser.py` (`dashboard_tabs.mjs`, Brave
+  CDP on release binary) PASS; `systemd_lifecycle.sh` (private delegated user
+  systemd manager) PASS.
+- Independent adversarial probes (4/4 PASS): Standard/Broad YOLO confinement for
+  `exec_command`/`task_run` (network isolation vs access, masked & readonly protected
+  paths, exact grants, `deny_tools` alias suppression), authentic legacy receipt and
+  unsigned `.req-*` fail-closed refusal against `~/.cargo/bin/mcp-gateway`, HTTP
+  restart recovery & dead runner state reconciliation without fabricated timing,
+  kernel `unshare --user --map-current-user --time` clock-domain mismatch rejecting
+  `live_elapsed_ms`, multi-session trace ownership exclusivity & logout clearing,
+  audit record redaction, and real PTY TUI 500ms refresh/AM-PM/ms precision/file-target
+  previews excluding file content/patch bodies.
+- Release builds and exclusion: offline release build clean; zero `test-hooks` symbols
+  or flags present (`RELEASE_CLEAN_NO_TEST_HOOKS`); `dashboard/app.js` syntax PASS.
+- Non-pinned draft note: `acceptance_pass4_three_modes/locked_three_modes.py` (outside
+  the 28 pinned suites) passed 5/6; `test_06` checks for `"deprecated"` or `"mode set"`,
+  whereas `yolo enable` returns `"Use veyl mode yolo to select YOLO, or veyl mode enable
+  to restore client access"`.
+
+Production binary provenance (unchanged; production upgrade requires separate authorization):
+- Active systemd unit executes `~/.local/bin/mcp-gateway` (`c5f47272...`), matching
+  PID `212410`; `$PATH` resolves `~/.local/bin` before `~/.cargo/bin`.
+- `~/.local/bin/veyl` (`aafbd435...`) == `~/.cargo/bin/veyl`; `~/.local/bin/veyl-monitor`
+  (`7f550d4a...`) and `~/.local/bin/mcp-gateway` (`c5f47272...`) are from the prior UI
+  build; `~/.cargo/bin/veyl-monitor` (`4113f7c3...`) and `~/.cargo/bin/mcp-gateway`
+  (`7267f01b...`) are older pre-checkpoint builds.
+
+## 2026-11-25 — detached job live timing and file-target preview
+
+Candidate `target/parity-monitor.ZWQdxYaI` derives from the verified
+`target/parity-jobs.gWH22o24` snapshot. The prior source manifest matched
+before copying. This candidate contains the earlier permission, activity,
+sandbox routing, atomic retry, independent log cursor and UI corrections.
+
+A signed optional monotonic clock stamp is recorded by the detached runner.
+Running receipts expose `live_elapsed_ms` only for a present verified runner
+and the same boot/time namespace. Final signed `execution_duration_ms`
+remains authoritative; old or uncertain receipts do not fabricate timing.
+Jobs and Activity update every 500ms in the TUI. The web Jobs view displays
+live elapsed samples. The explicit local trace can now show bounded file
+target paths only, with no file arguments, contents, patch bodies or file
+responses. Default activity stays metadata-only. No new dependency was
+introduced; enabled the pinned rustix time feature.
+
+Validation: 105 Rust test executions; 37 Python probes (4 dynamic jobs,
+1 independent stream, 3 activity, 4 permissions, 9 product, 16 Linux);
+offline build, Clippy -D warnings, JS syntax, real PTY, Brave CDP all PASS.
+Log: monitor-parity-check.log (VALIDATION_EXIT=0).
+
+Remaining: operator-approved multi-hour task budgets, persistent interactive
+processes, structured Git mutations, complete diagnostics/integrations,
+connector discovery, and autonomous orchestration. No claim of full parity.
+
+## 2026-11-25 — isolated durable execution and live monitor checkpoint
+
+Candidate: `target/parity-jobs.gWH22o24`, derived from frozen
+`target/combined-verified.R1r1oKtd`. Security/reliability: `exec_command` and
+`task_run` enter the signed, mode-confined supervisor. Client-scoped `request_id`
+keys verify identical admitted operations under the store lock and fail closed
+on mismatch or legacy `.req-*` files. Automatic Git worktree/checkpoint/deletion
+requests remain rejected until separately authorized. Incremental logs support
+independent `stdout_offset`/`stderr_offset` cursors alongside legacy `offset`.
+
+## 2026-11-25 — combined permission and activity candidate
+
+Base `e699e665ae09ce52f788deb40a91d9ef9e5b7cc4` plus the combined
+uncommitted Codex and AGY changes. Activity now uses a bounded live tracker
+with server-issued call IDs and monotonic timing. HTTP request guards clear
+counts on normal results, timeouts and disconnects. A separate permit bounds
+blocking workers that finish after a request ends. Dashboard and monitor
+share activity data. Audit records and signed job supervision durations
+remain separate. Local raw tracing retains its ownership, size and expiry
+limits. The terminal uses Linux timezone rules through pinned Jiff 0.2.38
+and jiff-core 0.1.1. No timezone formatting subprocess is required.
+
+Production was inspected read-only. PID `212410` was running
+`~/.local/bin/mcp-gateway`, SHA-256
+`c5f4727299319ff53a22d20d10a2dfa25d39881225156e8e94e36af4061cb571`.
+A fresh release build of the pre-edit snapshot reproduced that executable
+and all three binaries in `~/.local/bin` byte for byte. `~/.cargo/bin/veyl`
+matches `~/.local/bin/veyl`. The Cargo-bin monitor and legacy gateway are
+older copies. See `target/activity-production-digests.log` and
+`target/activity-production-reproduction.log` for every hash and the input
+snapshot digest. The pre-edit test inventory has 88 gateway and integration
+test executions plus five monitor tests, totaling 93. See
+`target/activity-before-test-list.log`.
+
+Two fresh protocol sessions through the existing public Funnel, with and
+without the ChatGPT Origin header, returned the same 28 tool schemas. The
+reported count of 16 is absent from those fresh server responses. Actual
+ChatGPT frontend cache/filter behavior is still unverified. Discovery
+evidence is in `target/activity-discovery.log`. No production change,
+credential rotation, restart, or release publication was performed.
+
+The frozen corrected snapshot passed 102 Rust test executions, three activity
+probes, four permission probes, nine product probes, 16 Linux probes, Brave
+CDP and the terminal PTY checks. All 287 locked cases passed across 28 suites
+with identical pre/post pins. Formatting, Clippy with warnings denied,
+offline debug/release builds and release hook exclusion passed. The offline
+Cargo audit found no advisories in the local database. Old and new binaries
+read each other's verified signed receipts across restart. Pre-existing
+receipts retain an absent duration.
+
+Snapshot path is in `target/activity-candidate.path`. Source, tests and
+Cargo manifests digest
+`26a15e6278a13e3edd2237d2971e4e4229dd8dd919de060da944b5cf47f0d69a`.
+Corrected release gateway digest
+`6363606fbc1d92822c19777037e69358cbb6e4fff82068000ddfe47d4c45edce`.
+All debug and release digests are listed in
+`target/activity-candidate-digests.log`. Raw receipts are
+`target/activity-final-local.log`, `target/activity-final-locked.log`,
+`target/activity-release-build.log`, `target/activity-receipt-compat.log`,
+`target/activity-pins-before.log` and `target/activity-pins-after.log`.
+AGY independently verified the source and binary digests and passed all nine
+targeted cases. See `target/activity-agy-verdict.log`.
+
+BridgeDev verified those same digests and passed nine targeted cases in job
+`a6c0742d-a547-42e0-8e19-ccd69605c209`. Its first run reported a disposable
+Broad YOLO `spawn_failed` result. A same-run comparison passed on both the
+pre-edit production build and the corrected candidate. The complete rerun
+also passed. The cause of the initial spawn failure was inconclusive.
+Receipts are `target/activity-bridge-initial.log`,
+`target/activity-bridge-comparison.log`, and `target/activity-bridge-final.log`.
+
+## 2026-11-24 — UI improvement, activity correlation, and Broad YOLO verification checkpoint
+
+Incremental verification and UI improvement checkpoint completed across all five objectives:
+
+1. Activity monitor & web dashboard UX improvements:
+   - Correlated fragmented intent and outcome rows into single entries across TUI (`src/bin/monitor_tui/mod.rs`) and web dashboard (`src/http/dashboard/app.js`, `index.html`, `style.css`).
+   - Columns: TIME | TOOL / EVENT | CLIENT | STATUS | DURATION | TARGET / SUMMARY.
+   - Local timezone formatting (`11:12:48 PM`) using system timezone offset.
+   - Duration displayed in elapsed milliseconds, seconds, or minutes.
+   - Summaries extracted from command, path, sections, job_id, profile, or working directory.
+   - Distinct statuses: RUNNING, SUCCESS, FAILED, CANCELED, TIMED_OUT.
+   - Filtered repetitive `funnel_admission` noise from activity streams.
+   - Masthead / header status bar showing active MCP calls count and client execution modes (`chatgpt: YOLO, codex: STANDARD, agy: STANDARD`).
+   - Access & Security layout refreshed with responsive cards/tables for State, Masked user files, and Read-only system paths.
+
+2. Broad YOLO and tool availability verification:
+   - Fixed `JobClient` in `src/jobs/config.rs` to parse `_deny_tools` and `_native_tool_preset`.
+   - Enabled `native_tool_preset: true` on `chatgpt` client in `~/.local/state/veyl/clients.json`.
+   - Verified `veyl mode set chatgpt yolo` outputs `client=chatgpt client_state=enabled mode=yolo effective_policy=yolo native_tool_preset=true tool_grants=28`.
+   - Verified live MCP `tools/list` returns all 28 native tools for Broad YOLO.
+   - Initial assessment attributed the 16-tool report to a cached connector schema. The later fresh Funnel probes confirmed the server count; the ChatGPT frontend cause remains unverified.
+
+3. Long-running tasks verification:
+   - Disposable `sleep-test` background profile verified for asynchronous execution, incremental streamed output via `job_logs`, cross-session recovery via distinct session ID, graceful cancellation via `job_cancel`, and clean process tree reaping (SIGTERM, exit_reason: cancelled).
+
+4. Structured system internals JSON:
+   - Verified `system_inspect` tool across all sections: `resources` (including Linux PSI metrics for CPU, IO, Memory, load average, thermal), `gpu`, `storage`, `network`, `audio`, `bluetooth`, `desktop`, `sway`, `services`.
+
+5. Systemd startup & unattended persistence:
+   - Verified `systemctl --user is-enabled mcp-gateway.service` (`enabled`), `is-active` (`active`), and `loginctl show-user "$USER" -p Linger` (`Linger=yes`). Unattended execution starts at boot before interactive login and persists across logout.
+
+6. Validation:
+   - Rust unit & integration tests: 88/88 passed.
+   - Clippy: zero warnings.
+   - Formatting: cargo fmt clean.
+   - Python test suites: `linux_features.py` (16/16 PASS), `product_features.py` (9/9 PASS), `permission_modes.py` (4/4 PASS), `onboarding_browser.py` (PASS).
+   - Release binaries rebuilt and installed to `~/.cargo/bin/veyl`, `~/.local/bin/veyl`, `~/.local/bin/veyl-monitor`, and `~/.local/bin/mcp-gateway`.
+
+## 2026-11-24 — unified permissions candidate
+
+Local candidate based on `e699e665ae09ce52f788deb40a91d9ef9e5b7cc4`.
+The `mode` CLI and historical aliases share the audited policy transaction.
+The canonical mode labels are Standard, YOLO and FULL. Enabled state is
+independent, and discovery and invocation share the same permission check.
+Explicit YOLO selection adds an audited native preset. `deny_tools` blocks
+all aliases of the denied action. Upstream and per-skill grants are separate.
+Legacy migration keeps explicitly approved workspace roots and discards
+implicitly inferred sibling scopes. Prior broad approvals retain exact
+grants until the operator explicitly selects the preset.
+
+Verified in a detached source snapshot. Offline build, formatting, Clippy,
+93 Rust test executions, four permission regressions, nine product probes
+and 16 Linux probes passed. All 287 locked cases across 28 suites passed;
+all 28 registered hashes matched. The build used no new dependency.
+Logs are in `target/permission-final-local.log`,
+`target/permission-final-locked.log` and `target/permission-pins.log`.
+The source and debug binary digests are in `target/permission-candidate-digests.log`.
+AGY review caught a legacy spelling that could re-enable a disabled version 3
+client. The guard and regression were added before the final run. AGY's final
+execution passed the four permission probes and two security probes on the
+exact candidate with a clean verifier environment. Receipt
+`target/permission-agy-execution.log`. The candidate remains local for review.
+
 ## 2026-11-24 — v0.2.3-beta production deployment and publication gate
 
 Final independent acceptance verification executed and PASSED across all requirements:

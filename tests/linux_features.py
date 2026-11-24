@@ -444,6 +444,17 @@ class LinuxFeatures(unittest.TestCase):
         status, _, content = self.f.request(self.f.mcp, "POST", path, listing, **session)
         self.assertEqual(status, 200)
         self.assertIn("read_file", [tool["name"] for tool in json.loads(content)["result"]["tools"]])
+        admin = self.f.pair()
+        for include in ("", "?funnel=1"):
+            code, _, data = self.f.request(self.f.admin, "GET", "/api/dashboard/activity" + include, **admin)
+            self.assertEqual(code, 200, data)
+            self.assertNotIn(token.encode(), data)
+            admissions = json.loads(data)["events"]
+            self.assertEqual(bool(admissions), bool(include))
+            if admissions:
+                self.assertTrue(all(row["kind"] == "funnel_admission" and row["duration_ms"] is None
+                                    and row["call_id"] is None for row in admissions))
+                self.assertEqual({row["status"] for row in admissions}, {"success", "failure"})
         log = (self.f.base / "gateway.log").read_text()
         self.assertIn("funnel.response method=OPTIONS origin=chatgpt status=204", log)
         self.assertIn("funnel.response method=POST origin=rejected status=403", log)
@@ -749,11 +760,16 @@ class LinuxFeatures(unittest.TestCase):
         def pair():
             return self.f.cli("dashboard","pair")
         cmd=[str(MONITOR),"--listen",f"127.0.0.1:{self.f.admin}"]
-        for view in ("health","clients","audit","skills","upstreams","integrations"):
+        for view in ("health","clients","activity","audit","skills","upstreams","integrations"):
             result=subprocess.run([*cmd,"--view",view],input=pair(),text=True,capture_output=True,timeout=8)
             self.assertEqual(result.returncode,0,result.stderr)
             value=json.loads(result.stdout)
             self.assertNotIn("csrf",value)
+            if view == "activity":
+                self.assertEqual(value["active_calls"], 0)
+                clocks = [row for row in value["events"] if row["tool"] == "system_info"]
+                self.assertEqual(len(clocks), 1)
+                self.assertIsInstance(clocks[0]["duration_ms"], int)
         self.assertNotEqual(subprocess.run([*cmd,"--view","health"],input="1"*48,text=True,capture_output=True,timeout=8).returncode,0)
         token=pair().encode()
         read,write=os.pipe()
@@ -785,7 +801,7 @@ class LinuxFeatures(unittest.TestCase):
                     break
                 result.extend(chunk)
                 screen=result.rsplit(b"\x1b[H\x1b[2J",1)[-1]
-                if stage==0 and b"Veyl / audit" in screen and b"system_info" in screen:
+                if stage==0 and b"Veyl / activity" in screen and b"system_info" in screen:
                     os.write(terminal,b"/system_info\r")
                     stage=1
                 elif stage==1 and b"Filter: system_info" in screen and b"system_info" in screen:
@@ -793,9 +809,10 @@ class LinuxFeatures(unittest.TestCase):
                     stage=2
                 elif stage==2 and b"Details & Parameters (JSON)" in screen:
                     self.assertIn(b'"tool": "system_info"',screen)
+                    self.assertIn(b'"call_id": "call-',screen)
                     os.write(terminal,b"\x1b")
                     stage=3
-                elif stage==3 and b"Veyl / audit" in screen and b"system_info" in screen:
+                elif stage==3 and b"Veyl / activity" in screen and b"system_info" in screen:
                     os.write(terminal,b"\x1b[<0;8;7M")
                     stage=4
                 elif stage==4 and b"Details & Parameters (JSON)" in screen:

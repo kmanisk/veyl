@@ -33,6 +33,15 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .masthead { border-bottom: 1px solid var(--stroke); display: flex; align-items: center; justify-content: space-between; min-height: 4.2rem; padding: .65rem 1.25rem; gap: 1rem; flex-wrap: wrap; }
 .brand { display:flex; align-items:center; gap:.65rem; font-size: 1.25rem; font-weight: 700; }
 .brand small { font-size: .9rem; color: var(--dim); font-weight: 400; }
+.header-status { display:flex; align-items:center; gap:.75rem; font-size:.88rem; margin-right:auto; margin-left:.5rem; flex-wrap:wrap; }
+.header-status span { border:1px solid var(--stroke); padding:.2rem .5rem; background:var(--surface); border-radius:3px; }
+.protection-grid { display:grid; gap:1.2rem; margin-top:1rem; }
+.status-pill { display:inline-block; padding:.15rem .45rem; font-size:.78rem; font-weight:700; border-radius:3px; text-transform:uppercase; letter-spacing:.03em; }
+.status-pill[data-status="RUNNING"], .status-pill[data-status="running"] { color:var(--accent); background:#a4cee322; border:1px solid var(--accent); }
+.status-pill[data-status="SUCCESS"], .status-pill[data-status="success"] { color:var(--success); background:#a5cd9b22; border:1px solid var(--success); }
+.status-pill[data-status="FAILED"], .status-pill[data-status="failed"], .status-pill[data-status="failure"], .status-pill[data-status="denied"] { color:var(--error); background:#edaaa022; border:1px solid var(--error); }
+.status-pill[data-status="CANCELED"], .status-pill[data-status="canceled"], .status-pill[data-status="interrupted"] { color:var(--warning); background:#e4c17b22; border:1px solid var(--warning); }
+.status-pill[data-status="TIMED_OUT"], .status-pill[data-status="timed_out"] { color:var(--error); background:#edaaa033; border:1px solid var(--error); }
 .header-controls,.row { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
 .live-toggle { display: inline-flex; align-items: center; gap: .4rem; color: var(--dim); }
 .notice { margin: 1rem 1.5rem; color: var(--dim); }

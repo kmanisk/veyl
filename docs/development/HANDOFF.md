@@ -1,5 +1,148 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Independent verification, GitHub integration, and rollback-safe upgrade procedure (2026-11-25)
+
+Candidate `target/parity-monitor.ZWQdxYaI` (manifest SHA-256
+`9ebc7a2ea11c5181e02f92760ac8300590190d1af4a7827d51cd19ee7391d602`) passed full
+independent acceptance (105 Rust tests, 28/28 locked suites / 287 cases with 28/28
+original pins, 37 Python integration tests, Brave CDP, PTY TUI, private systemd
+lifecycle, offline release build without `test-hooks`, and 4 adversarial probes)
+and was integrated into `/home/onyx/Projects/veyl` with existing canonical docs preserved.
+
+### Production provenance & PATH
+- `PATH` resolves `~/.local/bin` before `~/.cargo/bin`.
+- `mcp-gateway.service` executes `~/.local/bin/mcp-gateway` (currently older PID `212410`).
+- `~/.cargo/bin/veyl-monitor` and `~/.cargo/bin/mcp-gateway` hold even older copies. Do not mix an updated CLI/monitor against the older gateway daemon.
+
+### Rollback-safe upgrade procedure (awaiting separate authorization)
+1. Back up all existing binaries across both `~/.local/bin` and `~/.cargo/bin`:
+   ```sh
+   mkdir -p ~/.local/state/veyl/backups/pre-parity-monitor
+   cp -a ~/.local/bin/{veyl,veyl-monitor,mcp-gateway} ~/.cargo/bin/{veyl,veyl-monitor,mcp-gateway} ~/.local/state/veyl/backups/pre-parity-monitor/
+   ```
+   (Save Cargo copies into a separate subdir `cargo-bin/` inside the backup dir if preserving exact differing timestamps/hashes.)
+2. Build release binaries in `/home/onyx/Projects/veyl`:
+   ```sh
+   cargo build --offline --locked --release
+   ```
+3. Stage and atomically replace all three binaries together (using `install -m 755` into temp paths then `mv -T`, updating both `~/.local/bin` and `~/.cargo/bin` so no stale copy remains on `PATH`):
+   ```sh
+   for bin in veyl veyl-monitor mcp-gateway; do
+     install -m 755 "target/release/$bin" "$HOME/.local/bin/.${bin}.new"
+     mv -T "$HOME/.local/bin/.${bin}.new" "$HOME/.local/bin/$bin"
+     install -m 755 "target/release/$bin" "$HOME/.cargo/bin/.${bin}.new"
+     mv -T "$HOME/.cargo/bin/.${bin}.new" "$HOME/.cargo/bin/$bin"
+   done
+   ```
+4. Restart the user service cleanly and verify health + active binaries:
+   ```sh
+   systemctl --user restart mcp-gateway.service
+   systemctl --user status mcp-gateway.service
+   veyl service status
+   ```
+5. Rollback (if needed): copy saved binaries back with `mv -T` and re-run `systemctl --user restart mcp-gateway.service`. Existing signed job receipts and audit ledger are backward-compatible.
+
+### Next functional parity milestone
+- Interactive persistent shell & supervised process tools (`shell_status`/`shell_reset`, `start_process`/`process_status`/`process_output`/`stop_process`/`clear_processes`)
+- Structured Git mutation workflow tools (`git_status`/`git_diff`/`git_commit`/`git_branch`/etc.)
+- Operator-approved multi-hour task budgets and autonomous Nightshift loop checkpoints/rewind
+- Repository skill discovery (`load_path_rules`, `remember`), `chezmoi_inspect` drift guard, and upstream/REA transport support
+
+---
+
+## Combined permission and activity candidate (2026-11-25)
+
+Use the frozen snapshot named in `target/activity-candidate.path`. It retains
+the unified mode rules and AGY's permission and UI changes. Activity tracks
+individual HTTP MCP tool calls and uses `call_id` to fetch optional trace
+details. The Activity table never merges audit sequences or job IDs. The
+security ledger and durable job status have separate views. Code in
+`src/http/activity.rs` owns live counters and retention. The original
+`/dashboard/api/audit` endpoint and `veyl-monitor --view audit` keep ledger
+inspection available without synthesizing elapsed durations.
+
+The initial production snapshot reproduces the running gateway exactly.
+`target/activity-production-reproduction.log` identifies its source digest
+and installed artifacts. New source and binary hashes are recorded separately
+in `target/activity-candidate-digests.log`. The live connector was probed
+read-only with no credential output. Production Funnel returned 28 tool
+schemas in fresh sessions. Establish the ChatGPT application's state before
+classifying the old 16-tool observation as a cache issue.
+
+Use `tests/activity_features.py` for live overlap, timing, disconnect,
+timeout and redaction regressions. `tests/linux_features.py` covers the
+Funnel filter and actual monitor PTY. `tests/onboarding_browser.py` drives
+Brave through CDP and exercises real Activity rows, pairing and navigation.
+All 287 locked cases passed with the 28 pins unchanged. AGY and then
+BridgeDev each verified the candidate digests and passed nine focused cases.
+BridgeDev's initial Broad YOLO spawn failure did not reproduce with either
+the old or new build. See STATUS for logs and the production provenance.
+The installed service and binaries are outside this checkpoint.
+
+## UI improvement, activity correlation, and Broad YOLO verification handoff (2026-11-24)
+
+### Completed items
+1. **Activity Monitor and Web Dashboard correlation**:
+   - Both TUI (`src/bin/monitor_tui/mod.rs`) and web dashboard (`src/http/dashboard/app.js`, `index.html`, `style.css`) now correlate tool intent and outcome events by `job_id` or sequence key into clean, unified rows.
+   - Replaced fragmented rows with columns: `TIME | TOOL / EVENT | CLIENT | STATUS | DURATION | TARGET / SUMMARY`.
+   - Local timezone formatting (`11:12:48 PM`) using system timezone offset.
+   - Elapsed duration rendered in milliseconds, seconds, or minutes.
+   - Operation summaries extracted from command, path, sections, job ID, profile, or working directory.
+   - Semantically colored status pills: RUNNING (cyan), SUCCESS (green), FAILED (red), CANCELED (yellow), TIMED_OUT (bright red).
+   - Filtered out repetitive `funnel_admission` entries.
+   - Header status line displays live count of active MCP calls and execution mode per client (`chatgpt: YOLO, codex: STANDARD, agy: STANDARD`).
+   - Access & Security layout refreshed with responsive cards and tables for State, Masked user files, and Read-only system paths.
+
+2. **Broad YOLO and Tool Availability**:
+   - `JobClient` in `src/jobs/config.rs` deserializes `_deny_tools` and `_native_tool_preset`.
+   - `chatgpt` configured with `native_tool_preset: true` in `~/.local/state/veyl/clients.json`.
+   - `veyl mode set chatgpt yolo` outputs `client=chatgpt client_state=enabled mode=yolo effective_policy=yolo native_tool_preset=true tool_grants=28`.
+   - Full 28 native tools discoverable via MCP `tools/list`.
+   - Initial hypothesis was a cached ChatGPT connector schema. Fresh Funnel probes later confirmed 28 tools, with the frontend cause still unverified.
+
+3. **Durable Jobs and Lifecycle**:
+   - Long-running tasks verified with background profiles: asynchronous execution, incremental streamed output via `job_logs`, cross-session recovery via persistent job IDs, clean cancellation via `job_cancel`, and process tree reaping (SIGTERM).
+
+4. **Structured System Internals JSON**:
+   - Native structured inspection (`system_inspect`) verified across CPU, RAM (including Linux PSI pressure metrics), GPU, storage, network, audio, Bluetooth, Sway, desktop, and systemd services.
+
+5. **Systemd Startup and Unattended Execution**:
+   - Verified `systemctl --user is-enabled mcp-gateway.service` (`enabled`), `is-active` (`active`), and `loginctl show-user "$USER" -p Linger` (`Linger=yes`). Unattended execution runs before login and persists across sessions.
+
+---
+
+## Unified permission architecture and AGY UI coordination
+
+The permission checkpoint changes the CLI, policy admission, job schema
+compatibility and dashboard status data. UI assets, TUI rendering and the
+sandbox implementation stay with the concurrent checkpoint. The dashboard
+API now emits `mode: standard|yolo|full`, a separate `disabled` boolean,
+`native_tool_preset`, and exact effective native/tool-wrapper names in
+`grants`. Display Standard, YOLO and FULL as the three user-facing modes.
+Use enabled state as a separate badge. Treat a false preset on an older YOLO
+approval as retained explicit grants. Read-only status remains read-only.
+
+Test the current patch from `~/Projects/veyl` with `cargo fmt --all --check`,
+`cargo clippy --offline --locked --all-targets -- -D warnings`,
+`cargo test --offline --locked`, and `python3 -B tests/permission_modes.py`
+after an offline debug build. The four integration cases cover interactive
+selection, legacy migration, binding the new preset to the audit approval,
+explicit denies, protected state, existing sessions and restart persistence.
+On older schemas, `veyl yolo standard` and `yolo reset` recover to enabled
+Standard. Version 3 uses `mode enable` to restore client access.
+Canonical `veyl mode standard` changes the selected mode, and
+`mode enable` or `mode disable` changes the independent enabled state.
+An interrupted client update can be recovered to restricted, disabled
+Standard using `mode disable CLIENT`.
+
+The 28 external pins and all 287 locked cases passed in the isolated source
+snapshot. AGY reran six focused checks against the candidate in
+`target/permission-candidate.path` with digests in
+`target/permission-candidate-digests.log`. Its execution receipt is
+`target/permission-agy-execution.log`. Use that same snapshot when integrating
+with the UI checkpoint. Production configuration and services were untouched
+during implementation and testing.
+
 ## Production release v0.2.3-beta and next milestone roadmap (2026-11-24)
 
 ### 1. Release status

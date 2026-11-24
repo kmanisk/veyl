@@ -90,15 +90,27 @@ pub(crate) fn require_completed_legacy_jobs(settings: &Configuration) -> Result<
 }
 
 pub(crate) fn verify_approvals(settings: &Configuration) -> Result<(), String> {
+    verify_approvals_except(settings, None)
+}
+
+pub(crate) fn verify_approvals_except(
+    settings: &Configuration,
+    skip: Option<&str>,
+) -> Result<(), String> {
     let expected: Vec<_> = settings
         .clients
         .iter()
+        .filter(|client| Some(client.id.as_str()) != skip)
         .filter_map(|client| {
             client.yolo_revision.as_deref().map(|revision| {
                 (
                     client.id.as_str(),
                     revision,
-                    client.mode.audit_mode().unwrap_or("disabled"),
+                    if client.native_tool_preset {
+                        "yolo_native"
+                    } else {
+                        client.mode.audit_mode().unwrap_or("disabled")
+                    },
                 )
             })
         })
@@ -482,6 +494,8 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "token_sha256",
         "expires_at_unix_seconds",
         "tools",
+        "deny_tools",
+        "native_tool_preset",
         "mode",
         "yolo_roots",
         "yolo_shared_roots",
@@ -513,6 +527,11 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
     let version = document["policy_version"].as_u64();
     let entries = document["clients"].as_array().ok_or("Invalid clients")?;
     for entry in entries {
+        if entry.get("native_tool_preset").is_some()
+            && (version != Some(3) || entry["mode"] != "yolo" || entry["native_tool_preset"] != true)
+        {
+            return Err("Native tool preset requires an explicitly approved YOLO policy".into());
+        }
         if version == Some(3) {
             if !matches!(entry["mode"].as_str(), Some("standard" | "yolo" | "full"))
                 || entry["disabled"].as_bool().is_none()

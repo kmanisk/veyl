@@ -13,7 +13,7 @@ assert.match(url,/^http:\/\/127\.0\.0\.1:\d+\/dashboard\/login#pair=[a-f0-9]{48}
 const profile = await mkdtemp(join(tmpdir(),"veyl-tabs-"));
 const child = spawn(browser,["--headless","--incognito","--ozone-platform=headless",
   "--disable-gpu","--disable-background-networking","--disable-component-update",
-  "--disable-extensions","--password-store=basic","--no-first-run","--no-default-browser-check",
+  "--disable-extensions","--no-proxy-server","--password-store=basic","--no-first-run","--no-default-browser-check",
   "--remote-debugging-port=0","--user-data-dir="+profile,"about:blank"],{stdio:"ignore"});
 const delay = ms => new Promise(r=>setTimeout(r,ms));
 async function until(fn, timeout=8000) {
@@ -52,9 +52,12 @@ try {
     if(response.exceptionDetails)throw Error("Page script evaluation failed");
     return response.result.value;
   }
+  await send("Emulation.setTimezoneOverride", {timezoneId:"America/New_York"});
   await send("Page.navigate",{url});
   await until(()=>evaluate("!document.querySelector('#dashboard')?.hidden && document.querySelector('[role=tab][aria-selected=true]')?.hash === '#health'"));
   assert.equal(await evaluate("location.hash"),"");
+  const pairingCode = url.split("#pair=")[1];
+  assert.ok(!(await evaluate("document.documentElement.innerHTML.includes(" + JSON.stringify(pairingCode) + ")")));
   const visible = "Array.from(document.querySelectorAll('[role=tabpanel]')).filter(p=>getComputedStyle(p).display!=='none').map(p=>p.querySelector('h1,h2').id)";
   assert.deepEqual(await evaluate(visible),["health"]);
   for(const id of ["jobs","clients","audit","skills","servers","marketplace","custom","configuration","protection","health"]){
@@ -66,10 +69,31 @@ try {
   assert.deepEqual(await evaluate(visible),["audit"]);
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'/',bubbles:true}))");
   assert.equal(await evaluate("document.activeElement.id"),"audit-filter");
-  await until(()=>evaluate("document.querySelector('#audit-rows button') !== null"));
+  await until(()=>evaluate("document.querySelectorAll('#audit-rows tr[data-call-id]').length === 3"));
+  assert.equal(await evaluate("new Set(Array.from(document.querySelectorAll('#audit-rows tr'), row => row.dataset.callId)).size"), 3);
+  assert.equal(await evaluate("document.querySelector('#activity-active').textContent"), "0 active calls");
+  assert.equal(await evaluate("document.querySelectorAll('#audit-rows [data-status=failed]').length"), 1);
+  assert.ok(!(await evaluate("document.querySelector('#audit-rows').innerHTML")).includes("BROWSER_SYNTHETIC_CREDENTIAL"));
+  assert.match(await evaluate("document.querySelector('#audit-rows td').textContent"), /[AP]M$/);
+  assert.equal(await evaluate("document.querySelector('#live-refresh').checked"), true);
+  assert.equal(await evaluate("document.querySelector('#header-active-count').textContent"), "0");
+  assert.equal(await evaluate("formatDuration(42)"), "42 ms");
+  assert.equal(await evaluate("formatDuration(1234)"), "1.234 s");
+  assert.equal(await evaluate("formatDuration(62345)"), "1m 2.345s");
+  assert.equal(await evaluate("commandPreview({arguments:{command:'printf synthetic'}})"), "printf synthetic");
+  assert.equal(await evaluate("commandPreview({arguments:{argv:['echo','synthetic']}})"), '["echo","synthetic"]');
+  await evaluate("document.querySelector('#show-funnel-admission').click()");
+  await until(()=>evaluate("document.querySelectorAll('#audit-rows tr[data-call-id]').length === 3"));
+  await evaluate("document.querySelector('#audit-ledger summary').click()");
+  await until(()=>evaluate("document.querySelector('#audit-ledger-records').textContent.includes('sequence')"));
+  assert.ok(!(await evaluate("document.querySelector('#audit-ledger-records').textContent")).includes('duration_ms'));
+  await evaluate("document.querySelector('#audit-ledger summary').click()");
   await evaluate("document.querySelector('#audit-rows button').click()");
   assert.equal(await evaluate("document.querySelector('#detail-dialog').open"),true);
-  assert.ok((await evaluate("document.querySelector('#detail-json').textContent")).includes('"tool"'));
+  const details = JSON.parse(await evaluate("document.querySelector('#detail-json').textContent"));
+  assert.equal(details.tool, "system_info");
+  assert.match(details.call_id, /^call-/);
+  assert.ok(Number.isInteger(details.duration_ms));
   await evaluate("document.querySelector('#detail-close').click()");
   assert.equal(await evaluate("document.querySelector('#detail-dialog').open"),false);
   await evaluate("document.querySelector('#theme').click()");

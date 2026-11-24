@@ -29,6 +29,42 @@ pub(super) struct Identity {
     boot_id: String,
 }
 
+/// Signed, cross-process monotonic observation. Never compare clock values
+/// across boot or time namespaces.
+#[derive(Clone, Deserialize, Serialize)]
+pub(super) struct ElapsedClock {
+    started_ms: u64,
+    boot_id: String,
+    time_namespace: [u64; 2],
+}
+
+impl ElapsedClock {
+    fn domain() -> io::Result<(String, [u64; 2])> {
+        let (_, boot) = observation_domain()?;
+        let ns = fs::metadata("/proc/self/ns/time")?;
+        Ok((boot, [ns.dev(), ns.ino()]))
+    }
+
+    fn now_ms() -> Option<u64> {
+        let stamp = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+        u64::try_from(stamp.tv_sec).ok()?.checked_mul(1000)?
+            .checked_add(u64::try_from(stamp.tv_nsec).ok()? / 1_000_000)
+    }
+
+    pub(super) fn capture() -> Option<Self> {
+        let (boot_id, time_namespace) = Self::domain().ok()?;
+        Some(Self { started_ms: Self::now_ms()?, boot_id, time_namespace })
+    }
+
+    pub(super) fn elapsed_ms(&self) -> Option<u64> {
+        let (boot, namespace) = Self::domain().ok()?;
+        if boot != self.boot_id || namespace != self.time_namespace {
+            return None;
+        }
+        Self::now_ms()?.checked_sub(self.started_ms)
+    }
+}
+
 #[derive(PartialEq, Eq)]
 pub(super) enum Presence {
     Present,

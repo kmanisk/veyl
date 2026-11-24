@@ -366,11 +366,11 @@ fn test_nightshift_primitives() {
     assert_eq!(task_json1["exit_code"], 0);
     assert!(task_json1["task_id"].is_string());
 
-    // Idempotent replay of same request_id
+    // The same admitted operation replays; a conflicting payload fails closed.
     let task_res2 = client.call(
         "task_run",
         json!({
-            "command": "echo should_not_run_again",
+            "command": "echo task_run_nightshift_test",
             "request_id": "test-req-001",
             "timeout_seconds": 10
         }),
@@ -380,6 +380,17 @@ fn test_nightshift_primitives() {
     let task_json2: Value = serde_json::from_str(task_text2).unwrap();
     assert_eq!(task_json2["idempotent_replay"], true);
     assert_eq!(task_json2["task_id"], task_json1["task_id"]);
+    let conflict = client.call(
+        "task_run",
+        json!({
+            "command": "echo should_not_run_again",
+            "request_id": "test-req-001",
+            "timeout_seconds": 10
+        }),
+    );
+    assert_eq!(conflict["isError"], true);
+    let receipt = client.call("job_status", json!({"job_id": task_json1["job_id"]}));
+    assert_eq!(receipt["isError"], false);
 
     // 3. job_start, job_wait, and job_logs with offset
     let start_res = client.call("start_job", json!({"profile": "echo"}));
@@ -475,14 +486,19 @@ fn test_nightshift_primitives() {
             "wait_seconds": 15
         }),
     );
-    assert_eq!(wt_task["isError"], false);
-    let wt_text = wt_task["content"][0]["text"].as_str().unwrap();
-    let wt_json: Value = serde_json::from_str(wt_text).unwrap();
-    assert_eq!(wt_json["exit_code"], 0);
-    assert_eq!(wt_json["checkpoint"], true);
-    assert_eq!(wt_json["ephemeral_worktree"], true);
+    // Until a separate authorized Git workflow exists, reject the request
+    // before making any repository mutation or executing in the original cwd.
+    assert_eq!(wt_task["isError"], true);
+    assert_eq!(fs::read(fixture.root("base.txt")).unwrap(), b"base content");
+    let branches = Command::new("git")
+        .args(["branch", "--list", "veyl-task-*"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(branches.status.success());
+    assert!(branches.stdout.is_empty());
 
-    // Ephemeral worktree directory must be cleaned up
+    // No ephemeral worktree directory may be created.
     let entries = fs::read_dir(&root).unwrap();
     for entry in entries {
         let name = entry.unwrap().file_name().to_string_lossy().to_string();

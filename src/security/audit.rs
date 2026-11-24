@@ -261,7 +261,7 @@ impl AuditSink {
             "previous_mode": previous,
             "requested_mode": requested,
             "policy_revision": revision,
-            "yolo": matches!(requested, "yolo" | "broad_yolo"),
+            "yolo": matches!(requested, "yolo" | "broad_yolo" | "yolo_native"),
         }))
     }
 
@@ -364,7 +364,6 @@ impl AuditSink {
                 "sequence",
                 "job_id",
                 "argv_sha256",
-                "cwd",
                 "timeout_seconds",
                 "max_output_bytes",
                 "state",

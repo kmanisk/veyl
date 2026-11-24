@@ -62,5 +62,5 @@ the original local command with the original document to complete audit
 reconciliation.
 
 Import, enablement and grants never add a tool grant or execute a script.
-Broad YOLO masks the configured skill store, including direct file tools.
+YOLO masks the configured skill store, including direct file tools.
 FULL retains its ordinary host-user access.

@@ -98,6 +98,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
         audit.check_binding()?;
 
         let start = Instant::now();
+        receipt.elapsed_clock = process::ElapsedClock::capture();
         let mut sandbox;
         let mut standard;
         let command = if let Some(broad) = &launch.broad {
@@ -166,6 +167,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
         (&mut stderr_log, &mut stderr),
         start + Duration::from_secs(launch.profile.timeout_seconds),
     );
+    let supervision_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     drop(process);
     let stdout_synced = stdout_log.sync();
     let stderr_synced = stderr_log.sync();
@@ -173,6 +175,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
     let mut receipt = job.read()?;
     let state = match outcome {
         Ok((state, status)) if stdout_synced.is_ok() && stderr_synced.is_ok() => {
+            receipt.execution_duration_ms = Some(supervision_ms);
             receipt.exit_code = status.code();
             receipt.signal = status.signal();
             state

@@ -2,21 +2,20 @@
 
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
-use mcp_gateway::security::audit::{AuditAction, AuditPhase, JobAuditInfo};
+use mcp_gateway::security::audit::{AuditAction, AuditPhase};
 
 use crate::tools::registry::{Tool, tool_text};
 
+use super::config::{Profile, MAX_OUTPUT};
 use super::receipt::Receipt;
 use super::store::{JobDir, valid_id};
 use super::{
-    JobPolicy, JobRoot, Jobs, SHORT_TIMEOUT, invalid, logs, now, process, random_hex, record,
+    JobPolicy, JobRoot, Jobs, SHORT_TIMEOUT, invalid, logs, process, record,
 };
 
 const PAGE_SIZE: usize = 40;
@@ -47,16 +46,10 @@ impl Jobs {
                 {
                     return tool_text(true, "Expected exactly one configured job profile or permitted argv, with no unexpected arguments");
                 }
-                let req_id = args.get("request_id").and_then(Value::as_str);
-                if let Some(req_id) = req_id
-                    && let Ok(Some(existing_id)) = self.store.get_request_id(req_id)
-                    && let Ok(job) = self.store.job(&existing_id)
-                    && let Ok(receipt) = self.owned_receipt(&job, owner)
-                {
-                    let mut status = receipt.status();
-                    status["idempotent_replay"] = json!(true);
-                    return tool_text(false, &status.to_string());
-                }
+                let req_id = match request_id(args) {
+                    Ok(value) => value,
+                    Err(_) => return tool_text(true, "Invalid request_id"),
+                };
                 let selected = match args.len() {
                     _ if args.contains_key("profile") => {
                         args["profile"].as_str().and_then(|name| {
@@ -76,16 +69,17 @@ impl Jobs {
                 if short {
                     profile.timeout_seconds = profile.timeout_seconds.min(SHORT_TIMEOUT);
                 }
-                self.start(owner, root, name, profile, policy)
-                    .and_then(|receipt| {
-                        if let Some(req_id) = req_id {
-                            let _ = self.store.set_request_id(req_id, &receipt.job_id);
-                        }
-                        if short {
-                            self.wait_short(owner, &receipt.job_id)
+                self.start(owner, root, name, profile, policy, req_id)
+                    .and_then(|(receipt, replay)| {
+                        let mut result = if short {
+                            self.wait_short(owner, &receipt.job_id)?
                         } else {
-                            Ok(receipt.status())
+                            self.present_status(&receipt)
+                        };
+                        if replay {
+                            result["idempotent_replay"] = json!(true);
                         }
+                        Ok(result)
                     })
             }
             Tool::ListJobs => match args.get("cursor") {
@@ -103,49 +97,7 @@ impl Jobs {
                 };
                 self.owned_tool(tool, id, owner, args)
             }
-            Tool::ExecCommand => {
-                let command = args.get("command").and_then(Value::as_str);
-                let argv = args.get("argv").and_then(Value::as_array);
-                let cwd = args.get("cwd").and_then(Value::as_str);
-                let timeout = args
-                    .get("timeout_seconds")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(30)
-                    .min(300);
-                self.exec_command(owner, root, command, argv, cwd, timeout, policy)
-            }
-            Tool::TaskRun => {
-                let command = args.get("command").and_then(Value::as_str);
-                let argv = args.get("argv").and_then(Value::as_array);
-                let req_id = args.get("request_id").and_then(Value::as_str);
-                let cwd = args.get("cwd").and_then(Value::as_str);
-                let ephemeral_worktree = args
-                    .get("ephemeral_worktree")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let wait = args
-                    .get("wait_seconds")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(15)
-                    .min(60);
-                let timeout = args
-                    .get("timeout_seconds")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(120)
-                    .min(600);
-                self.task_run(
-                    owner,
-                    root,
-                    command,
-                    argv,
-                    req_id,
-                    cwd,
-                    ephemeral_worktree,
-                    wait,
-                    timeout,
-                    policy,
-                )
-            }
+            Tool::ExecCommand | Tool::TaskRun => self.dynamic_command(tool, owner, root, args, policy),
             _ => return tool_text(true, "Invalid job tool"),
         };
         match result {
@@ -194,14 +146,25 @@ impl Jobs {
         match tool {
             Tool::JobStatus => Ok(self.present_status(&receipt)),
             Tool::JobLogs => {
-                let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
-                let max_bytes = args
-                    .get("max_bytes")
-                    .and_then(Value::as_u64)
-                    .map(|n| n as usize)
-                    .unwrap_or(4096);
-                if offset > 0 || args.contains_key("max_bytes") {
-                    logs::excerpts_offset(&job, &receipt, offset, max_bytes)
+                let number = |key: &str, default: usize| -> io::Result<usize> {
+                    match args.get(key) {
+                        None => Ok(default),
+                        Some(value) => value.as_u64().and_then(|n| usize::try_from(n).ok())
+                            .filter(|n| *n <= i64::MAX as usize)
+                            .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Expected a nonnegative byte offset or limit")),
+                    }
+                };
+                let max_bytes = number("max_bytes", 4096)?.min(65536);
+                let separate = args.contains_key("stdout_offset") || args.contains_key("stderr_offset");
+                if separate {
+                    if args.contains_key("offset") {
+                        return Err(io::Error::new(ErrorKind::InvalidInput, "Use either offset or independent stream offsets"));
+                    }
+                    logs::excerpts_streams(
+                        &job, &receipt, number("stdout_offset", 0)?, number("stderr_offset", 0)?, max_bytes,
+                    )
+                } else if args.contains_key("offset") || args.contains_key("max_bytes") {
+                    logs::excerpts_offset(&job, &receipt, number("offset", 0)?, max_bytes)
                 } else {
                     logs::excerpts(&job, &receipt)
                 }
@@ -322,345 +285,141 @@ impl Jobs {
         let mut status = receipt.status();
         if receipt.state.active() && self.recovered.contains(&receipt.job_id) {
             status["state"] = json!("uncertain");
+            if let Some(fields) = status.as_object_mut() {
+                fields.remove("live_elapsed_ms");
+            }
             status["recovery"] =
                 json!("detached runner may still be active; awaiting final receipt");
         }
         status
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn exec_command(
+    /// Ad-hoc commands use the same signed, supervised runner as profiles.
+    /// Never launch a caller-selected program or Git operation in the gateway.
+    fn dynamic_command(
         &self,
+        tool: Tool,
         owner: &str,
         root: &JobRoot,
-        command: Option<&str>,
-        argv: Option<&Vec<Value>>,
-        cwd: Option<&str>,
-        timeout_seconds: u64,
+        args: &serde_json::Map<String, Value>,
         policy: JobPolicy<'_>,
     ) -> io::Result<Value> {
-        let canonical_cwd = resolve_cwd(root, cwd, policy)?;
-        let mut cmd = if let Some(argv) = argv {
-            let args_str: Vec<String> = argv
-                .iter()
-                .filter_map(Value::as_str)
-                .map(String::from)
-                .collect();
-            if args_str.is_empty() {
-                return Err(io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "argv must not be empty",
-                ));
-            }
-            let mut c = Command::new(&args_str[0]);
-            c.args(&args_str[1..]);
-            c
-        } else if let Some(cmd_str) = command {
-            let mut c = Command::new("sh");
-            c.arg("-c").arg(cmd_str);
-            c
-        } else {
-            return Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                "command or argv required",
-            ));
-        };
-
-        cmd.current_dir(&canonical_cwd);
-
-        let argv_repr = format!("{:?}{:?}", command, argv);
-        let mut hasher = Sha256::new();
-        hasher.update(argv_repr.as_bytes());
-        let argv_hash = format!("{:x}", hasher.finalize());
-
-        let eff_mode = if policy.full {
-            "full"
-        } else if policy.broad.is_some() {
-            "broad_yolo"
-        } else if policy.yolo {
-            "legacy_scoped_yolo"
-        } else {
-            "standard"
-        };
-
-        let max_output = 1024 * 1024;
-        let job_id = random_hex().unwrap_or_else(|_| "exec0000000000000000000000000000".into());
-
-        if let Ok(mut audit) = self.audit.lock() {
-            let _ = audit.record_job(
-                owner,
-                AuditAction::JobStart,
-                AuditPhase::Intent,
-                now(),
-                JobAuditInfo {
-                    job_id: &job_id,
-                    argv_sha256: &argv_hash,
-                    cwd: &canonical_cwd,
-                    timeout_seconds,
-                    max_output_bytes: max_output,
-                    state: "intent",
-                    stdout_bytes: 0,
-                    stderr_bytes: 0,
-                    yolo: policy.yolo,
-                    effective_mode: eff_mode,
-                },
-            );
+        let task = tool == Tool::TaskRun;
+        if args.keys().any(|key| {
+            !matches!(key.as_str(), "command" | "argv" | "cwd" | "timeout_seconds" | "request_id")
+                && !(task && matches!(key.as_str(), "wait_seconds" | "ephemeral_worktree"))
+        }) {
+            return Err(argument_error("Unexpected command argument"));
         }
-
-        let start = Instant::now();
-        let (status, stdout, stderr) = crate::linux_command::capture_both(
-            &mut cmd,
-            max_output,
-            Duration::from_secs(timeout_seconds),
-        )?;
-        let duration_ms = start.elapsed().as_millis() as u64;
-
-        if let Ok(mut audit) = self.audit.lock() {
-            let _ = audit.record_job(
-                owner,
-                AuditAction::JobStart,
-                if status.success() {
-                    AuditPhase::Success
-                } else {
-                    AuditPhase::Failure
-                },
-                now(),
-                JobAuditInfo {
-                    job_id: &job_id,
-                    argv_sha256: &argv_hash,
-                    cwd: &canonical_cwd,
-                    timeout_seconds,
-                    max_output_bytes: max_output,
-                    state: if status.success() {
-                        "completed"
-                    } else {
-                        "failed"
-                    },
-                    stdout_bytes: stdout.len(),
-                    stderr_bytes: stderr.len(),
-                    yolo: policy.yolo,
-                    effective_mode: eff_mode,
-                },
-            );
+        if !policy.full && policy.broad.is_none() && policy.workspace_mounts.is_none() {
+            return Err(io::Error::from(ErrorKind::Unsupported));
         }
-
-        Ok(json!({
-            "exit_code": status.code(),
-            "stdout": String::from_utf8_lossy(&stdout),
-            "stderr": String::from_utf8_lossy(&stderr),
-            "duration_ms": duration_ms,
-            "truncated": stdout.len() >= max_output || stderr.len() >= max_output
-        }))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn task_run(
-        &self,
-        owner: &str,
-        root: &JobRoot,
-        command: Option<&str>,
-        argv: Option<&Vec<Value>>,
-        req_id: Option<&str>,
-        cwd: Option<&str>,
-        ephemeral_worktree: bool,
-        wait_seconds: u64,
-        timeout_seconds: u64,
-        policy: JobPolicy<'_>,
-    ) -> io::Result<Value> {
-        if let Some(req_id) = req_id
-            && let Ok(Some(existing_id)) = self.store.get_request_id(req_id)
+        if let Some(value) = args.get("ephemeral_worktree")
+            && value.as_bool() != Some(false)
         {
-            return Ok(json!({
-                "task_id": existing_id,
-                "idempotent_replay": true,
-                "status": "replayed"
-            }));
+            return Err(argument_error("Automatic worktree creation is unavailable; use an explicitly approved workspace"));
         }
-
-        let canonical_cwd = resolve_cwd(root, cwd, policy)?;
-        let task_id = random_hex()?;
-        let nonce = &task_id[..8];
-
-        let worktree_info = if ephemeral_worktree {
-            let branch = format!("veyl-task-{}", nonce);
-            let wt_path = canonical_cwd.join(format!(".veyl-wt-{}", nonce));
-            let mut git_cmd = Command::new("git");
-            git_cmd
-                .arg("worktree")
-                .arg("add")
-                .arg("-b")
-                .arg(&branch)
-                .arg(&wt_path)
-                .arg("HEAD");
-            git_cmd.current_dir(&canonical_cwd);
-            match git_cmd.status() {
-                Ok(status) if status.success() => Some((branch, wt_path)),
-                _ => None,
+        let req = request_id(args)?;
+        let number = |key: &str, default: u64, min: u64, max: u64| -> io::Result<u64> {
+            match args.get(key) {
+                None => Ok(default),
+                Some(value) => value.as_u64().filter(|n| *n >= min && *n <= max)
+                    .ok_or_else(|| argument_error("Invalid command time budget")),
             }
-        } else {
-            None
         };
-
-        let effective_cwd = if let Some((_, ref wt_path)) = worktree_info {
-            wt_path.clone()
-        } else {
-            canonical_cwd.clone()
+        let timeout = number("timeout_seconds", if task { 120 } else { 30 }, 1, 300)?;
+        let wait = if task { number("wait_seconds", 15, 0, 60)?.min(20) } else { timeout.saturating_add(2).min(20) };
+        let cwd = match args.get("cwd") {
+            None => None,
+            Some(value) => Some(value.as_str().filter(|s| !s.is_empty()).ok_or_else(|| argument_error("Invalid working directory"))?),
         };
-
-        let mut cmd = if let Some(argv) = argv {
-            let args_str: Vec<String> = argv
-                .iter()
-                .filter_map(Value::as_str)
-                .map(String::from)
-                .collect();
-            if args_str.is_empty() {
-                return Err(io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "argv must not be empty",
-                ));
-            }
-            let mut c = Command::new(&args_str[0]);
-            c.args(&args_str[1..]);
-            c
-        } else if let Some(cmd_str) = command {
-            let mut c = Command::new("sh");
-            c.arg("-c").arg(cmd_str);
-            c
-        } else {
-            return Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                "command or argv required",
-            ));
-        };
-
-        cmd.current_dir(&effective_cwd);
-
-        let argv_repr = format!("{:?}{:?}", command, argv);
-        let mut hasher = Sha256::new();
-        hasher.update(argv_repr.as_bytes());
-        let argv_hash = format!("{:x}", hasher.finalize());
-
-        let eff_mode = if policy.full {
-            "full"
-        } else if policy.broad.is_some() {
-            "broad_yolo"
-        } else if policy.yolo {
-            "legacy_scoped_yolo"
-        } else {
-            "standard"
-        };
-
-        let max_output = 2 * 1024 * 1024;
-        let execution_timeout = wait_seconds.min(timeout_seconds);
-
-        if let Ok(mut audit) = self.audit.lock() {
-            let _ = audit.record_job(
-                owner,
-                AuditAction::JobStart,
-                AuditPhase::Intent,
-                now(),
-                JobAuditInfo {
-                    job_id: &task_id,
-                    argv_sha256: &argv_hash,
-                    cwd: &effective_cwd,
-                    timeout_seconds: execution_timeout,
-                    max_output_bytes: max_output,
-                    state: "intent",
-                    stdout_bytes: 0,
-                    stderr_bytes: 0,
-                    yolo: policy.yolo,
-                    effective_mode: eff_mode,
-                },
-            );
-        }
-
-        let start = Instant::now();
-        let (status, stdout, stderr) = crate::linux_command::capture_both(
-            &mut cmd,
-            max_output,
-            Duration::from_secs(execution_timeout),
-        )?;
-        let duration_ms = start.elapsed().as_millis() as u64;
-
-        let mut checkpoint_created = false;
-        if let Some((ref branch, ref wt_path)) = worktree_info {
-            if status.success() {
-                let mut add = Command::new("git");
-                add.arg("add").arg("-A").current_dir(wt_path);
-                let _ = add.status();
-                let mut commit = Command::new("git");
-                commit
-                    .arg("commit")
-                    .arg("-m")
-                    .arg(format!("checkpoint: task {}", task_id))
-                    .current_dir(wt_path);
-                if let Ok(c_status) = commit.status() {
-                    checkpoint_created = c_status.success();
-                }
-            }
-            let mut remove = Command::new("git");
-            remove
-                .arg("worktree")
-                .arg("remove")
-                .arg("--force")
-                .arg(wt_path)
-                .current_dir(&canonical_cwd);
-            let _ = remove.status();
-            let _ = std::fs::remove_dir_all(wt_path);
-            if !checkpoint_created {
-                let mut branch_del = Command::new("git");
-                branch_del
-                    .arg("branch")
-                    .arg("-D")
-                    .arg(branch)
-                    .current_dir(&canonical_cwd);
-                let _ = branch_del.status();
-            }
-        }
-
-        if let Ok(mut audit) = self.audit.lock() {
-            let _ = audit.record_job(
-                owner,
-                AuditAction::JobStart,
-                if status.success() {
-                    AuditPhase::Success
+        let (executable, argv) = match (args.get("command"), args.get("argv")) {
+            (Some(Value::String(command)), None) if !command.trim().is_empty() => (
+                "/usr/bin/sh".to_owned(), vec!["-c".to_owned(), command.clone()]
+            ),
+            (None, Some(Value::Array(values))) if !values.is_empty() => {
+                let strings = values.iter().map(|value| value.as_str().map(str::to_owned)
+                    .ok_or_else(|| argument_error("argv must contain only strings"))).collect::<io::Result<Vec<_>>>()?;
+                let program = &strings[0];
+                let executable = if Path::new(program).is_absolute() {
+                    program.clone()
+                } else if !program.is_empty() && !program.contains('/') && program != "." && program != ".." {
+                    format!("/usr/bin/{program}")
                 } else {
-                    AuditPhase::Failure
-                },
-                now(),
-                JobAuditInfo {
-                    job_id: &task_id,
-                    argv_sha256: &argv_hash,
-                    cwd: &effective_cwd,
-                    timeout_seconds: execution_timeout,
-                    max_output_bytes: max_output,
-                    state: if status.success() {
-                        "completed"
-                    } else {
-                        "failed"
-                    },
-                    stdout_bytes: stdout.len(),
-                    stderr_bytes: stderr.len(),
-                    yolo: policy.yolo,
-                    effective_mode: eff_mode,
-                },
-            );
+                    return Err(argument_error("Use an absolute executable or a name in /usr/bin"));
+                };
+                (executable, strings[1..].to_vec())
+            }
+            _ => return Err(argument_error("Specify exactly one nonempty command or argv")),
+        };
+        let mut profile = Profile {
+            executable, args: argv, timeout_seconds: timeout, max_output_bytes: MAX_OUTPUT,
+        };
+        profile.validate()?;
+        // Revalidate original approved handles before resolving a nested cwd.
+        root.identity().handle()?;
+        for mount in policy.workspace_mounts.unwrap_or_default() {
+            mount.identity().handle()?;
         }
-
-        if let Some(req_id) = req_id {
-            let _ = self.store.set_request_id(req_id, &task_id);
+        let canonical = resolve_cwd(root, cwd, policy)?;
+        let effective_root = JobRoot::open(&canonical).map_err(io::Error::other)?;
+        if canonical == root.path() && effective_root.identity() != root.identity() {
+            return Err(invalid());
         }
+        let mut mounts = Vec::new();
+        if let Some(approved) = policy.workspace_mounts {
+            for source in std::iter::once(root).chain(approved.iter()) {
+                if source.path() == canonical || mounts.iter().any(|item: &JobRoot| item.path() == source.path()) {
+                    continue;
+                }
+                let copy = JobRoot::open(source.path()).map_err(io::Error::other)?;
+                if copy.identity() != source.identity() {
+                    return Err(invalid());
+                }
+                mounts.push(copy);
+            }
+        }
+        let effective_policy = JobPolicy {
+            workspace_mounts: policy.workspace_mounts.map(|_| mounts.as_slice()),
+            ..policy
+        };
+        let (receipt, replay) = self.start(
+            owner, &effective_root, if task { "task_run".into() } else { "exec_command".into() },
+            profile, effective_policy, req,
+        )?;
+        let receipt = if wait > 0 && receipt.state.active() {
+            self.wait_for_end(owner, &receipt.job_id, Duration::from_secs(wait))?
+        } else { receipt };
+        let logs = logs::excerpts(&self.store.job(&receipt.job_id)?, &receipt)?;
+        let mut result = self.present_status(&receipt);
+        result["stdout"] = logs["stdout"].clone();
+        result["stderr"] = logs["stderr"].clone();
+        result["truncated"] = json!(logs["stdout_truncated"] == true || logs["stderr_truncated"] == true);
+        if let Some(ms) = receipt.execution_duration_ms {
+            result["duration_ms"] = json!(ms);
+        }
+        if replay {
+            result["idempotent_replay"] = json!(true);
+        }
+        if task {
+            result["task_id"] = json!(receipt.job_id);
+            result["ephemeral_worktree"] = json!(false);
+            result["checkpoint"] = json!(false);
+        }
+        Ok(result)
+    }
+}
 
-        Ok(json!({
-            "task_id": task_id,
-            "exit_code": status.code(),
-            "stdout": String::from_utf8_lossy(&stdout),
-            "stderr": String::from_utf8_lossy(&stderr),
-            "duration_ms": duration_ms,
-            "ephemeral_worktree": ephemeral_worktree,
-            "checkpoint": checkpoint_created,
-            "truncated": stdout.len() >= max_output || stderr.len() >= max_output
-        }))
+fn argument_error(message: &'static str) -> io::Error {
+    io::Error::new(ErrorKind::InvalidInput, message)
+}
+
+fn request_id(args: &serde_json::Map<String, Value>) -> io::Result<Option<&str>> {
+    match args.get("request_id") {
+        None => Ok(None),
+        Some(value) => value.as_str().filter(|id| !id.is_empty() && id.len() <= 64
+            && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'))
+            .map(Some).ok_or_else(|| argument_error("Invalid request_id")),
     }
 }
 
@@ -680,13 +439,7 @@ fn resolve_cwd(
         }
         _ => root.path().to_owned(),
     };
-    let canonical = std::fs::canonicalize(&target).or_else(|_| {
-        if target.exists() {
-            Ok(target)
-        } else {
-            Err(io::Error::from(ErrorKind::NotFound))
-        }
-    })?;
+    let canonical = std::fs::canonicalize(&target)?;
 
     if policy.full {
         return Ok(canonical);
@@ -694,16 +447,6 @@ fn resolve_cwd(
     if let Some(broad) = policy.broad {
         if broad.is_masked(&canonical) {
             return Err(io::Error::from(ErrorKind::PermissionDenied));
-        }
-        return Ok(canonical);
-    }
-    if policy.yolo {
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            for def in crate::protected_paths::OPTIONAL_DEFAULTS {
-                if canonical.starts_with(home.join(def)) {
-                    return Err(io::Error::from(ErrorKind::PermissionDenied));
-                }
-            }
         }
         return Ok(canonical);
     }

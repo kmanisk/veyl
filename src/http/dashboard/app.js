@@ -13,6 +13,38 @@ let logRequest = 0;
 const tabs = [...document.querySelectorAll('nav a[href^="#"]')];
 let activeTab = "health";
 let traceEnabled = false;
+let traceExpiryTimer;
+let liveInitialized = false;
+function clearTracePreviews() {
+  for (const cell of document.querySelectorAll("[data-trace-preview]")) {
+    cell.textContent = cell.dataset.safeSummary || "";
+    delete cell.dataset.tracePreview;
+  }
+  if (byId("detail-dialog").open && byId("detail-json").textContent.includes('"local_trace"')) {
+    byId("detail-dialog").close();
+  }
+}
+function commandPreview(record) {
+  if (typeof record?.target_preview === "string") return record.target_preview;
+  const args = record?.arguments;
+  if (!args) return null;
+  if (typeof args.command === "string") return args.command;
+  if (Array.isArray(args.argv)) return JSON.stringify(args.argv);
+  if (typeof args.profile === "string") return "Profile: " + args.profile;
+  return null;
+}
+function updateTraceState(trace, requested) {
+  clearTimeout(traceExpiryTimer);
+  traceEnabled = trace.enabled === true && Number.isFinite(trace.remaining_ms) &&
+    trace.remaining_ms > performance.now() - requested;
+  if (!traceEnabled) clearTracePreviews();
+  else traceExpiryTimer = setTimeout(() => {
+    traceEnabled = false;
+    clearTracePreviews();
+    byId("trace-toggle").textContent = "Capture local command trace";
+    byId("trace-state").textContent = "Trace expired";
+  }, Math.max(0, trace.remaining_ms - (performance.now() - requested)));
+}
 byId("trace-controls").hidden = remote;
 byId("diagnostics-nav").hidden = remote;
 byId("diagnostics-form").addEventListener("submit",async event=>{
@@ -32,11 +64,7 @@ byId("trace-toggle").addEventListener("click", async () => {
   try {
     const state = await request("trace", {enabled: !traceEnabled, confirm:true});
     traceEnabled = state.enabled;
-    if (traceEnabled && !byId("live-refresh").checked) {
-      byId("live-refresh").checked = true;
-      byId("live-refresh").dispatchEvent(new Event("change"));
-    }
-    await loadAudit();
+    await loadActivity();
   } catch(error) { notice.textContent=error.message; }
 });
 const themeModes = ["system", "dark", "light"];
@@ -122,7 +150,15 @@ async function request(path, body) {
 function showPair() {
   byId("diagnostics-output").textContent="Select a subsystem and inspect.";
   if (byId("detail-dialog").open) byId("detail-dialog").close();
+  activityRequest++;
+  byId("audit-ledger").open = false;
+  byId("audit-rows").replaceChildren();
   byId("live-refresh").checked = false;
+  liveInitialized = false;
+  clearTimeout(liveTimer);
+  clearTimeout(traceExpiryTimer);
+  traceEnabled = false;
+  clearTracePreviews();
   csrf = undefined;
   if (remote) sessionStorage.removeItem(proofKey);
   byId("dashboard").hidden = true;
@@ -296,7 +332,7 @@ async function refresh() {
   byId("controls").hidden = false;
   notice.textContent = "";
   summary("metrics", [
-    ["MCP listener", state.listener], ["MCP sessions", state.sessions], ["TCP connections", state.connections],
+    ["MCP listener", state.listener], ["MCP sessions", state.sessions], ["TCP connections", state.connections], ["Active MCP calls", state.active_calls],
     ["Memory", state.rss_kib == null ? "Unavailable" : (state.rss_kib / 1024).toFixed(1) + " MiB"],
     ["CPU", state.cpu_percent == null ? "Refresh for sample" : state.cpu_percent.toFixed(2) + "%"],
     ["Audit", state.audit || "Unconfigured"]
@@ -321,6 +357,41 @@ async function refresh() {
     ["Additional read-only paths", describe(paths.extra_readonly)],
   ]);
   const modes = { standard: "Standard", scoped_yolo: "Scoped YOLO (legacy)", broad_yolo: "YOLO", yolo: "YOLO", full: "FULL", disabled: "Disabled" };
+  const headerStatus = byId("header-status");
+  if (headerStatus) {
+    headerStatus.hidden = false;
+    headerStatus.replaceChildren();
+    add(add(headerStatus, "span", "Active calls: "), "strong", state.active_calls ?? 0).id = "header-active-count";
+    add(headerStatus, "span", state.clients.map(c => `${c.id}: ${modes[c.mode] || c.mode}`).join(" · "));
+  }
+  const maskedBody = byId("protected-masked-rows");
+  if (maskedBody && paths) {
+    maskedBody.replaceChildren();
+    const allMasked = [
+      ...(paths.default_masked || []).map(p => ["~/" + p, "Masked (hidden)", "Default preset"]),
+      ...(paths.extra_masked || []).map(p => [p, "Masked (hidden)", "Configured rule"])
+    ];
+    for (const [p, enf, scope] of allMasked) {
+      const tr = add(maskedBody, "tr", "");
+      add(tr, "td", p);
+      add(tr, "td", enf);
+      add(tr, "td", scope);
+    }
+  }
+  const readonlyBody = byId("protected-readonly-rows");
+  if (readonlyBody && paths) {
+    readonlyBody.replaceChildren();
+    const allReadonly = [
+      ...(paths.default_readonly || []).map(p => ["~/" + p, "Read-Only", "Default preset"]),
+      ...(paths.extra_readonly || []).map(p => [p, "Read-Only", "Configured rule"])
+    ];
+    for (const [p, enf, scope] of allReadonly) {
+      const tr = add(readonlyBody, "tr", "");
+      add(tr, "td", p);
+      add(tr, "td", enf);
+      add(tr, "td", scope);
+    }
+  }
   table("client-rows", state.clients.map(client => [
     client.id, (modes[client.mode] || client.mode) + (client.disabled ? " (disabled)" : "") + (client.expired ? " (expired)" : ""),
     client.connections, [
@@ -350,13 +421,7 @@ async function refresh() {
     add(byId("job-rows"), "li", "Job supervision is unavailable.");
     byId("logs").hidden = true;
   }
-  if (state.audit === "verified") {
-    tasks.push(loadAudit());
-  } else {
-    table("audit-rows", []);
-    byId("audit-empty").hidden = false;
-    byId("audit-empty").textContent = state.audit ? "Audit ledger unavailable." : "Audit ledger is unconfigured.";
-  }
+  tasks.push(loadActivity());
   byId("skill-panel").hidden = !state.skills_configured;
   byId("skills-nav").hidden = !state.skills_configured;
   selectTab(location.hash.slice(1) || activeTab);
@@ -371,6 +436,11 @@ async function refresh() {
   await Promise.allSettled(tasks).then(results => {
     for (const result of results) if (result.status === "rejected") notice.textContent = result.reason.message;
   });
+  if (!liveInitialized && !byId("dashboard").hidden) {
+    liveInitialized = true;
+    byId("live-refresh").checked = true;
+    byId("live-refresh").dispatchEvent(new Event("change"));
+  }
 }
 
 async function loadJobs(cursor = "") {
@@ -395,7 +465,7 @@ async function loadJobs(cursor = "") {
       ? (job.exit_code != null && job.exit_code !== 0 || job.signal != null && job.signal !== 0
         ? "failed" : job.exit_code === 0 ? "completed" : "uncertain")
       : job.state;
-    const details = add(row, "span", [job.created_at ? new Date(job.created_at * 1000).toLocaleString() : "", job.client, job.cwd, job.executable || job.profile].filter(Boolean).join(" · "));
+    const details = add(row, "span", [job.created_at ? new Date(job.created_at * 1000).toLocaleString() : "", job.client, job.cwd, job.executable || job.profile, job.execution_duration_ms != null ? "Job duration " + formatDuration(job.execution_duration_ms) : job.live_elapsed_ms != null ? "Live job elapsed " + formatDuration(job.live_elapsed_ms) : ""].filter(Boolean).join(" · "));
     details.className = "job-details";
     button(row, "Details", async () => showDetails(job));
     button(row, "Logs", async () => {
@@ -530,37 +600,102 @@ byId("server-grant").addEventListener("submit", event => {
   editServer(action, { client, id, tool }).catch(error => notice.textContent = error.message);
 });
 
-async function loadAudit() {
-  const { events } = await request("audit");
+function formatDuration(ms) {
+  if (ms == null) return "—";
+  if (ms === 0) return "<1 ms";
+  if (ms < 1000) return ms + " ms";
+  if (ms < 60000) return (ms / 1000).toFixed(3) + " s";
+  return Math.floor(ms / 60000) + "m " + ((ms % 60000) / 1000).toFixed(3) + "s";
+}
+
+const activityClock = new Intl.DateTimeFormat("en-US", {
+  hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true
+});
+
+function formatLocalTime(unixSec) {
+  return Number.isFinite(unixSec) ? activityClock.format(unixSec * 1000) : "—";
+}
+
+let activityRequest = 0;
+async function loadActivity() {
+  const generation = ++activityRequest;
+  const funnel = byId("show-funnel-admission").checked;
+  const data = await request(funnel ? "activity?funnel=1" : "activity");
+  let previews = new Map();
   if (!remote) {
     try {
-      const trace = await request("trace");
-      traceEnabled = trace.enabled;
+      const requested = performance.now();
+      const trace = await request(traceEnabled ? "trace" : "trace?metadata=1");
+      if (generation !== activityRequest) return;
+      updateTraceState(trace, requested);
+      if (traceEnabled) previews = new Map(trace.events.map(event => [event.call_id, commandPreview(event)]));
       byId("trace-toggle").textContent = traceEnabled ? "Stop and clear local trace" : "Capture local command trace";
       byId("trace-toggle").disabled = trace.busy;
       byId("trace-state").textContent = traceEnabled ? "Local trace active · up to 24 calls" : trace.busy ? "Another local session owns the trace" : "Trace off";
-      events.push(...trace.events);
-      events.sort((a,b) => a.time-b.time);
-    } catch(error) { byId("trace-state").textContent = "Trace unavailable"; }
+    } catch (error) {
+      if (generation === activityRequest) {
+        traceEnabled = false;
+        clearTracePreviews();
+        byId("trace-state").textContent = "Trace unavailable";
+      }
+    }
   }
-  byId("audit-empty").hidden = events.length !== 0;
-  byId("audit-empty").textContent = "No audit events recorded.";
+  if (generation !== activityRequest) return;
+  byId("activity-active").textContent = data.active_calls + " active calls";
+  const headerCount = byId("header-active-count");
+  if (headerCount) headerCount.textContent = data.active_calls;
+  byId("audit-empty").hidden = data.events.length !== 0;
   const body = byId("audit-rows");
   body.replaceChildren();
-  for (const event of events.toReversed()) {
+
+  for (const event of data.events) {
     const tr = add(body, "tr", "");
+    if (event.call_id) tr.dataset.callId = event.call_id;
     tr.dataset.search = JSON.stringify(event);
-    const target = event.source === "live_trace" ? [event.duration_ms == null ? "" : event.duration_ms + " ms", JSON.stringify(event.arguments)].filter(Boolean).join(" · ").slice(0,180) : event.cwd || event.mode || "—";
-    for (const value of [event.time == null ? "—" : new Date(event.time * 1000).toLocaleString(), event.tool ?? "—", event.client ?? "—", event.phase ?? "—", target]) add(tr, "td", value);
-    tr.children[3].className = "event-phase";
-    tr.children[3].dataset.phase = event.phase;
-    button(add(tr, "td", ""), "Details", async () => showDetails(event));
+    const status = event.status === "failure" ? "failed" : event.status;
+    add(tr, "td", formatLocalTime(event.time));
+    add(tr, "td", event.tool);
+    add(tr, "td", event.client || "—");
+
+    const pill = add(add(tr, "td", ""), "span", status.toUpperCase());
+    pill.className = "status-pill";
+    pill.dataset.status = status;
+    add(tr, "td", formatDuration(event.duration_ms));
+    const preview = traceEnabled && previews.get(event.call_id);
+    const summaryCell = add(tr, "td", preview || event.target_summary);
+    if (preview) {
+      summaryCell.dataset.tracePreview = "true";
+      summaryCell.dataset.safeSummary = event.target_summary;
+    }
+    button(add(tr, "td", ""), "Details", async () => {
+      let trace;
+      if (!remote && traceEnabled && event.call_id) {
+        const capture = await request("trace");
+        trace = capture.events.find(record => record.call_id === event.call_id);
+      }
+      if (!byId("dashboard").hidden) showDetails(trace ? { ...event, local_trace: trace } : event);
+    });
   }
   filterRows("audit-rows", byId("audit-filter").value);
 }
 
+byId("show-funnel-admission").addEventListener("change", () =>
+  loadActivity().catch(error => notice.textContent = error.message));
+byId("audit-ledger").addEventListener("toggle", async (event) => {
+  const output = byId("audit-ledger-records");
+  if (!event.target.open) {
+    output.textContent = "";
+    return;
+  }
+  try {
+    const ledger = await request("audit");
+    if (event.target.open) output.textContent = JSON.stringify(ledger.events, null, 2);
+  } catch (error) { output.textContent = error.message; }
+});
+
 let liveBusy = false;
 let liveTimer;
+let lastSlowRefresh = 0;
 byId("live-refresh").addEventListener("change", () => {
   clearInterval(liveTimer);
   if (!byId("live-refresh").checked) return;
@@ -569,14 +704,18 @@ byId("live-refresh").addEventListener("change", () => {
     if (document.hidden || byId("dashboard").hidden || liveBusy) return;
     if (!["audit", "health", "jobs"].includes(activeTab)) return;
     if (activeTab === "jobs" && (!byId("logs").hidden || byId("job-controls").hidden)) return;
+    if (activeTab !== "audit" && performance.now() - lastSlowRefresh < 3000) return;
+    if (activeTab !== "audit") lastSlowRefresh = performance.now();
     liveBusy = true;
     try {
-      if (activeTab === "audit") await loadAudit();
+      if (activeTab === "audit") await loadActivity();
       else if (activeTab === "jobs") await loadJobs(currentJobCursor);
       else {
         const state = await request("status");
+        const headerCount = byId("header-active-count");
+        if (headerCount) headerCount.textContent = state.active_calls ?? 0;
         summary("metrics", [
-          ["MCP listener", state.listener], ["MCP sessions", state.sessions], ["TCP connections", state.connections],
+          ["MCP listener", state.listener], ["MCP sessions", state.sessions], ["TCP connections", state.connections], ["Active MCP calls", state.active_calls],
           ["Memory", state.rss_kib == null ? "Unavailable" : (state.rss_kib / 1024).toFixed(1) + " MiB"],
           ["CPU", state.cpu_percent == null ? "Refresh for sample" : state.cpu_percent.toFixed(2) + "%"],
           ["Audit", state.audit || "Unconfigured"]
@@ -584,7 +723,7 @@ byId("live-refresh").addEventListener("change", () => {
       }
     } catch (error) { notice.textContent = error.message; }
     finally { liveBusy = false; }
-  }, 3000);
+  }, 1000);
 });
 
 async function pairBrowser(token) {

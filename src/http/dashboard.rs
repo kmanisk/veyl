@@ -34,7 +34,8 @@ pub(super) struct Admin {
     config: PathBuf,
     sessions: Mutex<HashMap<String, AdminSession>>,
     cpu_sample: Mutex<Option<(Instant, u64)>>,
-    pub(super) trace: std::sync::Mutex<super::trace::Trace>,
+    pub(super) trace: Arc<std::sync::Mutex<super::trace::Trace>>,
+    pub(super) activity: Arc<super::activity::Activity>,
 }
 
 struct AdminSession {
@@ -56,7 +57,8 @@ impl Admin {
             config,
             sessions: Mutex::new(HashMap::new()),
             cpu_sample: Mutex::new(None),
-            trace: std::sync::Mutex::new(super::trace::Trace::default()),
+            trace: Arc::default(),
+            activity: Arc::default(),
         }
     }
 }
@@ -353,7 +355,7 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         if remote || !csrf_matches { return forbidden(); }
         if method == Method::GET {
             return match admin.trace.lock() {
-                Ok(mut trace) => ok(trace.view(&csrf)),
+                Ok(mut trace) => ok(trace.view(&csrf, parameter(&query, "metadata") != Some("1"))),
                 Err(_) => unavailable(),
             };
         }
@@ -362,7 +364,13 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             let Some(enabled) = data["enabled"].as_bool() else { return bad(); };
             if data["confirm"] != true { return forbidden(); }
             return match admin.trace.lock() {
-                Ok(mut trace) => if trace.set(&csrf, enabled) { ok(trace.view(&csrf)) } else { simple(Status::CONFLICT, "Trace belongs to another local session") },
+                Ok(mut trace) => {
+                    if !trace.set(&csrf, enabled) {
+                        return simple(Status::CONFLICT, "Trace belongs to another local session");
+                    }
+                    trace.schedule_expiry(&admin.trace);
+                    ok(trace.view(&csrf, false))
+                }
                 Err(_) => unavailable(),
             };
         }
@@ -483,6 +491,10 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             .map(str::to_owned)
             .collect();
         return manage(admin, params, crate::skills_cli::manage).await;
+    }
+    if method == Method::GET && path == "/api/dashboard/activity" {
+        let include_funnel = parameter(&query, "funnel") == Some("1");
+        return admin.activity.view(include_funnel).map_or_else(unavailable, ok);
     }
     if method == Method::GET && path == "/api/dashboard/audit" {
         let result = with_policy(admin, |settings| {
@@ -618,19 +630,15 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
     let jobs_configured = state.jobs.is_some();
     let listener = state.addr;
     let active_tcp = super::MAX_CONNECTIONS - state.mcp_connections.available_permits();
+    let active_calls = admin.activity.active_count();
     let config = admin.config.clone();
     with_policy(admin, move |settings| {
         let clients: Vec<_> = settings.clients.iter().map(|client| json!({
             "id": client.id,
-            "disabled": client.disabled || client.mode == ExecutionMode::Disabled,
-            "mode": match client.mode {
-                ExecutionMode::Standard => "standard",
-                ExecutionMode::PersistentYolo => "scoped_yolo",
-                ExecutionMode::BroadYolo => "broad_yolo",
-                ExecutionMode::Full => "full",
-                _ => "disabled",
-            },
-            "grants": client.actions.iter().map(|action| format!("{action:?}")).collect::<Vec<_>>(),
+            "disabled": client.is_disabled(),
+            "mode": client.mode.public_label(),
+            "native_tool_preset": client.native_tool_preset,
+            "grants": Tool::ALL.into_iter().filter(|tool| client.tools.contains(tool)).map(Tool::name).collect::<Vec<_>>(),
             "connections": counts.get(&client.id).copied().unwrap_or_default(),
             "skills": client.skills,
             "upstreams": client.upstreams.servers,
@@ -648,7 +656,7 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
         let protected = |kind| settings.protected_paths.selected(kind).iter()
             .map(|rule| &rule.path).collect::<Vec<_>>();
         Ok(json!({
-            "clients": clients, "sessions": connected, "connections": active_tcp, "cpu_percent": cpu_percent, "rss_kib": rss_kib,
+            "clients": clients, "sessions": connected, "connections": active_tcp, "active_calls": active_calls, "cpu_percent": cpu_percent, "rss_kib": rss_kib,
             "csrf": csrf, "listener": listener.to_string(), "audit": audit,
             "jobs_configured": jobs_configured, "job_state_dir": settings.job_state_path(), "audit_log": settings.audit_log,
             "version": env!("CARGO_PKG_VERSION"), "skills_configured": settings.skills.is_some(),

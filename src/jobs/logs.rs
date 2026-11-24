@@ -81,17 +81,38 @@ pub(super) fn excerpts_offset(
     offset: usize,
     max_bytes: usize,
 ) -> io::Result<Value> {
+    let mut value = excerpts_streams(job, receipt, offset, offset, max_bytes)?;
+    let stdout = value["next_stdout_offset"].as_u64().ok_or_else(super::invalid)?;
+    let stderr = value["next_stderr_offset"].as_u64().ok_or_else(super::invalid)?;
+    let object = value.as_object_mut().ok_or_else(super::invalid)?;
+    for key in ["stdout_offset", "stderr_offset", "next_stdout_offset", "next_stderr_offset"] {
+        object.remove(key);
+    }
+    value["offset"] = json!(offset);
+    value["next_offset"] = json!(stdout.max(stderr));
+    Ok(value)
+}
+
+/// Independent byte cursors prevent a busy stream from skipping delayed
+/// output on the other stream. Text remains a lossy UTF-8 preview.
+pub(super) fn excerpts_streams(
+    job: &JobDir<'_>,
+    receipt: &Receipt,
+    stdout_offset: usize,
+    stderr_offset: usize,
+    max_bytes: usize,
+) -> io::Result<Value> {
     let limit = max_bytes.min(receipt.max_output_bytes);
-    let stdout = excerpt_offset(job, "stdout.log", offset, limit, receipt.stdout_truncated)?;
-    let stderr = excerpt_offset(job, "stderr.log", offset, limit, receipt.stderr_truncated)?;
-    let ended = !receipt.state.active();
-    let bytes_read = stdout.0.len().max(stderr.0.len());
+    let stdout = excerpt_offset(job, "stdout.log", stdout_offset, limit, receipt.stdout_truncated)?;
+    let stderr = excerpt_offset(job, "stderr.log", stderr_offset, limit, receipt.stderr_truncated)?;
+    let next_stdout = stdout_offset.checked_add(stdout.2).ok_or_else(super::invalid)?;
+    let next_stderr = stderr_offset.checked_add(stderr.2).ok_or_else(super::invalid)?;
     Ok(json!({
         "job_id": receipt.job_id,
         "stdout": stdout.0, "stderr": stderr.0,
-        "offset": offset,
-        "next_offset": offset + bytes_read,
-        "ended": ended,
+        "stdout_offset": stdout_offset, "stderr_offset": stderr_offset,
+        "next_stdout_offset": next_stdout, "next_stderr_offset": next_stderr,
+        "ended": !receipt.state.active(),
         "stdout_truncated": stdout.1, "stderr_truncated": stderr.1,
     }))
 }
@@ -102,19 +123,20 @@ fn excerpt_offset(
     offset: usize,
     limit: usize,
     truncated: bool,
-) -> io::Result<(String, bool)> {
+) -> io::Result<(String, bool, usize)> {
     let mut file = match job.open_log(name, OFlags::RDONLY) {
         Ok(file) => file,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((String::new(), false)),
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((String::new(), false, 0)),
         Err(err) => return Err(err),
     };
     if offset > 0 {
         use std::io::Seek;
-        let _ = file.seek(std::io::SeekFrom::Start(offset as u64));
+        file.seek(std::io::SeekFrom::Start(offset as u64))?;
     }
     let mut bytes = Vec::new();
     file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
     let truncated = truncated || bytes.len() > limit;
     bytes.truncate(limit);
-    Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))
+    let consumed = bytes.len();
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated, consumed))
 }

@@ -30,6 +30,7 @@ pub struct Client {
     pub root: PathBuf,
     pub actions: Vec<Action>,
     pub(crate) tools: HashSet<Tool>,
+    pub native_tool_preset: bool,
     pub mode: ExecutionMode,
     pub disabled: bool,
     #[cfg(target_os = "linux")]
@@ -48,6 +49,12 @@ pub struct Client {
     pub job_root: Option<JobRoot>,
     #[cfg(target_os = "linux")]
     pub job_extra_roots: Vec<JobRoot>,
+}
+
+impl Client {
+    pub fn is_disabled(&self) -> bool {
+        self.disabled || self.mode == ExecutionMode::Disabled
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -225,43 +232,14 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         if !root.is_dir() {
             return Err("client root must be an existing directory".into());
         }
-        let allowed = entry
-            .get("tools")
-            .and_then(Value::as_array)
-            .ok_or("client tools must be an array")?;
-        let mut actions = Vec::new();
-        let mut names = HashSet::new();
-        let mut seen_instruction_run = false;
-        for tool in allowed {
-            let label = tool.as_str().ok_or("unsupported tool grant")?;
-            // The instruction package format defines no executable entry point.
-            if label == "skills_run" && document.get("skills_dir").is_some() {
-                if seen_instruction_run {
-                    return Err("duplicate tool grant".into());
-                }
-                seen_instruction_run = true;
-                continue;
-            }
-            let tool = Tool::parse(label).ok_or("unsupported tool grant")?;
-            if matches!(tool, Tool::SkillsList | Tool::SkillsRead)
-                && (!cfg!(target_os = "linux") || document.get("skills_dir").is_none())
-            {
-                return Err("Skill tools require a configured Linux skills directory".into());
-            }
-            if !names.insert(tool) {
-                return Err("duplicate tool grant".into());
-            }
-            if !actions.contains(&tool.action()) {
-                actions.push(tool.action());
-            }
-        }
-        if !actions.is_empty() {
-            actions.push(Action::ListTools);
-        }
+        let native_tool_preset = entry["native_tool_preset"] == true;
+        let (names, actions) = effective_tools(
+            entry,
+            native_tool_preset,
+            has_job_profiles && cfg!(target_os = "linux"),
+            document.get("skills_dir").is_some() && cfg!(target_os = "linux"),
+        )?;
         let has_job_grant = actions.iter().any(|action| action.is_job());
-        if has_job_grant && (!has_job_profiles || !cfg!(target_os = "linux")) {
-            return Err("Job grants require private Linux job configuration".into());
-        }
         #[cfg(target_os = "linux")]
         let mutation_root = if actions.iter().any(|action| {
             matches!(
@@ -342,6 +320,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             root,
             actions,
             tools: names,
+            native_tool_preset,
             mode: mode.into(),
             disabled: entry["disabled"].as_bool().unwrap_or(false),
             #[cfg(target_os = "linux")]
@@ -442,6 +421,59 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         }
     }
     Ok(settings)
+}
+
+fn effective_tools(
+    entry: &Value,
+    preset: bool,
+    jobs: bool,
+    skills: bool,
+) -> Result<(HashSet<Tool>, Vec<Action>), String> {
+    let allowed = entry["tools"].as_array().ok_or("client tools must be an array")?;
+    let mut tools = HashSet::new();
+    let mut seen_instruction_run = false;
+    for grant in allowed {
+        let name = grant.as_str().ok_or("unsupported tool grant")?;
+        // Older skill manifests tolerated this reserved, non-executable name.
+        if name == "skills_run" && skills && !seen_instruction_run {
+            seen_instruction_run = true;
+            continue;
+        }
+        let tool = Tool::parse(name).ok_or("unsupported tool grant")?;
+        if matches!(tool, Tool::SkillsList | Tool::SkillsRead) && !skills {
+            return Err("Skill tools require a configured Linux skills directory".into());
+        }
+        if tool.action().is_job() && !jobs {
+            return Err("Job grants require private Linux job configuration".into());
+        }
+        if !tools.insert(tool) {
+            return Err("duplicate tool grant".into());
+        }
+    }
+    let mut denied = HashSet::new();
+    if let Some(value) = entry.get("deny_tools") {
+        for denial in value.as_array().ok_or("deny_tools must be an array")? {
+            let tool = denial.as_str().and_then(Tool::parse).ok_or("unsupported tool denial")?;
+            if !denied.insert(tool) {
+                return Err("duplicate tool denial".into());
+            }
+        }
+    }
+    if preset {
+        tools.extend(Tool::ALL.into_iter().filter(|tool| tool.in_yolo_preset(jobs, skills)));
+    }
+    // A denial covers every name that can perform the denied action.
+    tools.retain(|tool| !denied.iter().any(|denial| denial.action() == tool.action()));
+    let mut actions = Vec::new();
+    for tool in Tool::ALL.into_iter().filter(|tool| tools.contains(tool)) {
+        if !actions.contains(&tool.action()) {
+            actions.push(tool.action());
+        }
+    }
+    if !actions.is_empty() {
+        actions.push(Action::ListTools);
+    }
+    Ok((tools, actions))
 }
 
 pub(crate) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
@@ -567,8 +599,7 @@ pub fn authenticate(clients: &[Client], header: Option<&HeaderValue>, now: u64) 
         let matched: bool = client.digest.ct_eq(&candidate).into();
         if matched
             && now < client.expires_at
-            && !client.disabled
-            && client.mode != ExecutionMode::Disabled
+            && !client.is_disabled()
         {
             found = Some(index);
         }

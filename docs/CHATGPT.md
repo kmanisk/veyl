@@ -8,7 +8,7 @@ or 10000 for its public MCP route. See [Tailscale Funnel](https://tailscale.com/
 
 ## Configure the dedicated client
 
-Use an existing approved Broad YOLO client such as `chatgpt`. Keep only
+Use an existing approved YOLO client such as `chatgpt`. Keep only
 the required tool and job grants on this client. Give it a separate
 public credential using a secret manager or local setup script. Generate
 32 random bytes encoded as 64 lowercase hexadecimal characters. Store
@@ -83,7 +83,7 @@ veyl serve funnel-apply --config "$state/clients.json" --confirm
 veyl serve inspect --config "$state/clients.json"
 ```
 
-Activation preflights Broad YOLO and conditionally adds the public flag
+Activation preflights YOLO and conditionally adds the public flag
 to the existing owned Veyl MCP port. The dashboard's private route and
 other services' flags are preserved. From outside the tailnet, verify
 that the bare endpoint with no credential is rejected. Authenticate
@@ -136,7 +136,7 @@ the private pair. To revoke a
 credential while preserving the route, atomically replace the public
 verifier and publish a new private credential file. The next public
 request checks the new verifier, including requests on old sessions.
-Downgrading the connector from Broad YOLO also denies its public access.
+Selecting Standard or FULL for the connector denies its public access.
 Changing the public client identity or secret-path policy requires a
 Veyl restart. Treat a copied or shared connector URL as a leaked key and
 rotate it.

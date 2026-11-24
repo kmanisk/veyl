@@ -11,6 +11,7 @@
 <body>
 <header class="masthead">
   <div class="brand"><img src="/dashboard/icon.svg" alt="" width="30" height="30"> Veyl <small>operations</small></div>
+  <div id="header-status" class="header-status muted" hidden></div>
   <div class="header-controls" id="controls" hidden>
     <button id="theme" type="button">Theme: system</button>
     <label class="live-toggle"><input type="checkbox" id="live-refresh"> Live refresh</label>
@@ -147,18 +148,23 @@
         </details>
       </section>
       <section aria-labelledby="audit" class="panel">
-        <h2 id="audit">Activity stream / audit events</h2>
+        <h2 id="audit">MCP activity</h2>
         <div class="row" id="trace-controls" hidden><button id="trace-toggle" type="button">Capture local command trace</button><span id="trace-state" class="muted"></span></div>
-        <p class="muted">Verified audit metadata is always available. Optional local tracing shows command arguments and JSON results for supported tools.</p>
+        <p class="muted">Live MCP elapsed time updates every second while this view is visible. Enable local command trace to show command arguments here; it may contain secrets. Job execution durations appear separately in Jobs.</p>
+        <div class="row"><span id="activity-active">0 active calls</span><label><input id="show-funnel-admission" type="checkbox"> Show Funnel admissions</label></div>
         <label for="audit-filter">Filter events</label>
         <input id="audit-filter" type="search" placeholder="Client, operation, phase…" autocomplete="off">
         <div class="table">
           <table>
-            <thead><tr><th scope="col">Time</th><th scope="col">Operation</th><th scope="col">Client</th><th scope="col">Phase</th><th scope="col">Target / mode</th><th scope="col">Details</th></tr></thead>
+            <thead><tr><th scope="col">Time</th><th scope="col">Tool / Event</th><th scope="col">Client</th><th scope="col">Status</th><th scope="col">Elapsed</th><th scope="col">Command / Summary</th><th scope="col">Details</th></tr></thead>
             <tbody id="audit-rows"></tbody>
           </table>
         </div>
-        <p id="audit-empty" hidden>No audit events recorded.</p>
+        <p id="audit-empty" hidden>No activity in this gateway process.</p>
+        <details id="audit-ledger">
+          <summary>Verified security audit records</summary>
+          <pre id="audit-ledger-records"></pre>
+        </details>
       </section>
       <section aria-labelledby="configuration" class="panel">
         <h2 id="configuration">Configuration and service</h2>
@@ -167,7 +173,31 @@
       </section>
       <section aria-labelledby="protection" class="panel">
         <h2 id="protection">Broad YOLO protected paths</h2>
-        <dl id="protected-summary" class="metrics"></dl>
+        <p class="muted">Active isolation mode, system protection boundaries, credential masks, and read-only invariants.</p>
+        <div class="protection-grid">
+          <div class="section-card">
+            <h3>State &amp; runtime directories</h3>
+            <dl id="protected-summary" class="metrics"></dl>
+          </div>
+          <div class="section-card">
+            <h3>Masked user files &amp; credentials</h3>
+            <div class="table">
+              <table>
+                <thead><tr><th scope="col">Protected path</th><th scope="col">Enforcement</th><th scope="col">Scope</th></tr></thead>
+                <tbody id="protected-masked-rows"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="section-card">
+            <h3>Read-only system &amp; hook paths</h3>
+            <div class="table">
+              <table>
+                <thead><tr><th scope="col">Protected path</th><th scope="col">Enforcement</th><th scope="col">Scope</th></tr></thead>
+                <tbody id="protected-readonly-rows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </section>
     </section>
   </div>

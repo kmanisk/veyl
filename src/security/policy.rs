@@ -1,7 +1,7 @@
-//! Pure, fail-closed authorization rules for the future trusted service.
+//! Pure, fail-closed authorization rules for the trusted gateway.
 //!
 //! This module does not authenticate a caller, verify a lease signature, or
-//! elevate processes. A future trusted admission boundary must populate
+//! elevate processes. The trusted admission boundary must populate
 //! `PolicyInput` only from *verified* identity and operator-controlled grants.
 //! It must never copy fields from untrusted MCP request parameters.
 
@@ -63,6 +63,16 @@ pub enum ExecutionMode {
 }
 
 impl ExecutionMode {
+    /// Public mode names. Older scoped authorizations use Standard's
+    /// workspace scope and explicit grants until the operator migrates them.
+    pub fn public_label(self) -> &'static str {
+        match self {
+            Self::BroadYolo => "yolo",
+            Self::Full => "full",
+            _ => "standard",
+        }
+    }
+
     pub fn audit_mode(self) -> Option<&'static str> {
         match self {
             Self::PersistentYolo => Some("yolo"),

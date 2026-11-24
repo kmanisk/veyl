@@ -56,6 +56,7 @@ pub(crate) fn normalize(mut args: Vec<OsString>) -> Result<Vec<OsString>, String
         args.first().and_then(|arg| arg.to_str()),
         Some(
             "mode"
+                | "yolo"
                 | "dashboard"
                 | "serve"
                 | "skills"
@@ -123,10 +124,6 @@ pub(crate) fn diagnostics(args: &[OsString]) -> Result<(), String> {
         return Ok(());
     }
     let enable = action == "grant";
-    if granted == enable && pending.is_none() {
-        println!("client={client} system_inspect={enable}");
-        return Ok(());
-    }
     let mut document = parse_document(&bytes)?;
     let entry = document["clients"]
         .as_array_mut()
@@ -134,10 +131,24 @@ pub(crate) fn diagnostics(args: &[OsString]) -> Result<(), String> {
         .iter_mut()
         .find(|entry| entry["id"].as_str() == Some(client))
         .ok_or("Unknown client")?;
+    let before = entry.clone();
     let tools = entry["tools"].as_array_mut().ok_or("Invalid tool grants")?;
     tools.retain(|tool| tool.as_str() != Some("system_inspect"));
     if enable {
         tools.push("system_inspect".into());
+    }
+    if let Some(denials) = entry.get_mut("deny_tools").and_then(serde_json::Value::as_array_mut) {
+        denials.retain(|tool| tool.as_str() != Some("system_inspect"));
+    }
+    if !enable {
+        if entry.get("deny_tools").is_none() {
+            entry["deny_tools"] = serde_json::json!([]);
+        }
+        entry["deny_tools"].as_array_mut().ok_or("Invalid tool denials")?.push("system_inspect".into());
+    }
+    if *entry == before && pending.is_none() {
+        println!("client={client} system_inspect={enable}");
+        return Ok(());
     }
     let audit = AuditSink::open_with_limits(
         settings

@@ -37,7 +37,7 @@ fn default_output_limit() -> usize {
 }
 
 impl Profile {
-    fn validate(&mut self) -> io::Result<()> {
+    pub(super) fn validate(&mut self) -> io::Result<()> {
         self.check_limits()?;
         let path = fs::canonicalize(&self.executable)?;
         if !fs::metadata(&path).is_ok_and(|meta| meta.is_file() && meta.mode() & 0o111 != 0) {
@@ -137,6 +137,10 @@ struct JobClient {
     _yolo_revision: Option<String>,
     #[serde(default, rename = "extra_roots")]
     _extra_roots: Option<Vec<PathBuf>>,
+    #[serde(default, rename = "deny_tools")]
+    _deny_tools: Option<Vec<String>>,
+    #[serde(default, rename = "native_tool_preset")]
+    _native_tool_preset: Option<bool>,
     #[serde(default, rename = "disabled")]
     _disabled: Option<bool>,
 }

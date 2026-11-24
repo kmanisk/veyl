@@ -75,38 +75,41 @@ impl Tool {
     ];
 
     pub(crate) fn parse(name: &str) -> Option<Self> {
-        match name {
-            "read_file" => Some(Self::ReadFile),
-            "search_files" => Some(Self::SearchFiles),
-            "git_inspect" => Some(Self::GitInspect),
-            "system_info" => Some(Self::SystemInfo),
-            "system_inspect" => Some(Self::SystemInspect),
-            "project_context" => Some(Self::ProjectContext),
-            "system_context" => Some(Self::SystemContext),
-            "service_status" => Some(Self::ServiceStatus),
-            "write_file" => Some(Self::WriteFile),
-            "apply_patch" => Some(Self::ApplyPatch),
-            "run_command" => Some(Self::RunCommand),
-            "start_job" => Some(Self::StartJob),
-            "job_start" => Some(Self::JobStart),
-            "job_status" => Some(Self::JobStatus),
-            "job_logs" => Some(Self::JobLogs),
-            "cancel_job" => Some(Self::CancelJob),
-            "job_cancel" => Some(Self::JobCancel),
-            "list_jobs" => Some(Self::ListJobs),
-            "skills_list" => Some(Self::SkillsList),
-            "skills_read" => Some(Self::SkillsRead),
-            "mcp_servers_list" => Some(Self::UpstreamsList),
-            "mcp_servers_call" => Some(Self::UpstreamsCall),
-            "list_directory" => Some(Self::ListDirectory),
-            "directory_tree" => Some(Self::DirectoryTree),
-            "file_info" => Some(Self::FileInfo),
-            "edit_file" => Some(Self::EditFile),
-            "create_directory" => Some(Self::CreateDirectory),
-            "exec_command" => Some(Self::ExecCommand),
-            "job_wait" => Some(Self::JobWait),
-            "task_run" => Some(Self::TaskRun),
-            _ => None,
+        Self::ALL.into_iter().find(|tool| tool.name() == name)
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::ReadFile => "read_file",
+            Self::SearchFiles => "search_files",
+            Self::GitInspect => "git_inspect",
+            Self::SystemInfo => "system_info",
+            Self::SystemInspect => "system_inspect",
+            Self::ProjectContext => "project_context",
+            Self::SystemContext => "system_context",
+            Self::ServiceStatus => "service_status",
+            Self::WriteFile => "write_file",
+            Self::ApplyPatch => "apply_patch",
+            Self::RunCommand => "run_command",
+            Self::StartJob => "start_job",
+            Self::JobStart => "job_start",
+            Self::JobStatus => "job_status",
+            Self::JobLogs => "job_logs",
+            Self::CancelJob => "cancel_job",
+            Self::JobCancel => "job_cancel",
+            Self::ListJobs => "list_jobs",
+            Self::SkillsList => "skills_list",
+            Self::SkillsRead => "skills_read",
+            Self::UpstreamsList => "mcp_servers_list",
+            Self::UpstreamsCall => "mcp_servers_call",
+            Self::ListDirectory => "list_directory",
+            Self::DirectoryTree => "directory_tree",
+            Self::FileInfo => "file_info",
+            Self::EditFile => "edit_file",
+            Self::CreateDirectory => "create_directory",
+            Self::ExecCommand => "exec_command",
+            Self::JobWait => "job_wait",
+            Self::TaskRun => "task_run",
         }
     }
 
@@ -156,6 +159,24 @@ impl Tool {
                 | Self::DirectoryTree
                 | Self::FileInfo
         )
+    }
+
+    pub(crate) fn in_yolo_preset(self, jobs: bool, skills: bool) -> bool {
+        match self.action() {
+            Action::ReadFile
+            | Action::SearchFiles
+            | Action::GitInspect
+            | Action::SystemInfo
+            | Action::SystemInspect
+            | Action::ProjectContext
+            | Action::SystemContext
+            | Action::ServiceStatus
+            | Action::WriteFile
+            | Action::ApplyPatch => true,
+            Action::ListSkills | Action::ReadSkill => skills,
+            action if action.is_job() => jobs,
+            _ => false,
+        }
     }
 
     pub(crate) fn schema(self) -> Value {
@@ -360,12 +381,13 @@ impl Tool {
             ),
             Self::ExecCommand => (
                 "exec_command",
-                "Execute a supervised command with bounded timeout and return status and output",
+                "Start a mode-confined supervised command; return status and bounded output, or a durable job ID for continued polling",
                 json!({
                     "command": {"type": "string", "description": "Shell command line to execute"},
                     "argv": {"type": "array", "items": {"type": "string"}},
+                    "request_id": {"type": "string", "description": "Optional client-scoped deduplication key"},
                     "cwd": {"type": "string", "description": "Working directory relative to root"},
-                    "timeout_seconds": {"type": "integer", "default": 30, "maximum": 300}
+                    "timeout_seconds": {"type": "integer", "default": 30, "minimum": 1, "maximum": 300}
                 }),
                 json!([]),
                 false,
@@ -382,15 +404,15 @@ impl Tool {
             ),
             Self::TaskRun => (
                 "task_run",
-                "Execute a durable Nightshift task with optional deduplicating request_id, ephemeral worktree, and bounded wait",
+                "Start a mode-confined durable task with an optional deduplication key; use job_status, job_wait, job_logs or job_cancel to continue",
                 json!({
                     "command": {"type": "string", "description": "Command line to execute"},
                     "argv": {"type": "array", "items": {"type": "string"}},
                     "request_id": {"type": "string", "description": "Client-assigned deduplication key"},
                     "cwd": {"type": "string", "description": "Working directory relative to root"},
-                    "ephemeral_worktree": {"type": "boolean", "default": false},
-                    "wait_seconds": {"type": "integer", "default": 15, "maximum": 60},
-                    "timeout_seconds": {"type": "integer", "default": 120, "maximum": 600}
+                    "ephemeral_worktree": {"type": "boolean", "default": false, "description": "Reserved; true is currently unsupported"},
+                    "wait_seconds": {"type": "integer", "default": 15, "minimum": 0, "maximum": 20},
+                    "timeout_seconds": {"type": "integer", "default": 120, "minimum": 1, "maximum": 300}
                 }),
                 json!([]),
                 false,
@@ -404,11 +426,13 @@ impl Tool {
             ),
             Self::JobLogs => (
                 "job_logs",
-                "Read bounded excerpts or incremental offset-based stream from an owned job",
+                "Read bounded logs for an owned job. For incremental reads, advance stdout_offset and stderr_offset independently using next_stdout_offset and next_stderr_offset.",
                 json!({
                     "job_id": id,
-                    "offset": {"type": "integer", "default": 0, "minimum": 0},
-                    "max_bytes": {"type": "integer", "default": 4096, "maximum": 65536}
+                    "offset": {"type": "integer", "minimum": 0, "description": "Legacy shared byte offset; do not combine with independent offsets"},
+                    "stdout_offset": {"type": "integer", "minimum": 0, "description": "Stdout byte offset; defaults to zero"},
+                    "stderr_offset": {"type": "integer", "minimum": 0, "description": "Stderr byte offset; defaults to zero"},
+                    "max_bytes": {"type": "integer", "default": 4096, "minimum": 0, "maximum": 65536}
                 }),
                 json!(["job_id"]),
                 true,

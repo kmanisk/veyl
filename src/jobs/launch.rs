@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use mcp_gateway::security::audit::{AuditAction, AuditPhase};
+use sha2::{Digest, Sha256};
 
 use super::config::Profile;
 use super::receipt::{Receipt, State};
@@ -25,7 +26,8 @@ impl Jobs {
         name: String,
         profile: Profile,
         policy: JobPolicy<'_>,
-    ) -> io::Result<Receipt> {
+        request_id: Option<&str>,
+    ) -> io::Result<(Receipt, bool)> {
         super::sandbox::check_inherited_fds()?;
         let sandbox_roots = policy
             .workspace_mounts
@@ -48,20 +50,49 @@ impl Jobs {
         }
         let _transaction = self.store.lock(false)?;
         let ids = self.store.jobs()?;
-        if ids.len() >= HISTORY_LIMIT {
-            return Err(io::Error::from(ErrorKind::WouldBlock));
+        let history_full = ids.len() >= HISTORY_LIMIT;
+        // Old unsigned mappings cannot prove the admitted request fingerprint.
+        // Refuse reuse rather than accidentally launching the old action twice.
+        if let Some(id) = request_id
+            && self.store.get_request_id(id)?.is_some()
+        {
+            return Err(io::Error::new(ErrorKind::InvalidInput, "Legacy request ID cannot be safely replayed; inspect the original job"));
         }
+        let request_key = request_id.map(|id| {
+            let mut hash = Sha256::new();
+            hash.update(owner.as_bytes());
+            hash.update([0]);
+            hash.update(id.as_bytes());
+            format!("{:x}", hash.finalize())
+        });
         let mut global = 0;
         let mut owned = 0;
         for id in ids {
-            if let Some(receipt) = self.read_if_published(&self.store.job(&id)?)?
-                && (receipt.state.active() || receipt.state == State::Uncertain)
-            {
-                global += 1;
-                owned += usize::from(receipt.client_id == owner);
+            if let Some(receipt) = self.read_if_published(&self.store.job(&id)?)? {
+                if request_key.is_some() && receipt.request_key == request_key {
+                    if receipt.client_id != owner
+                        || receipt.profile != name
+                        || receipt.argv_sha256 != profile.argv_hash()
+                        || receipt.cwd != root.path()
+                        || receipt.timeout_seconds != profile.timeout_seconds
+                        || receipt.max_output_bytes != profile.max_output_bytes
+                        || receipt.yolo != policy.yolo
+                        || receipt.full != policy.full
+                        || receipt.broad.as_ref() != policy.broad
+                        || receipt.isolated != (policy.workspace_mounts.is_some() || policy.broad.is_some())
+                        || receipt.sandbox_roots != sandbox_roots
+                    {
+                        return Err(io::Error::new(ErrorKind::InvalidInput, "Request ID already belongs to a different admitted operation"));
+                    }
+                    return Ok((receipt, true));
+                }
+                if receipt.state.active() || receipt.state == State::Uncertain {
+                    global += 1;
+                    owned += usize::from(receipt.client_id == owner);
+                }
             }
         }
-        if global >= GLOBAL_JOBS || owned >= CLIENT_JOBS {
+        if history_full || global >= GLOBAL_JOBS || owned >= CLIENT_JOBS {
             return Err(io::Error::from(ErrorKind::WouldBlock));
         }
 
@@ -78,7 +109,10 @@ impl Jobs {
             max_output_bytes: profile.max_output_bytes,
             state: State::Starting,
             created_at: now(),
+            execution_duration_ms: None,
+            elapsed_clock: None,
             launch_nonce: random_hex()?,
+            request_key,
             runner: None,
             child: None,
             cancel_requested: false,
@@ -130,7 +164,7 @@ impl Jobs {
             self.reconcile(&job, &mut failed)?;
             return Err(invalid());
         }
-        Ok(receipt)
+        Ok((receipt, false))
     }
 }
 

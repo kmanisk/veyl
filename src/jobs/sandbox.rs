@@ -301,6 +301,19 @@ fn filter(network: bool) -> io::Result<File> {
 }
 
 pub(crate) fn probe() -> io::Result<()> {
+    // Descriptor passing deliberately uses non-CLOEXEC duplicates. Never
+    // create them in the concurrent HTTP gateway, even for a no-op probe.
+    let mut command = Command::new("/proc/self/exe");
+    command.env_clear().arg("--job-sandbox-probe");
+    let (status, _) = crate::linux_command::capture(
+        &mut command, 256, std::time::Duration::from_secs(3),
+    )?;
+    if status.success() { Ok(()) } else { Err(unsupported()) }
+}
+
+pub(crate) fn probe_worker() -> io::Result<()> {
+    check_inherited_fds()?;
+    rustix::thread::set_no_new_privs(true)?;
     let mut sandbox = Sandbox::new()?;
     let root = super::config::JobRoot::open(&std::env::current_dir()?).map_err(io::Error::other)?;
     let root = root.identity();

@@ -24,7 +24,7 @@ use mcp_gateway::security::audit::{AuditAction, AuditLimits, AuditPhase, AuditSi
 pub(crate) use config::{JobRoot, Profiles, parse_settings};
 pub(crate) use resources::verify as verify_scope;
 pub(crate) use runner::run_worker;
-pub(crate) use sandbox::{git_worker, probe as probe_sandbox, upstream_worker};
+pub(crate) use sandbox::{git_worker, probe as probe_sandbox, probe_worker as probe_sandbox_worker, upstream_worker};
 pub(crate) use store::has_unconfined_jobs;
 
 use receipt::Receipt;

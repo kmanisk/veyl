@@ -1,5 +1,27 @@
 # BridgeDev capability comparison
 
+## Detached-job timing and target previews (verified integration)
+
+Independently verified: cross-process monotonic live job timing (`live_elapsed_ms`
+checked against boot ID, time namespace, and live runner identity), final
+signed duration (`execution_duration_ms`), local trace file target previews
+without file contents or patch bodies, and 500ms terminal job/activity refresh.
+Extends the supervised durable job and streaming checkpoint; does not claim
+persistent interactive shell, structured Git mutations, or autonomous multi-hour parity.
+
+
+## Isolated durable execution and live monitor attempt
+
+Independently verified: signed mode-confined ad-hoc commands (`exec_command`
+and `task_run`), durable task IDs, atomic client-scoped retries (`request_id`)
+with payload mismatch rejection, independent stdout/stderr byte cursors,
+transient state rescan, isolated sandbox probing, and live TUI/web command
+previews through opt-in local trace. The previous direct command path was removed.
+Interactive persistent process sessions, authorized Git/worktree transactions,
+multi-hour budgets, and autonomous Nightshift model loops remain open.
+See `docs/development/STATUS.md` for evidence and limitations.
+
+
 ## Native context and subsystem checkpoint (local candidate)
 
 Compared BridgeDev b21616a `src/tools/context.ts`, `src/tools/system.ts`,
@@ -72,7 +94,7 @@ capabilities and makes no claim of API or security compatibility.
 | System resources | IMPLEMENTED. Linux CPU count, load and RAM, workspace filesystem capacity, process CPU/RSS and active MCP connections. | Authenticated resource probe and the live dashboard and monitor. |
 | Process and durable job control | IMPLEMENTED within owned jobs. The supervisor reports state and bounded logs, handles termination and recovery, and preserves receipts across restart. | Durable-job suites, real service restart and terminal cancellation probe. |
 | Arbitrary process or host administration | NOT IMPLEMENTED. The process surface remains tied to Veyl's job authority. | Owner checks and an explicit read-only service query. |
-| Command modes | IMPLEMENTED. Managed Standard, scoped YOLO, Broad YOLO and confirmed FULL are separate policies. | Locked mode, broad sandbox and protected-path cases. |
+| Command modes | IMPLEMENTED. Standard limits access to approved workspaces, YOLO uses the native preset with a protected sandbox, and confirmed FULL uses host-user access. | Mode, sandbox and protected-path regressions. |
 | Dashboard and terminal monitor | IMPLEMENTED. Both authenticate against the separate admin listener. The monitor offers interactive and one-shot views. | Isolated Brave, real PTY keys, API pairing, job logs and cancellation. |
 | Upstream MCP management | IMPLEMENTED for supported stdio and Streamable HTTP/HTTPS targets. | Locked MCP suites, HTTPS and isolation probes, and a real Codex forwarded call. |
 | Skills | IMPLEMENTED. Import, discovery and individual client grants expose validated instructions. | Locked skills suite and dashboard probes. |

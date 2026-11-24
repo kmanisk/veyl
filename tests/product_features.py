@@ -99,7 +99,7 @@ class ProductFeatures(unittest.TestCase):
             mcp = re.search(r"MCP_HTTP_LISTEN=127\.0\.0\.1:(\d+)", trace)
             if admin and mcp:
                 self.admin, self.mcp = int(admin[1]), int(mcp[1])
-                return
+                return process
             if process.poll() is not None:
                 break
             time.sleep(.015)

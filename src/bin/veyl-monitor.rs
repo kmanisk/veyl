@@ -15,7 +15,7 @@ use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
 
-const HELP: &str = "Usage: veyl dashboard pair --config PATH | veyl-monitor --listen 127.0.0.1:PORT [--client ID] [--view health|clients|jobs|logs|audit|skills|upstreams|integrations] [--job ID]\n    Use --cancel JOB --client ID --confirm for non-interactive cancellation.";
+const HELP: &str = "Usage: veyl dashboard pair --config PATH | veyl-monitor --listen 127.0.0.1:PORT [--client ID] [--view health|clients|jobs|logs|activity|audit|skills|upstreams|integrations] [--job ID]\n    Use --cancel JOB --client ID --confirm for non-interactive cancellation.";
 struct Monitor {
     rt: tokio::runtime::Runtime,
     addr: SocketAddrV4,
@@ -141,7 +141,7 @@ impl Monitor {
                 job.ok_or("Specify a job ID")?,
                 client.ok_or("Select a client first")?
             ),
-            "audit" | "skills" | "integrations" => view.into(),
+            "activity" | "audit" | "skills" | "integrations" => view.into(),
             "upstreams" => "servers".into(),
             _ => return Err("Unknown view".into()),
         };
@@ -296,7 +296,7 @@ fn line_monitor(monitor: &Monitor, mut client: Option<String>) -> Result<(), Str
             Err(error) => eprintln!("{error}"),
         }
         print!(
-            "\n1 Health  2 Clients  3 Jobs  4 Audit  5 Skills  6 Upstreams  7 Integrations\np CLIENT  l JOB  x JOB  r Refresh  q Quit\n> "
+            "\n1 Health  2 Clients  3 Jobs  4 Activity  5 Skills  6 Upstreams  7 Integrations\np CLIENT  l JOB  x JOB  r Refresh  q Quit\n> "
         );
         io::stdout().flush().map_err(|_| "Cannot write terminal")?;
         let mut value = String::new();
@@ -313,7 +313,7 @@ fn line_monitor(monitor: &Monitor, mut client: Option<String>) -> Result<(), Str
             ["1"] => view = "health",
             ["2"] => view = "clients",
             ["3"] => view = "jobs",
-            ["4"] => view = "audit",
+            ["4"] => view = "activity",
             ["5"] => view = "skills",
             ["6"] => view = "upstreams",
             ["7"] => view = "integrations",

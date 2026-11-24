@@ -16,15 +16,17 @@ Enter the code in the pairing form. A code expires after five minutes,
 replaces any outstanding code and can authenticate one browser session.
 Keep it out of shell history, chat and copied browser URLs.
 
-The dashboard shows MCP session and active TCP connection counts, current modes and grants, gateway
+The dashboard shows active MCP calls, sessions, TCP connections, current modes and grants, gateway
 CPU and RSS, per-client job history, bounded logs and recent verified audit
 events. Refresh reads current data from the gateway. The first CPU sample
 requires a second refresh. Job cancellation and changes to skills or upstream
 servers require an explicit confirmation. Execution mode changes stay in
 the trusted local CLI. Credentials and user configuration are excluded from
 dashboard responses. The configuration and protection panels show a
-redacted summary of service and route status, Broad YOLO state-layout
+redacted summary of service and route status, YOLO state-layout
 validation and configured path rules. They have no policy-editing controls.
+Standard, YOLO and FULL appear independently of the client's enabled state.
+The client view lists effective tool names after preset and denial resolution.
 Job logs are visible to the paired operator and may
 contain sensitive output written by the job itself.
 
@@ -33,16 +35,47 @@ tabs; / focuses the Activity or Jobs filter. The theme button selects
 system, dark or light. Details buttons open JSON dialogs. Live refresh
 is optional and runs on visible Health, Activity and Jobs views. Job rows
 show creation timestamp, status, owner, directory, profile and (for new
-receipts) executable. Raw command arguments are not retained in receipts.
+receipts) executable and measured job duration. The runner measures job
+duration from sandbox launch through supervision using a monotonic clock.
+Older receipts and jobs that never reached supervision have no execution
+duration. Raw command arguments are excluded from receipts.
+
+## Activity and security audit
+
+The authenticated `GET /dashboard/api/activity` endpoint returns
+`active_calls` and a newest-first `events` array. Every admitted MCP tool
+call has a unique process-local `call_id`, one row, a wall-clock Unix timestamp
+for display, and a monotonic duration in milliseconds. Concurrent identical
+requests and calls on the same durable job have separate IDs. Activity starts
+with dispatch, ends with the RPC result, and records HTTP timeouts and dropped
+connections separately. A canceled or timed-out RPC may have started a durable
+job or left a bounded worker finishing the original operation. A successful
+job status or cancellation request can report a canceled or failed job.
+
+Activity retains up to 32 active calls and 128 completed calls in memory.
+The optional Funnel admission filter adds up to 32 recent authentication
+outcomes. Their durations are blank. Summaries use fixed operation labels and
+omit raw argument values, arbitrary tool names, request paths and responses.
+The separate verified audit view reads the durable ledger. It has no MCP call
+IDs or reconstructed durations. Activity clears when the gateway exits.
 
 Open the terminal monitor with `veyl monitor`. Its native full-screen view
 uses 1–7 or Tab to switch views, arrow keys or j/k to navigate, p to cycle
 clients, / to filter Activity and Jobs, Enter for JSON details, l for logs,
 x then y to cancel a selected job, and q to exit. Click tabs and data rows
 with a mouse or use the scroll wheel. Esc closes details or clears filters.
-Activity timestamps are UTC; raw timestamps remain in the JSON record.
-Scripts retain
-one-shot JSON with `veyl monitor --view health`.
+Press f to toggle Funnel admissions or a to open the separate security ledger
+while viewing Activity. Times render in local AM/PM. The browser uses its
+configured timezone and the TUI uses system timezone rules (or `TZ`), including
+historical daylight-saving transitions. JSON retains Unix timestamps.
+Activity and Jobs refresh every 500 ms in the terminal (and Activity refreshes
+every 1 s in the paired live web view); elapsed values preserve millisecond
+precision (`42ms`, `1.234s`, `1m02.345s`). A running job exposes `live_elapsed_ms`
+only with a live verified runner in the matching boot/time namespace; final
+`execution_duration_ms` remains separate. Local tracing can also show bounded
+target paths (`target_preview`) for file tools, never file contents, patch
+bodies, or responses.
+Scripts can use `veyl monitor --view activity`, `--view audit`, or `--view health`.
 
 ## Marketplace and custom integrations
 
@@ -78,9 +111,11 @@ client identity and elapsed milliseconds. It is RAM-only, limited to 24
 calls and 8192 serialized bytes per argument/result value (oversized values
 are replaced by an explicit omission marker). It expires after ten minutes,
 is bound to the paired loopback operator session, requires CSRF proof, and
-is unavailable via the private remote dashboard. Stop/clear with t or the
-dashboard button. Normal monitor quit and dashboard sign-out clear their
-trace. Command output may include sensitive data; enable only when needed.
+is unavailable via the private remote dashboard. One timer clears raw data at
+expiration. A call's Details action fetches a fresh matching trace record by
+call ID. List refreshes request trace state without the captured payloads.
+Stop or clear with t or the dashboard button. Normal monitor quit and dashboard
+sign-out clear their trace. Command output may include sensitive data.
 No raw transport credentials, file-tool payloads or upstream payloads are
 captured. Historical commands cannot be reconstructed from hashes.
 

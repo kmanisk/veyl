@@ -1,20 +1,46 @@
-# Veyl broad YOLO
+# Veyl execution modes and permissions
 
-Broad YOLO is an explicit persistent per-client authorization. Existing
-credential expiry and tool grants still apply. Use absolute paths and an
-unprivileged gateway account on Linux x86-64.
+| Mode | Filesystem and execution | Tool grants |
+| --- | --- | --- |
+| Standard | Approved workspaces and offline sandboxed jobs | Explicit tool names |
+| YOLO | Broad developer filesystem and networking inside Bubblewrap with mandatory protected paths | Native developer preset and explicit grants, subject to denials |
+| FULL | Unconfined execution with the gateway user's Unix permissions | Explicit tool names. Requires `--confirm-full`. |
 
 ```sh
-mcp-gateway state check --state-root "$state" --config "$state/clients.json"
-mcp-gateway yolo set --client dev --mode yolo --config "$state/clients.json"
-mcp-gateway yolo status --client dev --config "$state/clients.json"
-mcp-gateway yolo disable --client dev --config "$state/clients.json"
+veyl state check --state-root "$state" --config "$state/clients.json"
+veyl mode
+veyl mode yolo dev
+veyl mode get dev
+veyl mode disable dev
+veyl mode enable dev
+veyl mode standard dev
 ```
 
-The stored broad approval differs from legacy scoped YOLO. The existing
-`yolo enable` command still selects offline scoped YOLO. Both modes retain
-explicit grants. Changing mode affects the next admitted request. Running
-jobs retain the profile recorded in their signed receipt.
+Modes persist across restarts and apply to the next admitted request, including
+requests on existing MCP sessions. The client's enabled state is independent.
+Running jobs retain the profile recorded in their signed receipt. Credentials
+retain their configured expiry. Use an unprivileged Linux account.
+
+The YOLO preset enables native file, search, Git, context and diagnostic tools.
+Job tools require a configured job store. Skill tools require a configured skill
+store and reading a skill still needs an individual skill grant. Upstream MCP
+still needs an explicit MCP tool grant and server/tool approval. A client can
+set `"deny_tools": ["apply_patch", "system_inspect"]` in its trusted policy.
+Denials take precedence over preset and manual grants. A deny also covers an
+alias for the same action, such as `edit_file` for `apply_patch`.
+
+### Upgrade an existing policy
+
+`veyl mode migrate --config PATH` converts older policies to the current schema.
+Canonical mode changes also migrate older policies when needed. An old scoped
+authorization becomes Standard with its previously active, explicitly approved
+workspace roots. Inferred sibling scopes and dormant legacy roots are discarded.
+Previously approved broad authorizations retain their exact grants. Run
+`veyl mode yolo CLIENT` to approve the native preset explicitly. Existing FULL
+approvals, client identities, credentials and denials carry over. Historical
+`veyl yolo` commands remain available for older automation, including the scoped
+behavior of `yolo enable` on older schemas. They do not select the preset for
+older policies.
 
 ## State and migration
 
@@ -27,7 +53,7 @@ mount aliases.
 
 Keep executable helpers outside the state tree. For a Codex header
 helper, use an owner-only directory such as `~/.codex/veyl-helpers/`,
-which is covered by the existing Broad YOLO mask. Keep the bearer it
+which is covered by the YOLO mask. Keep the bearer it
 reads in state. Update the helper path in the Codex client configuration
 as part of the upgrade.
 

@@ -1,6 +1,8 @@
 //! Explicitly launched, loopback-only authenticated MCP-over-HTTP transport.
 //! No persistent unit, public listener, or privileged operation is created.
 
+#[cfg(target_os = "linux")]
+mod activity;
 pub(crate) mod admission;
 #[cfg(target_os = "linux")]
 pub(crate) mod dashboard;
@@ -98,6 +100,8 @@ struct State {
     diagnostic_only: bool,
     #[cfg(target_os = "linux")]
     mcp_connections: Arc<Semaphore>,
+    #[cfg(target_os = "linux")]
+    tool_workers: Arc<Semaphore>,
 }
 
 pub fn run(args: Vec<OsString>) -> Result<(), String> {
@@ -242,6 +246,8 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             diagnostic_only,
             #[cfg(target_os = "linux")]
             mcp_connections: Arc::clone(&permits),
+            #[cfg(target_os = "linux")]
+            tool_workers: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
         });
         // No token, hash, root, request content, or auth configuration is logged.
         #[cfg(target_os = "linux")]
@@ -287,14 +293,28 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
                 let service = service_fn(move |request| {
                     let state = state.clone();
                     async move {
+                        #[cfg(target_os = "linux")]
+                        let mut call = None;
                         let result = tokio::time::timeout(HTTP_TIMEOUT, async {
                             #[cfg(target_os = "linux")]
                             if is_admin {
                                 return dashboard::serve(request, state).await;
                             }
-                            serve(request, state, peer.ip()).await
+                            serve(
+                                request, state, peer.ip(),
+                                #[cfg(target_os = "linux")]
+                                &mut call,
+                            ).await
                         })
                         .await;
+                        #[cfg(target_os = "linux")]
+                        if let Some(call) = call {
+                            call.finish(match &result {
+                                Ok(reply) => reply.extensions().get::<activity::Status>()
+                                    .copied().unwrap_or(activity::Status::Failure),
+                                Err(_) => activity::Status::TimedOut,
+                            });
+                        }
                         Ok::<_, Infallible>(result.unwrap_or_else(|_| {
                             simple(StatusCode::REQUEST_TIMEOUT, "Request timed out")
                         }))
@@ -339,7 +359,12 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
     result
 }
 
-async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> Reply {
+async fn serve(
+    request: Request<Incoming>,
+    state: Arc<State>,
+    peer: IpAddr,
+    #[cfg(target_os = "linux")] call: &mut Option<activity::Call>,
+) -> Reply {
     let marker = request.headers().contains_key("Tailscale-Funnel-Request");
     let raw_path = request.uri().path();
     let path = raw_path.strip_prefix("/veyl").unwrap_or(raw_path);
@@ -407,7 +432,7 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     #[cfg(target_os = "linux")]
     if let Some(allow_secret_path) = public {
         let origin = funnel::Origin::parse(request.headers(), &origin);
-        return serve_public(request, state, peer, origin, allow_secret_path).await;
+        return serve_public(request, state, peer, origin, allow_secret_path, call).await;
     }
     if request.headers().get_all(header::ORIGIN).iter().count() > 1
         || request
@@ -417,7 +442,11 @@ async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> R
     {
         return simple(StatusCode::FORBIDDEN, "Invalid Origin");
     }
-    serve_admitted(request, state, peer, false, None).await
+    serve_admitted(
+        request, state, peer, false, None,
+        #[cfg(target_os = "linux")]
+        call,
+    ).await
 }
 
 #[cfg(target_os = "linux")]
@@ -427,6 +456,7 @@ async fn serve_public(
     peer: IpAddr,
     origin: funnel::Origin,
     allow_secret_path: bool,
+    call: &mut Option<activity::Call>,
 ) -> Reply {
     let options = request.method() == Method::OPTIONS;
     let valid_path = funnel::route_matches(request.uri().path(), allow_secret_path);
@@ -475,7 +505,7 @@ async fn serve_public(
         }
     } else {
         let proof = funnel::proof(request.uri().path(), request.headers(), allow_secret_path);
-        serve_admitted(request, state, peer, true, proof).await
+        serve_admitted(request, state, peer, true, proof, call).await
     };
     if valid_path {
         funnel::cors_headers(response.headers_mut(), origin, options);
@@ -503,6 +533,7 @@ async fn serve_admitted(
     peer: IpAddr,
     marker: bool,
     proof: Option<[u8; 32]>,
+    #[cfg(target_os = "linux")] call: &mut Option<activity::Call>,
 ) -> Reply {
     #[cfg(not(target_os = "linux"))]
     let _ = proof;
@@ -561,6 +592,10 @@ async fn serve_admitted(
     let client_index = authenticate(clients, bearer.as_ref(), now);
     let Some(client_index) = client_index else {
         if marker {
+            #[cfg(target_os = "linux")]
+            if let Some(admin) = &state.admin {
+                admin.activity.funnel_admission(None, activity::Status::Failure);
+            }
             let _ = audit("funnel.denied");
             return simple(StatusCode::NOT_FOUND, "Not found");
         }
@@ -599,6 +634,10 @@ async fn serve_admitted(
             })
     {
         return simple(StatusCode::SERVICE_UNAVAILABLE, "Audit unavailable");
+    }
+    #[cfg(target_os = "linux")]
+    if marker && let Some(admin) = &state.admin {
+        admin.activity.funnel_admission(Some(&client.id), activity::Status::Success);
     }
     let accepted = audit("auth.accepted");
     if !accepted {
@@ -701,7 +740,15 @@ async fn serve_admitted(
         // before waiting on storage, a short command, or crash instrumentation.
         let mut protocol = session.protocol.clone();
         drop(sessions);
+        // Blocking work may outlive a disconnected or timed-out RPC. Keep
+        // its capacity slot until the actual worker exits.
+        let Ok(worker) = state.tool_workers.clone().try_acquire_owned() else {
+            return simple(StatusCode::SERVICE_UNAVAILABLE, "Tool workers busy");
+        };
+        *call = state.admin.as_ref().and_then(|admin| admin.activity.start(&client.id, &payload));
+        let trace_key = call.as_ref().map(activity::Call::trace_key);
         return match tokio::task::spawn_blocking(move || {
+            let _worker = worker;
             let Ok((_admission, current)) = state.policy.read() else {
                 return simple(
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -726,6 +773,7 @@ async fn serve_admitted(
                 &state,
                 &current.clients[index],
                 &current,
+                trace_key,
             )
         })
         .await
@@ -737,7 +785,11 @@ async fn serve_admitted(
             ),
         };
     }
-    dispatch_tools(&mut session.protocol, payload, &state, client, &settings)
+    dispatch_tools(
+        &mut session.protocol, payload, &state, client, &settings,
+        #[cfg(target_os = "linux")]
+        None,
+    )
 }
 
 fn dispatch_tools(
@@ -746,9 +798,12 @@ fn dispatch_tools(
     state: &State,
     client: &Client,
     settings: &Configuration,
+    #[cfg(target_os = "linux")] trace_key: Option<(String, Instant)>,
 ) -> Reply {
     #[cfg(target_os = "linux")]
-    let trace = state.admin.as_ref().and_then(|admin| admin.trace.lock().ok()?.begin(&client.id, &payload));
+    let trace = trace_key.filter(|(id, _)| state.admin.as_ref().is_some_and(|admin| {
+        admin.trace.lock().is_ok_and(|mut trace| trace.begin(id, &client.id, &payload))
+    }));
     #[cfg(not(target_os = "linux"))]
     let _ = settings;
     let response = protocol.dispatch_with_tools(
@@ -774,18 +829,14 @@ fn dispatch_tools(
             {
                 return Vec::new();
             }
+            let now = unix_seconds();
             let mut tools: Vec<_> = Tool::ALL
                 .into_iter()
-                .filter(|tool| {
-                    client.tools.contains(tool)
-                        && authorized(client, tool.action(), state, audited, unix_seconds())
-                        && tool_available(*tool, client, state, settings)
-                })
+                .filter(|tool| permit_tool(*tool, client, state, settings, audited, now).is_ok())
                 .map(Tool::schema)
                 .collect();
             #[cfg(target_os = "linux")]
-            if state.mutations.available()
-                && authorized(client, Action::CallUpstream, state, audited, unix_seconds())
+            if permit_tool(Tool::UpstreamsCall, client, state, settings, audited, now).is_ok()
                 && !client.upstreams.servers.is_empty()
             {
                 let mode = client.mode.audit_mode().unwrap_or("standard");
@@ -811,16 +862,11 @@ fn dispatch_tools(
         |_, name, args| {
             let tool = Tool::parse(name);
             let now = unix_seconds();
+            let audited = audit("policy.checked");
+            let permits = |tool| permit_tool(tool, client, state, settings, audited, now);
             #[cfg(target_os = "linux")]
             if tool == Some(Tool::UpstreamsList) {
-                if !state.mutations.available()
-                    || !authorized(
-                        client,
-                        Action::ListUpstreams,
-                        state,
-                        audit("policy.checked"),
-                        now,
-                    )
+                if permits(Tool::UpstreamsList).is_err()
                     || args.is_some_and(|value| {
                         !value.as_object().is_some_and(serde_json::Map::is_empty)
                     })
@@ -839,15 +885,7 @@ fn dispatch_tools(
             #[cfg(target_os = "linux")]
             if tool == Some(Tool::UpstreamsCall) || (tool.is_none() && !settings.upstreams.empty())
             {
-                if !state.mutations.available()
-                    || !authorized(
-                        client,
-                        Action::CallUpstream,
-                        state,
-                        audit("policy.checked"),
-                        now,
-                    )
-                {
+                if permits(Tool::UpstreamsCall).is_err() {
                     return Some(tool_text(true, "Upstream access denied"));
                 }
                 let (name, args) = if tool == Some(Tool::UpstreamsCall) {
@@ -889,11 +927,7 @@ fn dispatch_tools(
                         .unwrap_or_else(|reason| tool_text(true, reason)),
                 );
             }
-            let permitted = tool.is_some_and(|tool| {
-                client.tools.contains(&tool)
-                    && authorized(client, tool.action(), state, audit("policy.checked"), now)
-            });
-            if !permitted {
+            if let Err(reason) = tool.ok_or("Unknown tool").and_then(permits) {
                 #[cfg(target_os = "linux")]
                 if let Some(mode) = client.mode.audit_mode() {
                     // Known names come from the tool registry. Never journal
@@ -913,7 +947,7 @@ fn dispatch_tools(
                         );
                     }
                 }
-                return tool.map(|_| tool_text(true, "Not authorized or capability unavailable"));
+                return tool.map(|_| tool_text(true, reason));
             }
             let tool = tool?;
             #[cfg(target_os = "linux")]
@@ -1030,11 +1064,27 @@ fn dispatch_tools(
         && let Some(admin) = &state.admin
         && let Ok(mut trace) = admin.trace.lock()
     {
-        trace.finish(id,started,response.as_ref());
+        trace.finish(&id, started, response.as_ref());
     }
     match response {
         None => simple(StatusCode::ACCEPTED, ""),
-        Some(response) => json_response(StatusCode::OK, response, None),
+        Some(response) => {
+            #[cfg(target_os = "linux")]
+            let outcome = if response.get("error").is_some() || response["result"]["isError"] == true {
+                activity::Status::Failure
+            } else {
+                activity::Status::Success
+            };
+            let reply = json_response(StatusCode::OK, response, None);
+            #[cfg(target_os = "linux")]
+            {
+                let mut reply = reply;
+                reply.extensions_mut().insert(outcome);
+                reply
+            }
+            #[cfg(not(target_os = "linux"))]
+            reply
+        }
     }
 }
 
@@ -1195,6 +1245,28 @@ fn client_file_tool(
     ))
 }
 
+fn permit_tool(
+    tool: Tool,
+    client: &Client,
+    state: &State,
+    settings: &Configuration,
+    audited: bool,
+    now: u64,
+) -> Result<(), &'static str> {
+    const DENIED: &str = "Not authorized or capability unavailable";
+    if !client.tools.contains(&tool) || !authorized(client, tool.action(), state, audited, now) {
+        return Err(DENIED);
+    }
+    if tool_available(tool, client, state, settings) {
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    if matches!(tool.action(), Action::WriteFile | Action::ApplyPatch) && !state.mutations.available() {
+        return Err("Audit intent unavailable");
+    }
+    Err(DENIED)
+}
+
 fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configuration) -> bool {
     if matches!(tool, Tool::SkillsList | Tool::SkillsRead) {
         #[cfg(target_os = "linux")]
@@ -1238,6 +1310,9 @@ fn authorized(
     audit_available: bool,
     now: u64,
 ) -> bool {
+    if client.is_disabled() {
+        return false;
+    }
     let audit_available =
         audit_available && (client.mode.audit_mode().is_none() || state.mutations.available());
     let grant = Grant {

@@ -193,7 +193,7 @@ impl Store {
                 if valid_id(&id) {
                     Ok(Some(id))
                 } else {
-                    Ok(None)
+                    Err(invalid())
                 }
             }
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
@@ -201,19 +201,6 @@ impl Store {
         }
     }
 
-    pub fn set_request_id(&self, request_id: &str, job_id: &str) -> io::Result<()> {
-        if !request_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            || request_id.is_empty()
-            || request_id.len() > 64
-        {
-            return Ok(());
-        }
-        let name = format!(".req-{}", request_id);
-        let tmp = format!(".req-tmp-{}", request_id);
-        atomic_write(&self.directory, &tmp, &name, job_id.as_bytes())
-    }
 }
 
 pub(super) struct JobDir<'a> {
