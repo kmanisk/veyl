@@ -1,5 +1,26 @@
 # Gate 3d status
 
+## 2026-11-24 — public crate and live deployment
+
+Crates.io veyl 0.2.2-alpha (MIT) published successfully from commit
+`e27e2ec12a632d7c7a591d5eb1819b6333575878`; registry lookup confirmed
+and a clean Cargo install from the registry installed both executables.
+Registry install also passed the real PTY filter/details/mouse test and
+local trace API isolation/result test (mwuvi1ps-d71ewv, exit 0).
+The GitHub repository remains private; main contains the release commit.
+Published source is public through the crate registry.
+
+Production legacy-compatible gateway and monitor replaced after checking
+all three client job lists (no active jobs, no more pages), preserving
+existing routes and credentials. Only mcp-gateway.service restarted;
+BridgeDev remained active. Icon endpoint, monitor health, 860-record audit
+chain and an actual ChatGPT service_status call passed. Installed hashes:
+- gateway: 00b1230c16b875c0d91b8404f5d1fa931ec62a8516b0ee5389d6d9fbd353d70b
+- monitor: c345e8bfff18cce5f5adc647cb5f89e315e964d19aba0185de2fec193e0bffb9
+Rollback: ~/.local/share/veyl-rollback-ui.xb0ASS/.
+Release publication receipt mwuvghcp-f1ru1j; deployment mwuvhjxo-caiuxg.
+Independent AGY acceptance and the complete historical battery remain pending.
+
 ## 2026-11-24 — MIT and operator UI checkpoint
 
 MIT license authorized by operator. Product README targets the v0.2.2-alpha
