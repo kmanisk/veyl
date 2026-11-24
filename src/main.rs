@@ -11,6 +11,8 @@ mod jobs;
 #[cfg(target_os = "linux")]
 mod linux_command;
 #[cfg(target_os = "linux")]
+mod mode_cli;
+#[cfg(target_os = "linux")]
 mod protected_cli;
 #[cfg(target_os = "linux")]
 mod protected_paths;
@@ -69,7 +71,7 @@ fn run() -> Result<(), String> {
             println!(
                 "mcp-gateway --root DIR | http --listen 127.0.0.1:PORT --config PATH
 \
-                      mcp-gateway yolo --help | audit --help | service --help | protected-paths --help | state --help | serve --help | skills --help | dashboard --help | mcp-servers --help"
+                      mcp-gateway mode --help | monitor --help | yolo --help | audit --help | service --help | protected-paths --help | state --help | serve --help | skills --help | dashboard --help | mcp-servers --help"
             );
             return Ok(());
         }
@@ -90,6 +92,10 @@ fn run() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "yolo") {
         return yolo_cli::run(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "mode") {
+        return mode_cli::run(&args[1..]);
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "protected-paths") {
@@ -122,6 +128,17 @@ fn run() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "mcp-servers") {
         return upstream::admin::run(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "monitor") {
+        use std::os::unix::process::CommandExt;
+        let exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("veyl-monitor")))
+            .filter(|p| p.is_file())
+            .unwrap_or_else(|| std::path::PathBuf::from("veyl-monitor"));
+        let err = std::process::Command::new(exe).args(&args[1..]).exec();
+        return Err(format!("Cannot launch monitor: {err}"));
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "dashboard") {

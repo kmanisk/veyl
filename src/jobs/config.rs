@@ -135,6 +135,10 @@ struct JobClient {
     _yolo_shared_roots: Option<Vec<PathBuf>>,
     #[serde(default, rename = "yolo_revision")]
     _yolo_revision: Option<String>,
+    #[serde(default, rename = "extra_roots")]
+    _extra_roots: Option<Vec<PathBuf>>,
+    #[serde(default, rename = "disabled")]
+    _disabled: Option<bool>,
 }
 
 pub(crate) fn parse_settings(bytes: &[u8]) -> Result<(PathBuf, Profiles), String> {
@@ -253,6 +257,10 @@ impl JobRoot {
             },
             _directory: directory,
         })
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        self.identity.path()
     }
 
     pub(super) fn identity(&self) -> &RootIdentity {

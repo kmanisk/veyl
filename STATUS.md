@@ -1076,3 +1076,69 @@ Codex app-server forwarded a synthetic upstream tool. An actual
 Antigravity client completed authenticated discovery. Local
 receipts are under `target/v0.1.3-beta/`. Production routing and
 publication follow independent review and live checks.
+
+## Three-mode migration preparation (unreleased)
+
+Base: `6615c5061dc5cae83500d4c829ebc2652d37989a` (v0.1.3-beta).
+ChatGPT is implementing directly through BridgeDev in the designated
+worktree. The installed release, production policy, services and
+Tailscale routes are unchanged.
+
+The additive `mode get` and `mode set` CLI delegates to the existing
+audited local operator transaction, including Broad YOLO preflight and
+explicit FULL confirmation. Both flag-based and positional syntax are
+supported. It does not yet migrate the on-disk schema, reinterpret
+legacy scoped YOLO, or separate the disabled client flag.
+
+Local verification: 41 Rust tests passed (29 unit, 8 operator, 4 mutation),
+formatter, Clippy with warnings denied and whitespace checks passed.
+BridgeDev process receipt: `mwun8mdo-c5s7hr`, exit 0. The new independent
+three-mode suite hash matches the AGY receipt
+`85f74c03c2357db2f998ddbbe111e16121c54e8fc75c797298e3552f7e81c9a4`.
+The new suite has not been independently accepted or rerun against this
+partial implementation.
+
+Before schema migration, reconcile the acceptance contract: existing
+tests require legacy `yolo enable` to retain scoped offline behavior,
+whereas the proposed interface eventually refuses that command.
+AGY's handoff diagram also incorrectly describes unconfined YOLO and
+root/sudo FULL. Preserve sandboxed network-enabled YOLO and same-UID
+unsandboxed FULL, with no automatic privilege elevation. A versioned
+legacy migration must preserve approvals and never widen scope.
+New parity tools and Nightshift are subsequent checkpoints.
+
+## Linux v0.2.0-alpha release: Three modes, BridgeDev parity, and Nightshift
+
+Base: `6615c5061dc5cae83500d4c829ebc2652d37989a`.
+Implemented, tested, and published by AGY under direct authorization.
+
+1. Three-mode architecture:
+- Authoritative modes: Standard (workspace and extra roots, sandboxed, offline), YOLO (host-wide dev mounts, Bubblewrap sandboxed with networking, protected paths masked), and FULL (ordinary host-user execution, unsandboxed, requires explicit --confirm-full).
+- Independent client enabled/disabled state preserved across mode changes.
+- Version 3 policy migration (policy_version: 3) with `veyl mode migrate` converts legacy policy, maps legacy scoped yolo_roots to extra_roots, maps broad_yolo to yolo, and preserves credentials and server tokens.
+- Deprecated `yolo enable` command strictly refused on version 3 policies.
+- 6/6 locked three-mode acceptance tests passing (hash: 616300d6f5dc788a5be1685d51c83b5fd04fd3f796503a04d3cf0a3d29962ac3).
+
+2. BridgeDev feature parity developer tools:
+- `list_directory`: flat or recursive directory listing with show_hidden and item limits.
+- `directory_tree`: hierarchical recursive directory structure with max_depth limits.
+- `file_info`: robust file and directory inspection returning type, size, permissions, mtime, and sha256 checksum for regular files.
+- `create_directory`: safe recursive directory creation within mutation roots.
+- `edit_file`: exact substring match-and-replace mutation without requiring prior sha256.
+- `exec_command`: bounded synchronous execution with stdout/stderr capture.
+
+3. Durable Nightshift primitives:
+- Idempotent `request_id` handling across job and task entry points to prevent duplicate execution across reconnects.
+- Bounded `job_wait` to block on job completion with server-side timeout up to 60s.
+- Incremental offset-based `job_logs` pagination (`offset`, `max_bytes`) for efficient streaming without blowing context windows.
+- Structured `task_run` executing bounded commands with optional ephemeral git worktrees and auto-commit checkpoints.
+
+4. Production deployment and verification:
+- 46/46 Rust tests passing (29 unit, 3 parity/nightshift, 10 operator, 4 mutation).
+- Zero compiler warnings, clippy clean, cargo fmt clean.
+- Installed to `/home/onyx/.local/bin/mcp-gateway` and symlink `veyl`.
+- Production policy migrated to policy_version: 3 and verified valid.
+- Local dashboard (http://127.0.0.1:7332/dashboard) and private Tailscale dashboard (https://onyx.tail646579.ts.net:9443/dashboard) operational with pairing workflow.
+- Terminal monitor utility (`veyl monitor` and `veyl-monitor`) verified with live health and clients views.
+- Tailscale Funnel on port 443 path `/veyl/mcp/...` live and verified with active ChatGPT session, tools/list discovery (25 tools), and execution.
+

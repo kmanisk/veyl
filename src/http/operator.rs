@@ -41,6 +41,7 @@ impl Mode {
             None => Ok(Self::Standard),
             Some(value) => match value.as_str() {
                 Some("standard") => Ok(Self::Standard),
+                Some("yolo") if entry.get("disabled").is_some() => Ok(Self::BroadYolo),
                 Some("yolo") => Ok(Self::ScopedYolo),
                 Some("broad_yolo") => Ok(Self::BroadYolo),
                 Some("full") => Ok(Self::Full),
@@ -485,6 +486,8 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "yolo_roots",
         "yolo_shared_roots",
         "yolo_revision",
+        "extra_roots",
+        "disabled",
         "skills",
         "allowed_servers",
         "allowed_server_tools",
@@ -503,11 +506,26 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
     }
     if document
         .get("policy_version")
-        .is_some_and(|version| !matches!(version.as_u64(), Some(1 | 2)))
+        .is_some_and(|version| !matches!(version.as_u64(), Some(1..=3)))
     {
         return Err("Unsupported authorization policy schema".into());
     }
-    if document["policy_version"].as_u64() != Some(2)
+    let version = document["policy_version"].as_u64();
+    let entries = document["clients"].as_array().ok_or("Invalid clients")?;
+    for entry in entries {
+        if version == Some(3) {
+            if !matches!(entry["mode"].as_str(), Some("standard" | "yolo" | "full"))
+                || entry["disabled"].as_bool().is_none()
+                || entry.get("yolo_roots").is_some()
+                || entry.get("yolo_shared_roots").is_some()
+            {
+                return Err("Invalid version 3 client policy".into());
+            }
+        } else if entry.get("disabled").is_some() || entry.get("extra_roots").is_some() {
+            return Err("Independent client state and extra_roots require policy version 3".into());
+        }
+    }
+    if !matches!(version, Some(2 | 3))
         && document["clients"]
             .as_array()
             .into_iter()

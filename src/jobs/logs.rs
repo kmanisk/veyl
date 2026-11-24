@@ -72,26 +72,48 @@ pub(super) fn nonblocking(pipe: impl AsFd) -> io::Result<()> {
 }
 
 pub(super) fn excerpts(job: &JobDir<'_>, receipt: &Receipt) -> io::Result<Value> {
-    let limit = EXCERPT_BYTES.min(receipt.max_output_bytes);
-    let stdout = excerpt(job, "stdout.log", limit, receipt.stdout_truncated)?;
-    let stderr = excerpt(job, "stderr.log", limit, receipt.stderr_truncated)?;
+    excerpts_offset(job, receipt, 0, EXCERPT_BYTES.min(receipt.max_output_bytes))
+}
+
+pub(super) fn excerpts_offset(
+    job: &JobDir<'_>,
+    receipt: &Receipt,
+    offset: usize,
+    max_bytes: usize,
+) -> io::Result<Value> {
+    let limit = max_bytes.min(receipt.max_output_bytes);
+    let stdout = excerpt_offset(job, "stdout.log", offset, limit, receipt.stdout_truncated)?;
+    let stderr = excerpt_offset(job, "stderr.log", offset, limit, receipt.stderr_truncated)?;
+    let ended = !receipt.state.active();
+    let bytes_read = stdout.0.len().max(stderr.0.len());
     Ok(json!({
         "job_id": receipt.job_id,
         "stdout": stdout.0, "stderr": stderr.0,
+        "offset": offset,
+        "next_offset": offset + bytes_read,
+        "ended": ended,
         "stdout_truncated": stdout.1, "stderr_truncated": stderr.1,
     }))
 }
 
-fn excerpt(
+fn excerpt_offset(
     job: &JobDir<'_>,
     name: &'static str,
+    offset: usize,
     limit: usize,
     truncated: bool,
 ) -> io::Result<(String, bool)> {
+    let mut file = match job.open_log(name, OFlags::RDONLY) {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((String::new(), false)),
+        Err(err) => return Err(err),
+    };
+    if offset > 0 {
+        use std::io::Seek;
+        let _ = file.seek(std::io::SeekFrom::Start(offset as u64));
+    }
     let mut bytes = Vec::new();
-    job.open_log(name, OFlags::RDONLY)?
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)?;
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
     let truncated = truncated || bytes.len() > limit;
     bytes.truncate(limit);
     Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))

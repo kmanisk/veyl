@@ -96,6 +96,20 @@ impl MutationRoot {
         &self.path
     }
 
+    pub(super) fn create_directory(&self, path: &str) -> Result<(), MutationError> {
+        let relative = Path::new(path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+        {
+            return Err(Rejected("Use a relative directory path"));
+        }
+        let full = self.path.join(relative);
+        std::fs::create_dir_all(&full).map_err(|_| Rejected("Cannot create directory"))?;
+        Ok(())
+    }
+
     pub(crate) fn read(&self, path: &str) -> Result<String, &'static str> {
         const UNAVAILABLE: &str = "File unavailable or outside an approved root";
         let handle = fs::openat2(

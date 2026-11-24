@@ -417,7 +417,8 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             return missing();
         };
         return job_request(state, client, Some(id), |jobs, client, id| {
-            jobs.owned_tool(Tool::JobLogs, id, client)
+            let empty = serde_json::Map::new();
+            jobs.owned_tool(Tool::JobLogs, id, client, &empty)
         })
         .await;
     }
@@ -433,7 +434,8 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             return bad();
         };
         return job_request(state, client, Some(id), |jobs, client, id| {
-            jobs.owned_tool(Tool::CancelJob, id, client)
+            let empty = serde_json::Map::new();
+            jobs.owned_tool(Tool::CancelJob, id, client, &empty)
         })
         .await;
     }
@@ -524,6 +526,7 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
     with_policy(admin, move |settings| {
         let clients: Vec<_> = settings.clients.iter().map(|client| json!({
             "id": client.id,
+            "disabled": client.disabled || client.mode == ExecutionMode::Disabled,
             "mode": match client.mode {
                 ExecutionMode::Standard => "standard",
                 ExecutionMode::PersistentYolo => "scoped_yolo",

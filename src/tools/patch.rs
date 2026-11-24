@@ -60,6 +60,49 @@ pub(super) fn apply_patch(
     Ok(checksum(&updated))
 }
 
+pub(super) fn edit_file(
+    root: &MutationRoot,
+    path: &str,
+    target_text: &str,
+    replacement: &str,
+    replace_all: bool,
+    record_stage: &mut RecordStage<'_>,
+) -> Result<String, MutationError> {
+    if target_text.is_empty() {
+        return Err(Rejected("Target text must be nonempty"));
+    }
+    check_size(replacement)?;
+
+    let target = root.target(path)?;
+    let prior = target
+        .metadata()?
+        .ok_or(Rejected("Target file does not exist"))?;
+    let file = target.open_existing(&prior)?;
+    let input = read_text(&file, &prior)?;
+
+    if !input.contains(target_text) {
+        return Err(Rejected("Target text was not found in file"));
+    }
+
+    let updated = if replace_all {
+        input.replace(target_text, replacement)
+    } else {
+        let start = input.find(target_text).expect("contains checked");
+        let mut res = String::with_capacity(input.len() + replacement.len());
+        res.push_str(&input[..start]);
+        res.push_str(replacement);
+        res.push_str(&input[start + target_text.len()..]);
+        res
+    };
+
+    if updated.len() > MAX_TEXT_BYTES {
+        return Err(Rejected("Updated file exceeds the 65536-byte limit"));
+    }
+
+    publish(&target, Some((&file, &prior)), &updated, record_stage)?;
+    Ok(checksum(&updated))
+}
+
 pub(super) fn checksum(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }

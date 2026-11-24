@@ -30,6 +30,9 @@ pub struct Client {
     pub root: PathBuf,
     pub actions: Vec<Action>,
     pub mode: ExecutionMode,
+    pub disabled: bool,
+    #[cfg(target_os = "linux")]
+    pub explicit_extra_roots: bool,
     #[cfg(target_os = "linux")]
     pub(crate) skills: std::collections::BTreeSet<String>,
     #[cfg(target_os = "linux")]
@@ -306,14 +309,26 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             job_state,
         )?;
         #[cfg(target_os = "linux")]
-        let job_extra_roots = if has_job_grant && mode == Mode::ScopedYolo {
-            super::scope::root_paths(entry, "yolo_roots")?
-                .iter()
-                .map(|root| JobRoot::open(root))
-                .collect::<Result<_, _>>()?
-        } else {
-            Vec::new()
-        };
+        let job_extra_roots =
+            if has_job_grant && (mode == Mode::ScopedYolo || document["policy_version"] == 3) {
+                let key = if document["policy_version"] == 3 {
+                    "extra_roots"
+                } else {
+                    "yolo_roots"
+                };
+                let roots = super::scope::root_paths(entry, key)?;
+                if let Some((_, profiles)) = &jobs {
+                    for root in &roots {
+                        profiles.reject_mutable_executables(root)?;
+                    }
+                }
+                roots
+                    .iter()
+                    .map(|root| JobRoot::open(root))
+                    .collect::<Result<_, _>>()?
+            } else {
+                Vec::new()
+            };
         #[cfg(target_os = "linux")]
         let upstream_grants = crate::upstream::Grants::parse(entry, &upstreams)?;
         clients.push(Client {
@@ -323,6 +338,9 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             root,
             actions,
             mode: mode.into(),
+            disabled: entry["disabled"].as_bool().unwrap_or(false),
+            #[cfg(target_os = "linux")]
+            explicit_extra_roots: document["policy_version"] == 3 && mode == Mode::Standard,
             #[cfg(target_os = "linux")]
             skills: crate::skills::parse_names(entry.get("skills"))?,
             #[cfg(target_os = "linux")]
@@ -542,7 +560,11 @@ pub fn authenticate(clients: &[Client], header: Option<&HeaderValue>, now: u64) 
     for (index, client) in clients.iter().enumerate() {
         // Inspect every verifier, even after a match.
         let matched: bool = client.digest.ct_eq(&candidate).into();
-        if matched && now < client.expires_at && client.mode != ExecutionMode::Disabled {
+        if matched
+            && now < client.expires_at
+            && !client.disabled
+            && client.mode != ExecutionMode::Disabled
+        {
             found = Some(index);
         }
     }

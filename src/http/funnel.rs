@@ -48,7 +48,8 @@ impl Settings {
 
 pub(super) fn marked(headers: &HeaderMap) -> bool {
     let mut values = headers.get_all(MARKER).iter();
-    values.next().is_some_and(|value| value == "?1") && values.next().is_none()
+    (values.next().is_some_and(|value| value == "?1") && values.next().is_none())
+        || headers.contains_key("Tailscale-User-Login")
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +98,7 @@ impl Origin {
 }
 
 pub(super) fn route_matches(path: &str, allow_secret_path: bool) -> bool {
+    let path = path.strip_prefix("/veyl").unwrap_or(path);
     // Browser preflight must see the same result for any well-formed
     // secret path, regardless of whether the credential is valid.
     path == "/mcp"
@@ -163,6 +165,7 @@ pub(super) fn preflight_headers(headers: &mut HeaderMap) {
 }
 
 pub(super) fn proof(path: &str, headers: &HeaderMap, allow_secret_path: bool) -> Option<[u8; 32]> {
+    let path = path.strip_prefix("/veyl").unwrap_or(path);
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
     let first = values.next();
     let token = if path == "/mcp" && values.next().is_none() {
@@ -190,6 +193,7 @@ pub(super) fn authenticate(
     }
     settings.clients.iter().position(|client| {
         client.id == public.client
+            && !client.disabled
             && client.mode == ExecutionMode::BroadYolo
             && now < client.expires_at
     })

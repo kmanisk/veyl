@@ -62,6 +62,16 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     let policy = PolicyFile::lock(&path, command != "status")?;
     let bytes = policy.bytes()?;
     let mut document = parse_document(&bytes)?;
+    let version3 = document["policy_version"] == 3;
+    if version3 && command == "enable" {
+        return Err(
+            "Deprecated: use veyl mode set --client ID --mode standard|yolo|full --config PATH"
+                .into(),
+        );
+    }
+    if version3 && matches!(command, "reset" | "disable") && requested_mode != Some("standard") {
+        return Err("Use veyl mode set or veyl mode disable for policy version 3".into());
+    }
     let settings = parse_clients(&path, &bytes)?;
     let client = settings
         .clients
@@ -76,6 +86,12 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         .find(|entry| entry["id"].as_str() == Some(id))
         .ok_or("Unknown client")?;
     let previous = Mode::from_entry(entry)?;
+    let disabled = entry["disabled"]
+        .as_bool()
+        .unwrap_or(previous == Mode::Disabled);
+    if version3 && disabled && command != "status" {
+        return Err("Client is disabled; enable it explicitly first".into());
+    }
     let pending = policy.pending_client()?;
     if pending
         .as_deref()
@@ -139,7 +155,14 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         let object = entry
             .as_object_mut()
             .ok_or("Invalid client configuration")?;
-        object.insert("mode".into(), Value::from(target.label()));
+        object.insert(
+            "mode".into(),
+            Value::from(if version3 && target == Mode::BroadYolo {
+                "yolo"
+            } else {
+                target.label()
+            }),
+        );
         object.remove("yolo_shared_roots");
         object.remove("yolo_revision");
         if matches!(target, Mode::ScopedYolo | Mode::BroadYolo | Mode::Full) {
@@ -148,13 +171,15 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         if !implicit.is_empty() {
             object.insert("yolo_shared_roots".into(), serde_json::json!(implicit));
         }
-        document["policy_version"] =
-            if matches!(target, Mode::Full | Mode::BroadYolo) || document["policy_version"] == 2 {
-                2
-            } else {
-                1
-            }
-            .into();
+        document["policy_version"] = if version3 {
+            3
+        } else if matches!(target, Mode::Full | Mode::BroadYolo) || document["policy_version"] == 2
+        {
+            2
+        } else {
+            1
+        }
+        .into();
         let mut candidate =
             serde_json::to_vec_pretty(&document).map_err(|_| "Cannot encode policy")?;
         candidate.push(b'\n');
@@ -187,7 +212,11 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     }
     println!(
         "client={id} client_state={} yolo={} mode={} effective_policy={} tool_grants={}",
-        if target == Mode::Disabled {
+        if if version3 {
+            disabled
+        } else {
+            target == Mode::Disabled
+        } {
             "disabled"
         } else {
             "enabled"

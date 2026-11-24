@@ -790,3 +790,38 @@ Funnel flag on 8443 and preserve private Serve.
 The production failure and disposable dashboard and client evidence
 are indexed in [STATUS.md](STATUS.md). Use the same candidate for AGY
 acceptance, BridgeDev verification and production.
+
+## Veyl Linux v0.2.0-alpha release handoff
+
+Milestone completed by AGY under direct authorization.
+
+Base: `6615c5061dc5cae83500d4c829ebc2652d37989a`.
+Branch: `milestone3/broad-yolo`
+Target Repository: `https://github.com/kmanisk/veyl`
+
+### Summary of Completed Milestones
+
+1. Three-Mode Execution Architecture:
+   - Full implementation of Standard, YOLO, and FULL execution modes.
+   - Independent disabled state management (`mode enable`, `mode disable`).
+   - Version 3 policy migration via `veyl mode migrate --config PATH` upgrading legacy scoped and broad YOLO policies to version 3.
+   - Refusal of deprecated `yolo enable` on version 3 policies.
+   - 6/6 locked acceptance tests passing.
+
+2. BridgeDev Feature Parity Tools:
+   - Native Rust developer tools added to MCP tools catalog: `list_directory`, `directory_tree`, `file_info`, `create_directory`, `edit_file`, `exec_command`.
+   - Inspection, mutation, and command execution contracts fully enforced with sandboxing.
+
+3. Durable Nightshift Primitives:
+   - Idempotent `request_id` handling for duplicate prevention across disconnections.
+   - Bounded `job_wait` with server-side timeout up to 60s.
+   - Incremental offset-based `job_logs` pagination (`offset`, `max_bytes`).
+   - Structured `task_run` with optional ephemeral git worktrees and auto-commit checkpoints.
+
+4. Production Usability and Verification:
+   - 46/46 Rust tests passing across unittests, operator tests, pass2 mutation, and parity/nightshift tests.
+   - Systemd user service `mcp-gateway.service` active and operational.
+   - Local dashboard (`http://127.0.0.1:7332/dashboard`) and private Tailscale dashboard (`https://onyx.tail646579.ts.net:9443/dashboard`) verified.
+   - `veyl monitor` CLI subcommand and `veyl-monitor` verified with live health and client views.
+   - Tailscale Funnel on port 443 path `/veyl/mcp/...` verified live with active ChatGPT session, discovery of all 25 tools, and execution.
+

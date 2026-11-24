@@ -82,6 +82,94 @@ fn ok(result: Output) -> String {
 }
 
 #[test]
+fn new_mode_cli_uses_the_existing_audited_policy_transaction() {
+    let f = Fixture::new("standard");
+    let original = f.read();
+    assert!(ok(f.run(&["mode", "get", "fixture"])).contains("mode=standard"));
+    assert!(!f.run(&["mode", "set", "fixture", "full"]).status.success());
+    assert_eq!(f.read(), original);
+    assert!(
+        ok(f.run(&[
+            "mode",
+            "set",
+            "--client",
+            "fixture",
+            "--mode",
+            "full",
+            "--confirm-full"
+        ]))
+        .contains("mode=full")
+    );
+    assert!(ok(f.run(&["mode", "get", "--client", "fixture"])).contains("effective_policy=full"));
+    assert!(ok(f.run(&["mode", "set", "fixture", "standard"])).contains("mode=standard"));
+    let after = f.read();
+    assert_eq!(
+        after["clients"][0]["token_sha256"],
+        original["clients"][0]["token_sha256"]
+    );
+    assert_eq!(after["clients"][0]["mode"], "standard");
+    assert!(after["clients"][0].get("yolo_revision").is_none());
+    let audit = ok(f.run(&["audit", "inspect"]));
+    assert!(audit.contains("\"requested_mode\":\"full\""));
+    assert!(audit.contains("\"requested_mode\":\"standard\""));
+    assert!(ok(f.run(&["audit", "verify"])).contains("VERIFY_RESULT=VALID"));
+}
+
+#[test]
+fn version_three_migration_preserves_scopes_and_refuses_legacy_enable() {
+    let f = Fixture::new("standard");
+    let extra = f.0.join("extra");
+    DirBuilder::new().mode(0o700).create(&extra).unwrap();
+    let mut document = f.read();
+    document["clients"][0]["yolo_roots"] = json!([extra]);
+    f.write(&document);
+    ok(f.mode(&["enable"]));
+    let old_policy = f.read();
+    assert_eq!(old_policy["clients"][0]["mode"], "yolo");
+    ok(f.run(&["mode", "migrate"]));
+    let migrated = f.read();
+    assert_eq!(migrated["policy_version"], 3);
+    assert_eq!(migrated["clients"][0]["mode"], "standard");
+    assert_eq!(migrated["clients"][0]["extra_roots"], json!([extra]));
+    assert_eq!(migrated["clients"][0]["disabled"], false);
+    assert_eq!(
+        migrated["clients"][0]["token_sha256"],
+        old_policy["clients"][0]["token_sha256"]
+    );
+    assert!(migrated["clients"][0].get("yolo_revision").is_none());
+    assert!(!f.mode(&["enable"]).status.success());
+    assert_eq!(f.read(), migrated);
+    f.write(&old_policy);
+    assert!(!f.mode(&["status"]).status.success());
+    f.write(&migrated);
+    assert!(ok(f.run(&["mode", "get", "fixture"])).contains("mode=standard"));
+}
+
+#[test]
+fn version_three_independent_client_activation_preserves_mode() {
+    let f = Fixture::new("standard");
+    ok(f.run(&["mode", "migrate"]));
+    ok(f.run(&["mode", "set", "fixture", "full", "--confirm-full"]));
+    let active = f.read();
+    ok(f.run(&["mode", "disable", "fixture"]));
+    let mut disabled = active.clone();
+    disabled["clients"][0]["disabled"] = true.into();
+    assert_eq!(f.read(), disabled);
+    assert!(ok(f.run(&["mode", "get", "fixture"])).contains("client_state=disabled"));
+    assert!(
+        !f.run(&["mode", "set", "fixture", "standard"])
+            .status
+            .success()
+    );
+    ok(f.run(&["mode", "enable", "fixture"]));
+    assert_eq!(f.read(), active);
+    assert!(ok(f.run(&["audit", "verify"])).contains("VERIFY_RESULT=VALID"));
+    ok(f.run(&["mode", "set", "fixture", "standard"]));
+    assert_eq!(f.read()["clients"][0]["mode"], "standard");
+    assert_eq!(f.read()["policy_version"], 3);
+}
+
+#[test]
 fn reset_recovers_disabled_to_standard_and_preserves_credentials() {
     let f = Fixture::new("disabled");
     let previous = f.read();

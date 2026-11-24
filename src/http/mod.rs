@@ -338,8 +338,10 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
 }
 
 async fn serve(request: Request<Incoming>, state: Arc<State>, peer: IpAddr) -> Reply {
-    let marker = request.headers().contains_key("Tailscale-Funnel-Request");
-    let path = request.uri().path();
+    let marker = request.headers().contains_key("Tailscale-Funnel-Request")
+        || request.headers().contains_key("Tailscale-User-Login");
+    let raw_path = request.uri().path();
+    let path = raw_path.strip_prefix("/veyl").unwrap_or(raw_path);
     if path != "/mcp" && !(marker && path.starts_with("/mcp/")) {
         return simple(StatusCode::NOT_FOUND, "Not found");
     }
@@ -993,11 +995,18 @@ fn dispatch_tools(
                             yolo: false,
                             full: false,
                             broad: None,
-                            workspace_mounts: settings.managed.then_some(&[]),
+                            workspace_mounts: settings.managed.then_some(&client.job_extra_roots),
                         },
                     ));
                 }
                 return Some(tool_text(true, "Jobs unavailable"));
+            }
+            #[cfg(target_os = "linux")]
+            if client.explicit_extra_roots && !client.extra_roots.is_empty() {
+                return Some(
+                    client_file_tool(state, settings, client, tool, args, now)
+                        .unwrap_or_else(|| tool_text(true, "Operation outside an approved scope")),
+                );
             }
             #[cfg(target_os = "linux")]
             if let Some(root) = client.mutation_root.as_ref() {
@@ -1125,7 +1134,7 @@ fn client_file_tool(
         };
         (&full_root, Path::new(absolute.file_name()?))
     } else if path.is_absolute() {
-        if !yolo {
+        if !yolo && !(client.explicit_extra_roots && !client.extra_roots.is_empty()) {
             return None;
         }
         client

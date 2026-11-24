@@ -4,6 +4,7 @@ use mcp_gateway::security::linux_fs::{open_beneath_dir, reopen_regular};
 use rustix::fd::OwnedFd;
 use rustix::fs::{self, Dir, FileType, Mode, OFlags, ResolveFlags};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     ffi::OsStr,
     fs::{self as host_fs, File},
@@ -123,8 +124,6 @@ fn inspect(
             }
         }
     };
-    let directory = open_beneath_dir(root.directory(), relative)
-        .map_err(|_| "Directory unavailable or outside workspace")?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let reserved = |path: &Path| {
         let full = root.path().join(path);
@@ -147,12 +146,218 @@ fn inspect(
     if reserved(relative) {
         return Err("Protected inspection directory".into());
     }
+    if tool == Tool::FileInfo {
+        let rel_target = if relative.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            relative
+        };
+        let handle = fs::openat2(
+            root.directory(),
+            rel_target,
+            OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+            ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS | ResolveFlags::NO_XDEV,
+        )
+        .map_err(|_| "Target unavailable or outside workspace")?;
+        let stat = fs::fstat(&handle).map_err(|_| "Cannot stat target path")?;
+        let ftype = match FileType::from_raw_mode(stat.st_mode) {
+            FileType::Directory => "directory",
+            FileType::RegularFile => "file",
+            FileType::Symlink => "symlink",
+            _ => "other",
+        };
+        let mut sha = None;
+        if ftype == "file"
+            && stat.st_size <= 1024 * 1024
+            && stat.st_nlink == 1
+            && let Ok(file) = reopen_regular(&handle, OFlags::RDONLY)
+        {
+            let mut data = Vec::new();
+            if File::from(file).read_to_end(&mut data).is_ok() {
+                sha = Some(format!("{:x}", Sha256::digest(&data)));
+            }
+        }
+        return Ok(json!({
+            "path": relative.to_string_lossy(),
+            "exists": true,
+            "type": ftype,
+            "size_bytes": stat.st_size.max(0) as u64,
+            "permissions": format!("{:04o}", stat.st_mode & 0o7777),
+            "mtime_unix": stat.st_mtime,
+            "sha256": sha
+        }));
+    }
+    let directory = open_beneath_dir(root.directory(), relative)
+        .map_err(|_| "Directory unavailable or outside workspace")?;
     let mut walk = Walk {
         reserved: &reserved,
         seen: 0,
         truncated: false,
         deadline: Instant::now() + Duration::from_millis(1400),
     };
+    if tool == Tool::ListDirectory {
+        let recursive = args
+            .get("recursive")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let show_hidden = args
+            .get("show_hidden")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let max_items = args.get("max_items").and_then(Value::as_u64).unwrap_or(200) as usize;
+        let mut entries = Vec::new();
+        if !recursive {
+            for item in Dir::read_from(&directory).map_err(|e| e.to_string())? {
+                let item = item.map_err(|e| e.to_string())?;
+                let name = OsStr::from_bytes(item.file_name().to_bytes());
+                let name_str = name.to_string_lossy();
+                if name_str == "." || name_str == ".." {
+                    continue;
+                }
+                if !show_hidden && name_str.starts_with('.') {
+                    continue;
+                }
+                let full_rel = relative.join(name);
+                if reserved(&full_rel) {
+                    continue;
+                }
+                let (ftype, size, mtime) = match fs::openat2(
+                    &directory,
+                    name,
+                    OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                    Mode::empty(),
+                    ResolveFlags::BENEATH | ResolveFlags::NO_XDEV | ResolveFlags::NO_MAGICLINKS,
+                ) {
+                    Ok(handle) => match fs::fstat(&handle) {
+                        Ok(st) => {
+                            let ft = match FileType::from_raw_mode(st.st_mode) {
+                                FileType::Directory => "directory",
+                                FileType::RegularFile => "file",
+                                FileType::Symlink => "symlink",
+                                _ => "other",
+                            };
+                            (ft, st.st_size.max(0) as u64, st.st_mtime as u64)
+                        }
+                        Err(_) => ("other", 0, 0),
+                    },
+                    Err(_) => ("other", 0, 0),
+                };
+                entries.push(json!({
+                    "name": name_str,
+                    "path": full_rel.to_string_lossy(),
+                    "type": ftype,
+                    "size_bytes": size,
+                    "mtime_unix": mtime,
+                }));
+                if entries.len() >= max_items {
+                    break;
+                }
+            }
+        } else {
+            walk.visit(&directory, relative, false, 0, &mut |path, entry| {
+                if entries.len() >= max_items {
+                    return Ok(false);
+                }
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default();
+                if !show_hidden && name.starts_with('.') {
+                    return Ok(true);
+                }
+                let (ftype, size) = match entry {
+                    Entry::Directory => ("directory", 0),
+                    Entry::File(_, len) => ("file", len),
+                    Entry::Other => ("other", 0),
+                };
+                entries.push(json!({
+                    "name": name,
+                    "path": path.to_string_lossy(),
+                    "type": ftype,
+                    "size_bytes": size,
+                }));
+                Ok(entries.len() < max_items)
+            })
+            .map_err(|e| e.to_string())?;
+        }
+        return Ok(json!({
+            "path": relative.to_string_lossy(),
+            "entries": entries,
+            "count": entries.len(),
+            "truncated": entries.len() >= max_items || walk.truncated,
+        }));
+    }
+    if tool == Tool::DirectoryTree {
+        let max_depth = args
+            .get("max_depth")
+            .and_then(Value::as_u64)
+            .unwrap_or(4)
+            .min(10) as usize;
+        fn tree_node(
+            fd: &OwnedFd,
+            current: &Path,
+            depth: usize,
+            max_depth: usize,
+            reserved: &dyn Fn(&Path) -> bool,
+        ) -> io::Result<Value> {
+            let mut children = Vec::new();
+            if depth < max_depth {
+                for item in Dir::read_from(fd)? {
+                    let item = item?;
+                    let name = OsStr::from_bytes(item.file_name().to_bytes());
+                    let name_str = name.to_string_lossy();
+                    if name_str == "." || name_str == ".." || name_str.starts_with('.') {
+                        continue;
+                    }
+                    let child_path = current.join(name);
+                    if reserved(&child_path) {
+                        continue;
+                    }
+                    if let Ok(handle) = fs::openat2(
+                        fd,
+                        name,
+                        OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                        Mode::empty(),
+                        ResolveFlags::BENEATH | ResolveFlags::NO_XDEV | ResolveFlags::NO_MAGICLINKS,
+                    ) && let Ok(st) = fs::fstat(&handle)
+                    {
+                        match FileType::from_raw_mode(st.st_mode) {
+                            FileType::Directory => {
+                                if let Ok(sub_dir) = open_beneath_dir(&handle, Path::new("."))
+                                    && let Ok(sub_tree) = tree_node(
+                                        &sub_dir,
+                                        &child_path,
+                                        depth + 1,
+                                        max_depth,
+                                        reserved,
+                                    )
+                                {
+                                    children.push(sub_tree);
+                                }
+                            }
+                            FileType::RegularFile => {
+                                children.push(json!({
+                                    "name": name_str,
+                                    "type": "file",
+                                    "size_bytes": st.st_size.max(0) as u64
+                                }));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Ok(json!({
+                "name": current.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| ".".into()),
+                "type": "directory",
+                "children": children
+            }))
+        }
+        let tree =
+            tree_node(&directory, relative, 0, max_depth, &reserved).map_err(|e| e.to_string())?;
+        return Ok(tree);
+    }
     if tool == Tool::SearchFiles {
         let query = args
             .get("query")

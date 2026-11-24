@@ -359,7 +359,7 @@ impl Broad {
                     .any(|target| target.starts_with(path) && target != path))
     }
 
-    fn is_masked(&self, path: &Path) -> bool {
+    pub(crate) fn is_masked(&self, path: &Path) -> bool {
         self.masked.iter().any(|mask| path.starts_with(mask))
     }
 

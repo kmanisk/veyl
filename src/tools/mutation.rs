@@ -184,8 +184,8 @@ impl MutationAudit {
         }
 
         let action = match tool {
-            Tool::WriteFile => AuditAction::WriteFile,
-            Tool::ApplyPatch => AuditAction::ApplyPatch,
+            Tool::WriteFile | Tool::CreateDirectory => AuditAction::WriteFile,
+            Tool::ApplyPatch | Tool::EditFile => AuditAction::ApplyPatch,
             _ => return tool_text(true, "Invalid mutation tool"),
         };
         let field = |name: &str| args.get(name).and_then(Value::as_str);
@@ -203,6 +203,10 @@ impl MutationAudit {
             let mut record_stage = |proof: &StageProof| journal.prepare(Some(proof));
             match action {
                 AuditAction::WriteFile => {
+                    if tool == Tool::CreateDirectory {
+                        root.create_directory(path)?;
+                        return Ok("directory_created".to_string());
+                    }
                     let content = field("content")
                         .ok_or(MutationError::Rejected("Missing string argument: content"))?;
                     let overwrite = match args.get("overwrite") {
@@ -218,6 +222,25 @@ impl MutationAudit {
                     Ok(patch::checksum(content))
                 }
                 AuditAction::ApplyPatch => {
+                    if tool == Tool::EditFile {
+                        let target_text = field("target")
+                            .ok_or(MutationError::Rejected("Missing string argument: target"))?;
+                        let replacement = field("replacement").ok_or(MutationError::Rejected(
+                            "Missing string argument: replacement",
+                        ))?;
+                        let replace_all = args
+                            .get("replace_all")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        return patch::edit_file(
+                            root,
+                            path,
+                            target_text,
+                            replacement,
+                            replace_all,
+                            &mut record_stage,
+                        );
+                    }
                     let (Some(expected), Some(old), Some(new)) =
                         (field("expected_sha256"), field("old"), field("new"))
                     else {
