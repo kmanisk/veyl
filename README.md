@@ -11,12 +11,11 @@ commands, durable jobs, native diagnostics, skills and upstream MCP servers.
 Install the Linux beta from [GitHub Releases](https://github.com/kmanisk/veyl/releases). Download the three Linux x86_64 binaries and `SHA256SUMS` into a private folder, verify `sha256sum -c SHA256SUMS`, and use `veyl update --from-dir /absolute/path/to/bundle` for an existing installation. To build this release from source:
 
 ```sh
-cargo install --git https://github.com/kmanisk/veyl --tag v0.3.1-beta --locked --bins
+cargo install --git https://github.com/kmanisk/veyl --tag v0.4.0-beta --locked --bins
 ```
 
 Veyl is open source under the MIT license. Source code and prebuilt Linux
-binaries are available on GitHub. Older published crate versions may also be
-available on crates.io; this release's source and binaries are on GitHub.
+binaries are available on GitHub; see [crates.io](https://crates.io/crates/veyl) for published Cargo versions.
 
 Requires Linux, Bubblewrap (`bwrap`) and Git. Add Tailscale for remote
 access and a systemd user session for persistent service mode.
@@ -62,13 +61,15 @@ veyl tui
 for `veyl tui`. Both pair automatically. The dashboard has sidebar views,
 themes, structured diagnostics, and JSON detail dialogs. The terminal
 monitor supports keyboard and mouse navigation, activity/job filtering,
-Enter for JSON details, and l for job logs. Use t on Activity (or the
+Enter for readable Activity command/target details (d toggles JSON), and l for job logs. Use t on Activity (or the
 local dashboard's Capture button) for a bounded, temporary command/response trace.
 The durable audit remains metadata-only.
 
 ## Daily use
 
-Veyl v0.3.1-beta includes unified permission modes (`Standard`, `YOLO` with
+Veyl 0.4.0-beta adds opt-in native text checkpoint history, preview and guarded restore. See [TimeShift](https://github.com/kmanisk/veyl/blob/v0.4.0-beta/docs/development/TIMESHIFT.md).
+
+Veyl v0.4.0-beta includes unified permission modes (`Standard`, `YOLO` with
 native tool preset and `deny_tools`, `FULL` with confirmation), confined ad-hoc
 and durable commands (`exec_command`, `task_run` with optional isolated worktrees),
 persistent pipe/PTY sessions (`process_start`, `process_input`, `process_resize`,
@@ -77,8 +78,7 @@ helpers, extension/upstream management with verified one-click marketplace runti
 bundle installation (`veyl marketplace`), read-only runtime bundles
 (`veyl mcp-servers add-bundle`), explicit read-only provider workspace folders
 (`veyl mcp-servers workspace-folder` and the local dashboard), independent `stdout`/`stderr` log cursors, and
-live local-timezone AM/PM millisecond monitoring. TimeShift (`rewind` checkpoints)
-and autonomous Nightshift orchestration are not implemented in `0.3.1-beta`.
+live local-timezone AM/PM millisecond monitoring. TimeShift covers opt-in native UTF-8 writes and patches with signed per-client history, preview, guarded restore and retention. Shell, Git and binary changes are not captured; autonomous Nightshift orchestration remains unimplemented.
 
 | Command | Action |
 | --- | --- |

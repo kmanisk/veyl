@@ -1,6 +1,6 @@
 [package]
 name = "veyl"
-version = "0.3.1-beta"
+version = "0.4.0-beta"
 edition = "2024"
 default-run = "veyl"
 description = "A lightweight Linux MCP gateway with durable jobs, skills, and native monitoring"

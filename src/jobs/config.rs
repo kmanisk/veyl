@@ -184,6 +184,8 @@ struct JobClient {
     _job_output_limit_bytes: Option<usize>,
     #[serde(default, rename = "job_retention_count")]
     _job_retention_count: Option<usize>,
+    #[serde(default, rename = "timeshift_retention_count")]
+    _timeshift_retention_count: Option<usize>,
 }
 
 pub(crate) fn parse_settings(bytes: &[u8]) -> Result<(PathBuf, Profiles), String> {

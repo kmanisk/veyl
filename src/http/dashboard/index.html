@@ -75,6 +75,10 @@
             <button id="grant-native-save" type="button">Apply native grants</button>
           </div>
           <div id="native-grant-grid" class="grant-grid"></div>
+          <div class="workspace-intro"><strong>TimeShift (optional)</strong><p>Grant rewind to capture pre-edit text snapshots; grant restore and clear separately. No shell or Git tracking. Rewind is excluded from bulk selection. When retention is full, checkpointed edits stop until you clear history or raise the limit.</p>
+          <label>Retained checkpoints per client <input id="timeshift-retention" type="number" min="1" max="256" step="1" value="64"></label>
+          <button id="timeshift-retention-save" type="button">Save retention</button>
+          </div>
         </div>
       </section>
       <section aria-labelledby="diagnostics" class="panel">

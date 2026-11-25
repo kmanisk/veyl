@@ -1178,7 +1178,7 @@ fn dispatch_tools(
                 return Some(tool_text(true, "Jobs unavailable"));
             }
             #[cfg(target_os = "linux")]
-            if client.explicit_extra_roots && !client.extra_roots.is_empty() {
+            if tool.is_rewind() || client.explicit_extra_roots && !client.extra_roots.is_empty() {
                 return Some(
                     client_file_tool(state, settings, client, tool, args, now)
                         .unwrap_or_else(|| tool_text(true, "Operation outside an approved scope")),
@@ -1186,11 +1186,14 @@ fn dispatch_tools(
             }
             #[cfg(target_os = "linux")]
             if let Some(root) = client.mutation_root.as_ref() {
-                return Some(
-                    state
-                        .mutations
-                        .call(tool, args, root, &client.id, now, false),
-                );
+                return Some(state.mutations.call(
+                    tool,
+                    args,
+                    root,
+                    &client.id,
+                    now,
+                    (client.mode, timeshift_limit(client, settings)),
+                ));
             }
             Some(tool_text(true, "Mutation unavailable"))
         },
@@ -1390,7 +1393,7 @@ fn client_file_tool(
         root,
         &client.id,
         now,
-        yolo || client.mode == ExecutionMode::BroadYolo,
+        (client.mode, timeshift_limit(client, settings)),
     ))
 }
 
@@ -1429,7 +1432,24 @@ fn permit_tool(
     Err(DENIED)
 }
 
+#[cfg(target_os = "linux")]
+fn timeshift_limit(client: &Client, settings: &Configuration) -> Option<usize> {
+    (settings.managed
+        && client.mode != ExecutionMode::Full
+        && client.tools.contains(&Tool::Rewind)
+        && client.tools.contains(&Tool::ReadFile))
+    .then_some(client.timeshift_retention_count)
+}
+
 fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configuration) -> bool {
+    if tool.is_rewind() {
+        #[cfg(target_os = "linux")]
+        return timeshift_limit(client, settings).is_some()
+            && state.mutations.available()
+            && (tool == Tool::Rewind || client.tools.contains(&Tool::WriteFile));
+        #[cfg(not(target_os = "linux"))]
+        return false;
+    }
     if tool.process_control() {
         #[cfg(target_os = "linux")]
         return settings.managed

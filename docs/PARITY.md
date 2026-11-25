@@ -1,5 +1,9 @@
 # BridgeDev capability comparison
 
+## 0.4.0-beta candidate scope
+
+TimeShift adds three separately granted native tools (71 total; 84 including the previously reviewed upstream tools if all grants are enabled), signed per-client pre-edit history, changed-line preview, guarded restore/redo and operator retention controls. Coverage is limited to native UTF-8 file mutations; new-file removal, arbitrary shell/Git mutations and autonomous Nightshift are not implemented. The combined Nightshift/checkpoint domain remains partial; do not claim full parity. See [TimeShift](development/TIMESHIFT.md).
+
 ## 0.3.1-beta release scope
 
 The 0.3.1-beta release adds verified marketplace installation, explicit bounded read-only workspace projections for reviewed REA and Rust Anything operations, persistent provider-only directory authorization, and a local dashboard folder editor. The native tool count remains 68; upstream discovery depends on installed providers and grants (81 in the reviewed three-provider configuration). This does not change the approximately 86% functional-domain estimate. TimeShift and autonomous Nightshift remain excluded.

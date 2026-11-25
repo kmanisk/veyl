@@ -745,6 +745,8 @@ function renderNativeGrants(state) {
   const client = state.clients.find(c => c.id === select.value);
   grid.replaceChildren();
   if (!client || !Array.isArray(state.all_tools)) return;
+  byId("timeshift-retention").value = client.timeshift_retention_count || 64;
+  byId("timeshift-retention-save").disabled = remote;
   const granted = new Set(client.grants || []);
   for (const t of state.all_tools) {
     const name = typeof t === "string" ? t : t.name;
@@ -1100,7 +1102,10 @@ byId("marketplace-recover")?.addEventListener("click", async () => {
 });
 byId("grant-client")?.addEventListener("change", () => lastStatus && renderNativeGrants(lastStatus));
 byId("grant-all-safe")?.addEventListener("click", () => {
-  for (const cb of byId("native-grant-grid").querySelectorAll('input[type="checkbox"]')) cb.checked = true;
+  for (const cb of byId("native-grant-grid").querySelectorAll('input[type="checkbox"]')) {
+    // Snapshot retention and destructive rewind remain an explicit opt-in.
+    if (!['rewind','rewind_restore','rewind_clear'].includes(cb.value)) cb.checked = true;
+  }
 });
 byId("grant-git-all")?.addEventListener("click", () => {
   const cbs = [...byId("native-grant-grid").querySelectorAll('input[data-git="1"]')];
@@ -1116,6 +1121,16 @@ byId("grant-proc-all")?.addEventListener("click", () => {
   const cbs = [...byId("native-grant-grid").querySelectorAll('input[data-proc="1"]')];
   const anyUnchecked = cbs.some(cb => !cb.checked);
   for (const cb of cbs) cb.checked = anyUnchecked;
+});
+byId("timeshift-retention-save")?.addEventListener("click", async () => {
+  const client = byId("grant-client").value;
+  const input = byId("timeshift-retention");
+  if (remote || !client || !input.reportValidity() || !Number.isInteger(Number(input.value)) || !window.confirm("Save TimeShift retention for " + client + "? Existing history will not be deleted.")) return;
+  try {
+    await request("clients/grants", { client, timeshift_retention_count: Number(input.value), confirm: true });
+    notice.textContent = "Updated TimeShift retention for " + client;
+    await refresh();
+  } catch (error) { notice.textContent = error.message; }
 });
 byId("grant-native-save")?.addEventListener("click", async () => {
   const client = byId("grant-client").value;

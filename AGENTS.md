@@ -20,6 +20,8 @@ restarting production, pushing main or publishing. A passing agent test is
 not operator acceptance. Never bump the version without explicit instruction.
 See docs/development/PREVIEW.md.
 
+Release workflow (operator instruction, 2026-11-25): when the operator explicitly approves an exact tested release candidate for update, that approval includes local Veyl upgrade (all three binaries in the managed user and Cargo bin directories), fast-forward promotion to canonical main, GitHub push and versioned GitHub release, and publication of the matching crate to crates.io. Carry out all of these without separate repeated approval, subject to preflight, tests, credentials, rollback, and post-upgrade verification. Preserve client grants, modes, upstream roots, unrelated packages/services and existing jobs; approval never authorizes FULL escalation or new tool grants. Report any blocked destination, not an assumed success.
+
 Artifact retention: put pending worktrees under
 `~/.local/share/veyl-development/candidates/`, reuse the explicit shared
 `~/Projects/veyl/target` Cargo cache for serial builds, and store receipts in

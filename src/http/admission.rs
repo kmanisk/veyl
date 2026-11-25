@@ -58,6 +58,8 @@ pub struct Client {
     #[cfg(target_os = "linux")]
     pub job_retention_count: Option<usize>,
     #[cfg(target_os = "linux")]
+    pub timeshift_retention_count: usize,
+    #[cfg(target_os = "linux")]
     pub job_extra_roots: Vec<JobRoot>,
 }
 
@@ -388,6 +390,11 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
                 .get("job_output_limit_bytes")
                 .and_then(Value::as_u64)
                 .unwrap_or(65_536) as usize,
+            #[cfg(target_os = "linux")]
+            timeshift_retention_count: entry
+                .get("timeshift_retention_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(64) as usize,
             #[cfg(target_os = "linux")]
             job_retention_count: entry
                 .get("job_retention_count")

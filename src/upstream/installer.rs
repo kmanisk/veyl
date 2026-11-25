@@ -3150,6 +3150,16 @@ pub(crate) fn update_client_grants(config: &Path, body: &Value) -> Result<Value,
         .and_then(|arr| arr.iter_mut().find(|c| c["id"].as_str() == Some(client_id)))
         .ok_or("Unknown client")?;
 
+    if let Some(value) = body.get("timeshift_retention_count") {
+        let count = value
+            .as_u64()
+            .filter(|n| (1..=256).contains(n))
+            .ok_or("TimeShift retention must be 1–256 checkpoints")?;
+        if !settings.managed {
+            return Err("TimeShift requires managed policy".into());
+        }
+        entry["timeshift_retention_count"] = json!(count);
+    }
     if let Some(tools_arr) = body.get("tools") {
         let list = tools_arr.as_array().ok_or("tools must be an array")?;
         let mut clean = BTreeSet::new();

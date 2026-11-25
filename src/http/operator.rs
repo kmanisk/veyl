@@ -472,6 +472,9 @@ fn invalid() -> io::Error {
 
 pub(crate) fn policy_path(config: &Path, path: &Path) -> bool {
     config == path
+        || config
+            .parent()
+            .is_some_and(|parent| path.starts_with(parent.join("timeshift")))
         || config.parent() == path.parent()
             && path.file_name().is_some_and(|name| {
                 let config_name = config.file_name().unwrap_or_default();
@@ -526,6 +529,7 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "job_memory_bytes_limit",
         "job_output_limit_bytes",
         "job_retention_count",
+        "timeshift_retention_count",
     ];
     let allowed = |value: &Value, fields: &[&str]| {
         value
@@ -557,6 +561,7 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
             ),
             ("job_output_limit_bytes", 1, 16 * 1024 * 1024),
             ("job_retention_count", 1, 1024),
+            ("timeshift_retention_count", 1, 256),
         ] {
             if entry
                 .get(key)

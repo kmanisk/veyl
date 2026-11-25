@@ -60,7 +60,7 @@ IDs or reconstructed durations. Activity clears when the gateway exits.
 
 Open the terminal monitor with `veyl monitor`. Its native full-screen view
 uses 1–7 or Tab to switch views, arrow keys or j/k to navigate, p to cycle
-clients, / to filter Activity and Jobs, Enter for JSON details, l for logs,
+clients, / to filter Activity and Jobs, Enter for Activity command/target details (d toggles full JSON), or JSON details on other tabs, l for logs,
 x then y to cancel a selected job, and q to exit. Click tabs and data rows
 with a mouse or use the scroll wheel. Esc closes details or clears filters.
 Press f to toggle Funnel admissions or a to open the separate security ledger

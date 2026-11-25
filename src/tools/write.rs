@@ -14,7 +14,8 @@ use super::filesystem::{
 };
 use MutationError::{Rejected, Uncertain};
 
-pub(super) type RecordStage<'a> = dyn FnMut(&StageProof) -> Result<(), MutationError> + 'a;
+pub(super) type RecordStage<'a> =
+    dyn FnMut(&StageProof, Option<(&File, &Stat)>, &str) -> Result<(), MutationError> + 'a;
 
 pub(super) fn write_file(
     root: &MutationRoot,
@@ -68,7 +69,7 @@ pub(super) fn publish(
     let mut staged = StagedFile::create(&target.directory)?;
     staged.write(content, expected)?;
     let proof = target.stage_proof(&staged.name, &staged.file)?;
-    record_stage(&proof)?;
+    record_stage(&proof, original, content)?;
     staged.link()?;
     fs::fsync(&target.directory).map_err(|_| Rejected("Cannot sync staging directory"))?;
 
@@ -268,7 +269,7 @@ mod tests {
             &target,
             Some((&opened, &snapshot)),
             "stale result",
-            &mut |_| Ok(()),
+            &mut |_, _, _| Ok(()),
         );
         assert_eq!(reply, Err(Rejected("Target changed during the operation")));
         assert_eq!(fs::read_to_string(&file).unwrap(), "changed elsewhere");

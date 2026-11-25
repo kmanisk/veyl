@@ -151,8 +151,14 @@ impl MutationAudit {
         root: &MutationRoot,
         principal: &str,
         unix_seconds: u64,
-        yolo: bool,
+        policy: (mcp_gateway::security::policy::ExecutionMode, Option<usize>),
     ) -> Value {
+        let (mode, checkpoint_limit) = policy;
+        let yolo = matches!(
+            mode,
+            mcp_gateway::security::policy::ExecutionMode::PersistentYolo
+                | mcp_gateway::security::policy::ExecutionMode::BroadYolo
+        );
         let Some(args) = args.and_then(Value::as_object) else {
             return tool_text(true, "Expected mutation arguments");
         };
@@ -183,11 +189,83 @@ impl MutationAudit {
             return tool_text(true, "Audit intent unavailable; mutation denied");
         }
 
+        if tool.is_rewind() && checkpoint_limit.is_none() {
+            return tool_text(true, "TimeShift unavailable");
+        }
+        if matches!(tool, Tool::Rewind | Tool::RewindClear) {
+            let record = |phase| {
+                sink.record_runtime_mode(
+                    principal,
+                    tool.name(),
+                    mode.audit_mode().unwrap_or("standard"),
+                    phase,
+                    unix_seconds,
+                )
+                .is_ok()
+            };
+            if !record(AuditPhase::Intent) {
+                *guard = None;
+                return tool_text(true, "Audit intent unavailable");
+            }
+            let result = (|| {
+                let store = super::timeshift::Store::open(
+                    &self.credentials,
+                    principal,
+                    checkpoint_limit.unwrap_or(64),
+                )?;
+                if tool == Tool::Rewind {
+                    store.history(root, path, args)
+                } else {
+                    let id = args
+                        .get("checkpoint")
+                        .and_then(Value::as_str)
+                        .ok_or(MutationError::Rejected("Checkpoint ID required"))?;
+                    if args.len() != 3 || args.get("confirm") != Some(&Value::Bool(true)) {
+                        return Err(MutationError::Rejected(
+                            "Explicit checkpoint clear confirmation required",
+                        ));
+                    }
+                    store.clear(root, path, id)
+                }
+            })();
+            let phase = match &result {
+                Ok(_) => AuditPhase::Success,
+                Err(MutationError::Uncertain) => AuditPhase::Uncertain,
+                Err(_) => AuditPhase::Failure,
+            };
+            if !record(phase) {
+                *guard = None;
+                return tool_text(
+                    true,
+                    "Audit outcome unavailable; operation status uncertain",
+                );
+            }
+            return match result {
+                Ok(value) => tool_text(false, &value.to_string()),
+                Err(MutationError::Rejected(reason)) => tool_text(true, reason),
+                Err(MutationError::Uncertain) => tool_text(true, "TimeShift outcome uncertain"),
+            };
+        }
+
         let action = match tool {
-            Tool::WriteFile | Tool::CreateDirectory => AuditAction::WriteFile,
+            Tool::WriteFile | Tool::CreateDirectory | Tool::RewindRestore => AuditAction::WriteFile,
             Tool::ApplyPatch | Tool::EditFile => AuditAction::ApplyPatch,
             _ => return tool_text(true, "Invalid mutation tool"),
         };
+        if tool == Tool::RewindRestore
+            && sink
+                .record_runtime_mode(
+                    principal,
+                    tool.name(),
+                    mode.audit_mode().unwrap_or("standard"),
+                    AuditPhase::Intent,
+                    unix_seconds,
+                )
+                .is_err()
+        {
+            *guard = None;
+            return tool_text(true, "Audit intent unavailable");
+        }
         let field = |name: &str| args.get(name).and_then(Value::as_str);
         let mut journal = MutationJournal {
             sink,
@@ -200,7 +278,46 @@ impl MutationAudit {
             proof: None,
         };
         let result = (|| {
-            let mut record_stage = |proof: &StageProof| journal.prepare(Some(proof));
+            let store = if checkpoint_limit.is_some() && tool != Tool::CreateDirectory {
+                Some(super::timeshift::Store::open(
+                    &self.credentials,
+                    principal,
+                    checkpoint_limit.unwrap_or(64),
+                )?)
+            } else {
+                None
+            };
+            let mut record_stage = |proof: &StageProof,
+                                    original: Option<(&std::fs::File, &rustix::fs::Stat)>,
+                                    content: &str| {
+                journal.prepare(Some(proof))?;
+                if let Some(store) = &store {
+                    store.capture(root, path, unix_seconds, proof, original, content)?;
+                }
+                Ok(())
+            };
+            if tool == Tool::RewindRestore {
+                let id =
+                    field("checkpoint").ok_or(MutationError::Rejected("Checkpoint ID required"))?;
+                let current = args
+                    .get("current_checkpoint")
+                    .map(|v| {
+                        v.as_str()
+                            .ok_or(MutationError::Rejected("Invalid current checkpoint ID"))
+                    })
+                    .transpose()?;
+                if args.len() != 3 + usize::from(current.is_some())
+                    || args.get("confirm") != Some(&Value::Bool(true))
+                {
+                    return Err(MutationError::Rejected(
+                        "Explicit checkpoint restore confirmation required",
+                    ));
+                }
+                return store
+                    .as_ref()
+                    .ok_or(MutationError::Rejected("TimeShift unavailable"))?
+                    .restore(root, path, id, current, &mut record_stage);
+            }
             match action {
                 AuditAction::WriteFile => {
                     if tool == Tool::CreateDirectory {
@@ -256,9 +373,28 @@ impl MutationAudit {
                 _ => unreachable!("unsupported mutation"),
             }
         })();
-        let result = journal.finish(result);
+        let mut result = journal.finish(result);
         if !journal.healthy {
             *guard = None;
+        } else if tool == Tool::RewindRestore {
+            let phase = match &result {
+                Ok(_) => AuditPhase::Success,
+                Err(MutationError::Uncertain) => AuditPhase::Uncertain,
+                Err(_) => AuditPhase::Failure,
+            };
+            if sink
+                .record_runtime_mode(
+                    principal,
+                    tool.name(),
+                    mode.audit_mode().unwrap_or("standard"),
+                    phase,
+                    unix_seconds,
+                )
+                .is_err()
+            {
+                *guard = None;
+                result = Err(MutationError::Uncertain);
+            }
         }
 
         match result {
@@ -395,7 +531,7 @@ mod tests {
         let root = MutationRoot::open(&fixture.0).unwrap();
         fs::remove_file(&path).unwrap();
         let mut journal = Fixture::journal(&sink);
-        let result = write::write_file(&root, "target", "text", false, &mut |proof| {
+        let result = write::write_file(&root, "target", "text", false, &mut |proof, _, _| {
             journal.prepare(Some(proof))
         });
         assert!(matches!(
@@ -419,7 +555,7 @@ mod tests {
         let sink = AuditSink::open(&path).unwrap();
         let root = MutationRoot::open(&fixture.0).unwrap();
         let mut journal = Fixture::journal(&sink);
-        let result = write::write_file(&root, "target", "text", false, &mut |proof| {
+        let result = write::write_file(&root, "target", "text", false, &mut |proof, _, _| {
             journal.prepare(Some(proof))
         });
         assert_eq!(result, Ok(()));

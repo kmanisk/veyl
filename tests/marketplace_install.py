@@ -571,9 +571,10 @@ try {
   assert.ok(await ev("Array.from(document.querySelectorAll('#verified-providers article[data-recipe=rust-anything] button')).some(b => b.textContent === 'Install')"));
   assert.ok(await ev("Array.from(document.querySelectorAll('#catalog-cards article[data-entry=rea] button')).some(b => b.textContent === 'Install')"));
   await ev("document.querySelector('nav a[href=\"#clients\"]').click()");
-  await until(() => ev("document.querySelectorAll('#native-grant-grid input[type=checkbox]').length === 68"));
+  await until(() => ev("document.querySelectorAll('#native-grant-grid input[type=checkbox]').length === 71"));
   await ev("document.querySelector('#grant-all-safe').click()");
   assert.equal(await ev("document.querySelectorAll('#native-grant-grid input[type=checkbox]:checked').length"), 68);
+  assert.equal(await ev("Array.from(document.querySelectorAll('#native-grant-grid input[type=checkbox]')).filter(b=>b.value.startsWith('rewind') && b.checked).length"),0);
   await ev("document.querySelector('nav a[href=\"#servers\"]').click()");
   assert.ok(await ev("!!document.querySelector('#upstream-bulk-card') && !!document.querySelector('#server-add')"));
   console.log("BROWSER_MARKETPLACE_UI_PASS");

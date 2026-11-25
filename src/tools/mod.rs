@@ -12,6 +12,8 @@ mod patch;
 pub(crate) mod registry;
 #[cfg(target_os = "linux")]
 mod write;
+#[cfg(target_os = "linux")]
+mod timeshift;
 
 #[cfg(target_os = "linux")]
 pub(crate) use filesystem::MutationRoot;

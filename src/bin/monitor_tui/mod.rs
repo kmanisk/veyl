@@ -261,6 +261,7 @@ struct View {
     logs: Option<String>,
     details: Option<Value>,
     detail_width: usize,
+    detail_json: bool,
     trace_enabled: bool,
     trace_rows: Value,
     trace_until: Option<Instant>,
@@ -395,6 +396,7 @@ impl View {
 
     fn close_overlay(&mut self) {
         self.details = None;
+        self.detail_json = false;
         self.logs = None;
         if let Some((selected, value)) = self.list_return.take() {
             self.selected = selected;
@@ -447,6 +449,7 @@ impl View {
                 }
             }
             self.enter_overlay();
+            self.detail_json = false;
             self.details = Some(value);
         }
     }
@@ -464,8 +467,120 @@ impl View {
         rows.sort_by_key(|v| std::cmp::Reverse(v["created_at"].as_u64().unwrap_or(0)));
         rows
     }
+    fn activity_detail(&self) -> bool {
+        self.tab == 3 && !self.audit_ledger && self.details.is_some()
+    }
+
+    fn activity_detail_rows(&self, value: &Value) -> Vec<(String, &'static str)> {
+        let mut lines: Vec<(String, &'static str)> = Vec::new();
+        let trace = &value["local_trace"];
+        let args = &trace["arguments"];
+        let tool = value["tool"].as_str().unwrap_or("");
+        let command_tool = matches!(
+            tool,
+            "exec_command" | "task_run" | "run_command" | "start_job" | "job_start"
+        );
+        lines.push((
+            format!(
+                "{}  |  {}",
+                strval(&value["tool"]),
+                strval(&value["status"])
+            ),
+            phase_color(value["status"].as_str().unwrap_or("")),
+        ));
+        lines.push((
+            format!(
+                "Client: {}  |  {}  |  {}",
+                strval(&value["client"]),
+                local_time_label(&value["time"]),
+                format_duration(value["duration_ms"].as_u64())
+            ),
+            "",
+        ));
+        lines.push((format!("Call: {}", strval(&value["call_id"])), "\x1b[2m"));
+        lines.push((String::new(), ""));
+        lines.push(("COMMAND / TARGET".into(), "\x1b[1;36m"));
+        if command_tool {
+            if let Some(command) = args["command"].as_str() {
+                lines.push(("Requested shell command:".into(), "\x1b[2m"));
+                for line in command.split('\n') {
+                    lines.push((line.to_owned(), ""));
+                }
+            } else if let Some(argv) = args["argv"].as_array() {
+                lines.push(("Requested argv (exact JSON array):".into(), "\x1b[2m"));
+                lines.push((Value::Array(argv.clone()).to_string(), ""));
+            } else if let Some(profile) = args["profile"].as_str() {
+                lines.push((format!("Configured profile: {profile}"), ""));
+                lines.push((
+                    "Exact configured command was not captured.".into(),
+                    "\x1b[2m",
+                ));
+            } else if args.get("omitted").is_some() {
+                lines.push((
+                    "Command omitted: trace payload exceeds capture limit.".into(),
+                    "\x1b[33m",
+                ));
+            } else {
+                lines.push((
+                    "Command unavailable: not captured, expired or evicted.".into(),
+                    "\x1b[33m",
+                ));
+                lines.push((
+                    "Esc, then t and y to capture subsequent supported calls.".into(),
+                    "\x1b[2m",
+                ));
+            }
+            if let Some(cwd) = args["cwd"].as_str() {
+                lines.push((format!("Requested working directory: {cwd}"), ""));
+            }
+            if let Some(job) = trace["job_id"].as_str() {
+                lines.push((format!("Job: {job}"), ""));
+            }
+        } else {
+            let message = match tool {
+                "process_input" => {
+                    "Interactive input is intentionally not captured (may contain passwords)."
+                }
+                "process_start" => "Configured process launch; exact command is not captured.",
+                _ => "No shell command for this activity.",
+            };
+            lines.push((message.into(), "\x1b[2m"));
+            if let Some(target) = trace["target_preview"].as_str() {
+                lines.push((format!("Target: {target}"), ""));
+            }
+        }
+        lines.push((String::new(), ""));
+        lines.push((
+            format!("Operation: {}", strval(&value["target_summary"])),
+            "",
+        ));
+        if !trace.is_null() {
+            lines.push(("Captured locally; may contain sensitive values. RPC success is not a process exit code.".into(), "\x1b[2m"));
+        }
+        lines.push((
+            "Press d for full JSON, including available local trace.".into(),
+            "\x1b[2m",
+        ));
+        lines
+            .into_iter()
+            .flat_map(|(line, color)| {
+                let line = safe(&line);
+                if line.is_empty() {
+                    return vec![(String::new(), color)];
+                }
+                line.as_bytes()
+                    .chunks(self.detail_width.max(1))
+                    .map(|part| (String::from_utf8_lossy(part).into_owned(), color))
+                    .collect()
+            })
+            .collect()
+    }
+
     fn rows(&self) -> Vec<(String, &'static str)> {
         if let Some(value) = &self.details {
+            if self.activity_detail() && !self.detail_json {
+                return self.activity_detail_rows(value);
+            }
             let json = serde_json::to_string_pretty(value).unwrap_or_default();
             return json
                 .lines()
@@ -764,6 +879,7 @@ impl View {
         self.selected = 0;
         self.logs = None;
         self.details = None;
+        self.detail_json = false;
         self.list_return = None;
         self.confirm = None;
         self.cursor.clear();
@@ -835,7 +951,11 @@ impl View {
             }
             row(&mut out, &context, w, "\x1b[1m");
             let heading = if self.details.is_some() {
-                "Details & Parameters (JSON) - Esc to close"
+                if self.activity_detail() && !self.detail_json {
+                    "Activity details - command / target"
+                } else {
+                    "Details & Parameters (JSON) - Esc to close"
+                }
             } else if self.logs.is_some() {
                 "Job output"
             } else {
@@ -890,7 +1010,11 @@ impl View {
             } else if !self.notice.is_empty() {
                 self.notice.clone()
             } else if self.details.is_some() {
-                "JSON details | Esc returns to list".into()
+                if self.activity_detail() && !self.detail_json {
+                    "Activity details | d: JSON | Esc returns to list".into()
+                } else {
+                    "JSON details | Esc returns to list".into()
+                }
             } else if let Some(id) = &self.logs {
                 format!("Job {id} | Esc returns to jobs")
             } else {
@@ -912,7 +1036,11 @@ impl View {
             row(
                 &mut out,
                 if self.details.is_some() || self.logs.is_some() {
-                    "[j/k] Scroll  [Esc] Back  [q] Quit"
+                    if self.activity_detail() {
+                        "[j/k] Scroll  [d] Details/JSON  [Esc] Back  [q] Quit"
+                    } else {
+                        "[j/k] Scroll  [Esc] Back  [q] Quit"
+                    }
                 } else {
                     "[Tab] View  [j/k] Move  [Enter] Details  [/] Filter"
                 },
@@ -925,7 +1053,7 @@ impl View {
                 if self.details.is_some() || self.logs.is_some() {
                     ""
                 } else if self.tab == 3 {
-                    "[f] Funnel  [a] Audit  [t] Trace  [r] Refresh  [q] Quit"
+                    "[t] Capture commands  [f] Funnel  [a] Audit  [r] Refresh  [q] Quit"
                 } else if self.tab == 2 {
                     "[p] Client  [l] Logs  [n] Next  [x] Cancel  [t] Trace  [r] Refresh  [q] Quit"
                 } else {
@@ -1165,6 +1293,10 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                     v.selected = 0;
                     next = Instant::now();
                 }
+                b'd' if v.activity_detail() => {
+                    v.detail_json = !v.detail_json;
+                    v.selected = 0;
+                }
                 b'\r' | b'\n' if v.logs.is_none() => v.open_details(monitor),
                 b'l' if v.tab == 2 && v.logs.is_none() && v.details.is_none() => {
                     if let Some(id) = v
@@ -1293,6 +1425,47 @@ mod tests {
         v.clear_trace_preview();
         assert!(v.details.is_none() && v.trace_rows.is_null() && v.list_return.is_none());
         assert_eq!(v.selected, 2);
+    }
+
+    #[test]
+    fn activity_details_show_command_before_json_and_preserve_boundaries() {
+        let mut v = View {
+            tab: 3,
+            detail_width: 100,
+            details: Some(
+                serde_json::json!({"tool":"exec_command","client":"primary","status":"success",
+                "duration_ms":21,"call_id":"call-1","local_trace":{"arguments":{"command":"printf first\nprintf second\u{1b}[31m","cwd":"project"},"job_id":"job-1"}}),
+            ),
+            ..View::default()
+        };
+        let text = |v: &View| {
+            v.rows()
+                .into_iter()
+                .map(|(s, _)| s)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let rows = text(&v);
+        assert!(rows.contains("Requested shell command:"));
+        assert!(rows.contains("printf first\nprintf second?[31m"));
+        assert!(rows.contains("Requested working directory: project"));
+        assert!(!rows.contains('\u{1b}'));
+        v.detail_json = true;
+        assert!(text(&v).contains("\"local_trace\""));
+        v.detail_json = false;
+        v.details = Some(serde_json::json!({"tool":"exec_command","status":"failure"}));
+        assert!(text(&v).contains("Command unavailable"));
+        v.details = Some(
+            serde_json::json!({"tool":"exec_command","local_trace":{"arguments":{"argv":["printf","a b","'quoted'"]}}}),
+        );
+        assert!(text(&v).contains(r#"["printf","a b","'quoted'"]"#));
+        v.details = Some(
+            serde_json::json!({"tool":"service_status","local_trace":{"arguments":{"command":"SYNTHETIC_INVALID_ARGUMENT"}}}),
+        );
+        assert!(text(&v).contains("No shell command"));
+        assert!(!text(&v).contains("SYNTHETIC_INVALID_ARGUMENT"));
+        v.audit_ledger = true;
+        assert!(text(&v).contains("\"tool\""));
     }
 
     #[test]

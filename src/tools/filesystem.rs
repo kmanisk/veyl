@@ -365,7 +365,7 @@ fn matches_proof(stat: &Stat, proof: &StageProof) -> bool {
         && [stat.st_mtime, stat.st_mtime_nsec as i64] == proof.modified
 }
 
-fn birth_time(
+pub(super) fn birth_time(
     directory: impl rustix::fd::AsFd,
     name: impl rustix::path::Arg,
     flags: AtFlags,

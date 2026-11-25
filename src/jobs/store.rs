@@ -382,7 +382,7 @@ pub(super) fn hex(bytes: &[u8]) -> String {
     hex
 }
 
-pub(super) fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
+pub(crate) fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
     // HMAC-SHA-256 with a key no longer than the SHA-256 block.
     let mut inner = [0x36; 64];
     let mut outer = [0x5c; 64];

@@ -1,5 +1,15 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current gate: revised TimeShift 0.4.0-beta with Activity details — APPROVED for promotion
+
+Use `../release-tui-bin/` (not the earlier `../release-bin/`) for the next personal preview/promotion. Activity Enter shows captured commands and d toggles JSON. The original gateway and CLI checksums are unchanged. See STATUS.md for focused verification. Verify the revised `../SOURCE_SHA256SUMS` and `../release-tui-bin/SHA256SUMS`; do not install or publish until the operator explicitly approves the revised candidate. Existing permissions and production service remain unchanged.
+
+
+## Current gate: TimeShift 0.4.0-beta — HOLD for operator confirmation
+
+Candidate `~/.local/share/veyl-development/candidates/timeshift-native.4VQ4Pbv1/source`, base `84a1b4d`. Native UTF-8 checkpoints, owner-scoped signed history, preview, guarded restore/redo and retention complete. See STATUS.md for verified results, receipts and exact hashes; see TIMESHIFT.md for limitations and permission controls. Verify `../SOURCE_SHA256SUMS` from source and `../release-bin/SHA256SUMS` from release-bin before promotion. Explicit operator confirmation required; do not publish or upgrade before then. Preserve all existing production permissions, provider workspace grants and jobs, and save rollback. Separately ask before enabling new TimeShift grants. No Nightshift work in this checkpoint.
+
+
 ## 0.3.1-beta release acceptance
 
 The operator requested GitHub promotion and a version bump. Exact versioned optimized build, 168 Rust cases, 287 locked cases, 6 three-mode cases, 33 focused integration cases, browser checks, and all 28 locked hashes passed. See current STATUS.md and the candidate's verification receipts. Publish the verified Linux x86_64 beta bundle, preserve rollback, and validate the operator-requested Projects workspace grants after local upgrade. TimeShift and Nightshift remain out of scope.

@@ -12,7 +12,7 @@ mod resources;
 mod runner;
 mod sandbox;
 mod session;
-mod store;
+pub(crate) mod store;
 mod upstream_workspace;
 mod worktree;
 

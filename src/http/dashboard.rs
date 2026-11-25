@@ -517,7 +517,7 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         let Ok(body) = body(request).await else {
             return bad();
         };
-        if body["confirm"] != true {
+        if body["confirm"] != true || (remote && body.get("timeshift_retention_count").is_some()) {
             return forbidden();
         }
         let config = admin.config.clone();
@@ -813,6 +813,7 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
             "disabled": client.is_disabled(),
             "mode": client.mode.public_label(),
             "native_tool_preset": client.native_tool_preset,
+            "timeshift_retention_count": client.timeshift_retention_count,
             "grants": Tool::ALL.into_iter().filter(|tool| client.tools.contains(tool)).map(Tool::name).collect::<Vec<_>>(),
             "connections": counts.get(&client.id).copied().unwrap_or_default(),
             "skills": client.skills,

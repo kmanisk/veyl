@@ -39,6 +39,9 @@ pub enum Action {
     ServiceStatus,
     WriteFile,
     ApplyPatch,
+    Rewind,
+    RewindRestore,
+    RewindClear,
     ListSkills,
     ReadSkill,
     SkillsValidate,
@@ -217,6 +220,9 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
         | Action::ListTools
         | Action::WriteFile
         | Action::ApplyPatch
+        | Action::Rewind
+        | Action::RewindRestore
+        | Action::RewindClear
         | Action::ListSkills
         | Action::ReadSkill
         | Action::SkillsValidate

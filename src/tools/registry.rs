@@ -76,10 +76,13 @@ pub(crate) enum Tool {
     GitReset,
     GitPull,
     GitPush,
+    Rewind,
+    RewindRestore,
+    RewindClear,
 }
 
 impl Tool {
-    pub(crate) const ALL: [Self; 68] = [
+    pub(crate) const ALL: [Self; 71] = [
         Self::ReadFile,
         Self::SearchFiles,
         Self::GitInspect,
@@ -148,6 +151,9 @@ impl Tool {
         Self::GitReset,
         Self::GitPull,
         Self::GitPush,
+        Self::Rewind,
+        Self::RewindRestore,
+        Self::RewindClear,
     ];
 
     pub(crate) fn parse(name: &str) -> Option<Self> {
@@ -224,6 +230,9 @@ impl Tool {
             Self::GitReset => "git_reset",
             Self::GitPull => "git_pull",
             Self::GitPush => "git_push",
+            Self::Rewind => "rewind",
+            Self::RewindRestore => "rewind_restore",
+            Self::RewindClear => "rewind_clear",
         }
     }
 
@@ -292,6 +301,9 @@ impl Tool {
             Self::GitReset => Action::GitReset,
             Self::GitPull => Action::GitPull,
             Self::GitPush => Action::GitPush,
+            Self::Rewind => Action::Rewind,
+            Self::RewindRestore => Action::RewindRestore,
+            Self::RewindClear => Action::RewindClear,
         }
     }
 
@@ -366,7 +378,14 @@ impl Tool {
         )
     }
 
+    pub(crate) fn is_rewind(self) -> bool {
+        matches!(self, Self::Rewind | Self::RewindRestore | Self::RewindClear)
+    }
+
     pub(crate) fn in_yolo_preset(self, jobs: bool, skills: bool) -> bool {
+        if self.is_rewind() {
+            return false;
+        }
         match self.action() {
             Action::ReadFile
             | Action::SearchFiles
@@ -409,6 +428,18 @@ impl Tool {
                     "additionalProperties": false
                 },
                 "annotations": { "readOnlyHint": true, "destructiveHint": false }
+            }),
+            Self::Rewind => json!({
+                "name":self.name(),
+                "description":"List or preview owned TimeShift file snapshots. Explicit grant enables automatic checkpoints before native file writes and patches.",
+                "inputSchema":{"type":"object","properties":{"path":{"type":"string"},"action":{"enum":["list","status","preview"]},"checkpoint":{"type":"string"}},"required":["path","action"],"additionalProperties":false},
+                "annotations":{"readOnlyHint":true,"destructiveHint":false}
+            }),
+            Self::RewindRestore | Self::RewindClear => json!({
+                "name":self.name(),
+                "description":if self == Self::RewindRestore {"Restore a checkpoint only if the current file matches a recorded post-write identity and digest. For historical restore supply current_checkpoint from preview. Requires explicit confirmation."} else {"Clear one owned checkpoint. Requires explicit confirmation."},
+                "inputSchema":{"type":"object","properties":if self == Self::RewindRestore {json!({"path":{"type":"string"},"checkpoint":{"type":"string"},"current_checkpoint":{"type":"string"},"confirm":{"type":"boolean","const":true}})} else {json!({"path":{"type":"string"},"checkpoint":{"type":"string"},"confirm":{"type":"boolean","const":true}})},"required":["path","checkpoint","confirm"],"additionalProperties":false},
+                "annotations":{"readOnlyHint":false,"destructiveHint":true}
             }),
             Self::WriteFile => json!({
                 "name": "write_file",
