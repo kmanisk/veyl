@@ -117,8 +117,27 @@ impl Activity {
         );
     }
 
+    #[cfg(test)]
     pub(super) fn active_count(&self) -> usize {
         self.0.lock().map_or(0, |records| records.active.len())
+    }
+
+    // One consistent, bounded snapshot for the monitor header. No arguments,
+    // client credentials, or completed-call history are copied.
+    pub(super) fn active_summary(&self) -> Option<(usize, Vec<Value>)> {
+        let records = self.0.lock().ok()?;
+        let tools = records
+            .active
+            .values()
+            .rev()
+            .take(3)
+            .map(|active| {
+                json!({"call_id":active.record.call_id,
+                   "tool":active.record.tool,
+                   "duration_ms":duration_ms(active.started)})
+            })
+            .collect();
+        Some((records.active.len(), tools))
     }
 
     pub(super) fn view(&self, include_funnel: bool) -> Option<Value> {
@@ -195,22 +214,53 @@ fn push_bounded<T>(queue: &mut VecDeque<T>, item: T, limit: usize) {
 fn summary(tool: Option<Tool>) -> &'static str {
     match tool.map(Tool::action) {
         Some(Action::StartJob) => "Start supervised job",
+        Some(Action::ProcessStart) => "Start process session",
+        Some(Action::ProcessInput) => "Send session input",
+        Some(Action::ProcessResize) => "Resize process terminal",
+        Some(Action::ShellStatus) => "Inspect process sessions",
+        Some(Action::ShellReset) => "Reset process session",
         Some(Action::RunShortJob) => "Run supervised command",
         Some(Action::CancelJob) => "Request job cancellation",
         Some(Action::JobLogs | Action::JobStatus | Action::ListJobs) => "Inspect job state",
-        Some(Action::WriteFile | Action::ApplyPatch) => "Modify file",
+        Some(Action::WriteFile | Action::ApplyPatch | Action::Remember) => "Modify file",
         Some(
             Action::ReadFile
             | Action::SearchFiles
             | Action::GitInspect
+            | Action::GitStatus
+            | Action::GitDiff
+            | Action::GitLog
             | Action::ProjectContext
-            | Action::SystemContext,
+            | Action::SystemContext
+            | Action::LoadPathRules
+            | Action::ChezmoiInspect,
         ) => "Inspect workspace",
+        Some(
+            Action::GitAdd
+            | Action::GitCommit
+            | Action::GitBranch
+            | Action::GitCheckout
+            | Action::GitRestore
+            | Action::GitStash
+            | Action::GitReset
+            | Action::GitPull
+            | Action::GitPush,
+        ) => "Git repository operation",
         Some(Action::SystemInspect | Action::SystemInfo | Action::ServiceStatus) => {
             "Inspect gateway or host"
         }
-        Some(Action::ListSkills | Action::ReadSkill) => "Inspect skills",
-        Some(Action::ListUpstreams | Action::CallUpstream) => "Upstream MCP access",
+        Some(
+            Action::ListSkills
+            | Action::ReadSkill
+            | Action::ListProjectSkills
+            | Action::LoadProjectSkill
+            | Action::SkillsValidate,
+        ) => "Inspect skills",
+        Some(
+            Action::ListUpstreams | Action::CallUpstream | Action::McpInspect | Action::McpTest,
+        ) => "Upstream MCP access",
+        Some(Action::ExtensionsInspect) => "Inspect extensions catalog",
+        Some(Action::ProposeExtension) => "Queue extension proposal",
         _ => "Tool invocation",
     }
 }

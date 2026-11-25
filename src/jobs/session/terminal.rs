@@ -32,6 +32,11 @@ impl Terminal {
         Ok(Self { master: File::from(master), pending: None })
     }
 
+    pub(super) fn resize(&self, rows: u16, cols: u16) -> io::Result<()> {
+        tcsetwinsize(&self.master, Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 })?;
+        Ok(())
+    }
+
     pub(super) fn idle(&self) -> bool {
         self.pending.is_none()
     }

@@ -1,10 +1,14 @@
 # Persistent process sessions
 
 The isolated Linux candidate is based on `33e9f56`, version `0.2.5-beta`.
-It preserves the operator-verified extended job implementation. Process
-sessions keep one sandboxed process alive across MCP requests. A shell profile
-therefore retains its working directory, exported variables and functions
-until reset, timeout or exit.
+It preserves the operator-verified extended job implementation. `process_start`
+(with `process_input`, `process_resize`, `shell_status`, `shell_reset`,
+`job_status`, `job_logs`, `job_cancel`, `list_jobs`) keeps one sandboxed pipe or
+kernel PTY process alive across MCP requests. PTY sessions also support
+`process_resize` (`TIOCSWINSZ` up to 512x512) and `shell_status` (`state`,
+`sequence`, `exit_code`, `process_alive`), and `job_logs` supports `encoding:
+"utf8" | "base64"`. A shell profile therefore retains its working directory,
+exported variables and functions until reset, timeout or exit.
 
 ## Personal verification
 

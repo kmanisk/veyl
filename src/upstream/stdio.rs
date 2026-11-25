@@ -17,9 +17,17 @@ pub(super) struct Process {
 }
 
 impl Process {
-    pub fn start(command: &str, args: &[String]) -> io::Result<Self> {
-        let mut child = Command::new(std::env::current_exe()?)
-            .arg("--mcp-upstream-worker")
+    pub fn start(
+        command: &str,
+        args: &[String],
+        bundle: Option<&std::path::Path>,
+    ) -> io::Result<Self> {
+        let mut worker = Command::new(std::env::current_exe()?);
+        worker.arg("--mcp-upstream-worker");
+        if let Some(bundle) = bundle {
+            worker.arg("--runtime-bundle").arg(bundle);
+        }
+        let mut child = worker
             .arg(command)
             .args(args)
             .env_clear()

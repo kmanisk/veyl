@@ -13,6 +13,7 @@ mod runner;
 mod session;
 mod sandbox;
 mod store;
+mod worktree;
 
 use std::collections::HashSet;
 use std::io::{self, ErrorKind};
@@ -22,16 +23,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use mcp_gateway::security::audit::{AuditAction, AuditLimits, AuditPhase, AuditSink, JobAuditInfo};
 
+pub(crate) use broad::Broad;
 pub(crate) use config::{
     EXTENDED_RUNTIME_MAX, JobRoot, Profiles, SHORT_RUNTIME_MAX, parse_settings,
 };
 pub(crate) use resources::verify as verify_scope;
 pub(crate) use runner::run_worker;
 pub(crate) use sandbox::{
-    git_worker, probe as probe_sandbox, probe_worker as probe_sandbox_worker, upstream_worker,
+    GitToolRequest, git_tool_worker, git_worker, probe as probe_sandbox,
+    probe_worker as probe_sandbox_worker, upstream_worker,
 };
 pub(crate) use session::Authorization as SessionAuthorization;
-pub(crate) use store::has_unconfined_jobs;
+pub(crate) use store::{has_active_jobs, has_unconfined_jobs};
 
 use receipt::Receipt;
 use resources::Scopes;
@@ -45,6 +48,10 @@ pub(crate) struct JobPolicy<'a> {
     pub session: Option<SessionAuthorization<'a>>,
     pub full: bool,
     pub job_runtime_limit_seconds: u64,
+    pub job_cpu_percent_limit: u64,
+    pub job_memory_bytes_limit: u64,
+    pub job_output_limit_bytes: usize,
+    pub job_retention_count: Option<usize>,
     pub broad: Option<&'a broad::Broad>,
     /// Some (including an empty slice) requires kernel isolation.
     pub workspace_mounts: Option<&'a [JobRoot]>,

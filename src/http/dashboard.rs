@@ -343,7 +343,9 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         if let Some(key) = key {
             admin.sessions.lock().await.remove(key);
         }
-        if let Ok(mut trace) = admin.trace.lock() { trace.set(&csrf, false); }
+        if let Ok(mut trace) = admin.trace.lock() {
+            trace.set(&csrf, false);
+        }
         return cookie(ok(json!({"signed_out": true})), "", 0);
     }
     if method == Method::POST && !csrf_matches {
@@ -352,7 +354,9 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
     if path == "/api/dashboard/trace" {
         // Raw command/response previews are explicitly enabled by one
         // paired loopback operator session. Never expose them over Tailnet.
-        if remote || !csrf_matches { return forbidden(); }
+        if remote || !csrf_matches {
+            return forbidden();
+        }
         if method == Method::GET {
             return match admin.trace.lock() {
                 Ok(mut trace) => ok(trace.view(&csrf, parameter(&query, "metadata") != Some("1"))),
@@ -360,9 +364,15 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             };
         }
         if method == Method::POST {
-            let Ok(data) = body(request).await else { return bad(); };
-            let Some(enabled) = data["enabled"].as_bool() else { return bad(); };
-            if data["confirm"] != true { return forbidden(); }
+            let Ok(data) = body(request).await else {
+                return bad();
+            };
+            let Some(enabled) = data["enabled"].as_bool() else {
+                return bad();
+            };
+            if data["confirm"] != true {
+                return forbidden();
+            }
             return match admin.trace.lock() {
                 Ok(mut trace) => {
                     if !trace.set(&csrf, enabled) {
@@ -394,15 +404,47 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         return manage(admin, vec!["list".into()], crate::upstream::admin::manage).await;
     }
     if method == Method::GET && path == "/api/dashboard/marketplace" {
-        return asset(include_str!("dashboard/marketplace.json"), "application/json; charset=utf-8");
+        return asset(
+            include_str!("dashboard/marketplace.json"),
+            "application/json; charset=utf-8",
+        );
+    }
+    if method == Method::GET && path == "/api/dashboard/requests" {
+        return match crate::tools::extensions::list_requests(&admin.config) {
+            Ok(list) => ok(json!({"requests": list, "count": list.len()})),
+            Err(_) => unavailable(),
+        };
+    }
+    if method == Method::POST && path == "/api/dashboard/requests" {
+        let Ok(body) = body(request).await else {
+            return bad();
+        };
+        if body["confirm"] != true || body["action"].as_str() != Some("dismiss") {
+            return forbidden();
+        }
+        let Some(id) = body["id"].as_str() else {
+            return bad();
+        };
+        return match crate::tools::extensions::dismiss_request(&admin.config, id) {
+            Ok(removed) => ok(json!({"dismissed": removed, "id": id})),
+            Err(_) => bad(),
+        };
     }
     if method == Method::GET && path == "/api/dashboard/diagnostics" {
-        if remote || !csrf_matches { return forbidden(); }
-        let Some(section) = parameter(&query,"section").map(str::to_owned) else { return bad(); };
-        return match tokio::task::spawn_blocking(move || crate::inspection::local_diagnostics(&section)).await {
-            Ok(Ok(value))=>ok(value),
-            Ok(Err(_))=>bad(),
-            Err(_)=>unavailable(),
+        if remote || !csrf_matches {
+            return forbidden();
+        }
+        let Some(section) = parameter(&query, "section").map(str::to_owned) else {
+            return bad();
+        };
+        return match tokio::task::spawn_blocking(move || {
+            crate::inspection::local_diagnostics(&section)
+        })
+        .await
+        {
+            Ok(Ok(value)) => ok(value),
+            Ok(Err(_)) => bad(),
+            Err(_) => unavailable(),
         };
     }
     if method == Method::POST && path == "/api/dashboard/servers" {
@@ -494,7 +536,10 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
     }
     if method == Method::GET && path == "/api/dashboard/activity" {
         let include_funnel = parameter(&query, "funnel") == Some("1");
-        return admin.activity.view(include_funnel).map_or_else(unavailable, ok);
+        return admin
+            .activity
+            .view(include_funnel)
+            .map_or_else(unavailable, ok);
     }
     if method == Method::GET && path == "/api/dashboard/audit" {
         let result = with_policy(admin, |settings| {
@@ -630,7 +675,10 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
     let jobs_configured = state.jobs.is_some();
     let listener = state.addr;
     let active_tcp = super::MAX_CONNECTIONS - state.mcp_connections.available_permits();
-    let active_calls = admin.activity.active_count();
+    let (active_calls, active_tools) = match admin.activity.active_summary() {
+        Some((count, tools)) => (Some(count), tools),
+        None => (None, Vec::new()),
+    };
     let config = admin.config.clone();
     with_policy(admin, move |settings| {
         let clients: Vec<_> = settings.clients.iter().map(|client| json!({
@@ -656,7 +704,7 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
         let protected = |kind| settings.protected_paths.selected(kind).iter()
             .map(|rule| &rule.path).collect::<Vec<_>>();
         Ok(json!({
-            "clients": clients, "sessions": connected, "connections": active_tcp, "active_calls": active_calls, "cpu_percent": cpu_percent, "rss_kib": rss_kib,
+            "clients": clients, "sessions": connected, "connections": active_tcp, "active_calls": active_calls, "active_tools": active_tools, "cpu_percent": cpu_percent, "rss_kib": rss_kib,
             "csrf": csrf, "listener": listener.to_string(), "audit": audit,
             "jobs_configured": jobs_configured, "job_state_dir": settings.job_state_path(), "audit_log": settings.audit_log,
             "version": env!("CARGO_PKG_VERSION"), "skills_configured": settings.skills.is_some(),

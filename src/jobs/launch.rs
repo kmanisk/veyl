@@ -19,6 +19,7 @@ const GLOBAL_JOBS: usize = 8;
 const CLIENT_JOBS: usize = 5;
 
 impl Jobs {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn start(
         &self,
         owner: &str,
@@ -27,6 +28,7 @@ impl Jobs {
         profile: Profile,
         policy: JobPolicy<'_>,
         request_id: Option<&str>,
+        worktree_repo: Option<&std::path::Path>,
     ) -> io::Result<(Receipt, bool)> {
         super::sandbox::check_inherited_fds()?;
         let sandbox_roots = policy
@@ -61,7 +63,7 @@ impl Jobs {
         }
         let _transaction = self.store.lock(false)?;
         let ids = self.store.jobs()?;
-        let history_full = ids.len() >= HISTORY_LIMIT;
+        let mut history_count = ids.len();
         // Old unsigned mappings cannot prove the admitted request fingerprint.
         // Refuse reuse rather than accidentally launching the old action twice.
         if let Some(id) = request_id
@@ -81,16 +83,20 @@ impl Jobs {
         });
         let mut global = 0;
         let mut owned = 0;
+        let mut finalized = Vec::new();
         for id in ids {
             if let Some(receipt) = self.read_if_published(&self.store.job(&id)?)? {
                 if request_key.is_some() && receipt.request_key == request_key {
                     if receipt.client_id != owner
+                        || receipt.ephemeral_worktree != worktree_repo.is_some()
                         || receipt.profile != name
                         || receipt.argv_sha256 != profile.argv_hash()
                         || receipt.cwd != root.path()
                         || receipt.session != session
                         || receipt.timeout_seconds != profile.timeout_seconds
                         || receipt.max_output_bytes != profile.max_output_bytes
+                        || receipt.cpu_percent != profile.cpu_percent
+                        || receipt.memory_bytes != profile.memory_bytes
                         || receipt.yolo != policy.yolo
                         || receipt.full != policy.full
                         || receipt.broad.as_ref() != policy.broad
@@ -108,7 +114,17 @@ impl Jobs {
                 if receipt.state.active() || receipt.state == State::Uncertain {
                     global += 1;
                     owned += usize::from(receipt.client_id == owner);
+                } else if receipt.client_id == owner {
+                    finalized.push((receipt.created_at, receipt.job_id));
                 }
+            }
+        }
+        if let Some(limit) = policy.job_retention_count {
+            finalized.sort_unstable();
+            let excess = finalized.len().saturating_sub(limit);
+            for (_, id) in finalized.into_iter().take(excess) {
+                self.store.remove_finalized(&id)?;
+                history_count -= 1;
             }
         }
         if profile.timeout_seconds > policy.job_runtime_limit_seconds {
@@ -124,22 +140,31 @@ impl Jobs {
         {
             return Err(io::Error::from(ErrorKind::Unsupported));
         }
-        if history_full || global >= GLOBAL_JOBS || owned >= CLIENT_JOBS {
+        if history_count >= HISTORY_LIMIT || global >= GLOBAL_JOBS || owned >= CLIENT_JOBS {
             return Err(io::Error::from(ErrorKind::WouldBlock));
         }
 
         let job_id = random_hex()?;
+        let mut worktree = worktree_repo.map(|repo| super::worktree::Worktree::create(repo, &job_id)).transpose()?;
+        let worktree_root = worktree.as_ref().map(|wt| JobRoot::open(&wt.path).map_err(io::Error::other)).transpose()?;
+        let execution_root = worktree_root.as_ref().map_or(root, JobRoot::identity);
         let receipt = Receipt {
             job_id,
             client_id: owner.to_owned(),
             profile: name,
             argv_sha256: profile.argv_hash(),
             executable: Some(profile.executable.clone()),
+            ephemeral_worktree: worktree.is_some(),
+            worktree_repo: worktree.as_ref().map(|wt| wt.repo.clone()),
+            worktree_path: worktree.as_ref().map(|wt| wt.path.clone()),
+            worktree_cleaned: worktree.as_ref().map(|_| false),
             root: root.path().to_owned(),
             session,
             cwd: root.path().to_owned(),
             timeout_seconds: profile.timeout_seconds,
             max_output_bytes: profile.max_output_bytes,
+            cpu_percent: profile.cpu_percent,
+            memory_bytes: profile.memory_bytes,
             state: State::Starting,
             created_at: now(),
             execution_duration_ms: None,
@@ -176,13 +201,14 @@ impl Jobs {
             id
         };
         job.save(&receipt)?;
+        if let Some(wt) = &mut worktree { wt.disarm(); }
 
         let launch = Launch {
             store: self.store.path().to_owned(),
             audit: self.audit_path.clone(),
             audit_limits: self.audit_limits,
             audit_id,
-            root: root.clone(),
+            root: execution_root.clone(),
             profile,
             job_id: receipt.job_id.clone(),
             nonce: receipt.launch_nonce.clone(),
@@ -212,6 +238,8 @@ fn start_runner(launch: Launch, lease: std::fs::File, scopes: Option<&Scopes>) -
             &launch.job_id,
             "--job-runner",
             launch.profile.timeout_seconds,
+            launch.profile.cpu_percent,
+            launch.profile.memory_bytes,
         ),
         None => {
             let mut command = Command::new("/proc/self/exe");

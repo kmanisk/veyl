@@ -113,13 +113,22 @@ impl Layout {
             };
             match inventory.directory(&root, 0) {
                 Ok(()) => {
-                    let current = open_absolute_dir(path).map_err(|_| "State root changed during inspection")?;
-                    if !same_identity(&root, current).map_err(|_| "Cannot verify state root identity")? {
+                    let current = open_absolute_dir(path)
+                        .map_err(|_| "State root changed during inspection")?;
+                    if !same_identity(&root, current)
+                        .map_err(|_| "Cannot verify state root identity")?
+                    {
                         return Err("State root changed during inspection".into());
                     }
-                    return Ok(Self { root, path: path.to_owned(), inventory });
+                    return Ok(Self {
+                        root,
+                        path: path.to_owned(),
+                        inventory,
+                    });
                 }
-                Err(error) if error == "State directory changed during inspection" && attempt < 3 => {
+                Err(error)
+                    if error == "State directory changed during inspection" && attempt < 3 =>
+                {
                     std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1)));
                 }
                 Err(error) => return Err(error),
@@ -138,6 +147,10 @@ impl Layout {
 
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn into_root(self) -> OwnedFd {
+        self.root
     }
 
     pub(crate) fn validate_links(&self) -> Result<(), String> {
@@ -245,11 +258,13 @@ impl Inventory {
                 .remaining
                 .checked_sub(1)
                 .ok_or("State directory exceeds inspection entry limit")?;
-            let child = fs::openat2(dir, name, child_flags, Mode::empty(), LOCAL)
-                .map_err(|error| if self.uid.is_some() && error == rustix::io::Errno::NOENT {
-                    "State directory changed during inspection"
-                } else {
-                    invalid(error)
+            let child =
+                fs::openat2(dir, name, child_flags, Mode::empty(), LOCAL).map_err(|error| {
+                    if self.uid.is_some() && error == rustix::io::Errno::NOENT {
+                        "State directory changed during inspection"
+                    } else {
+                        invalid(error)
+                    }
                 })?;
             let metadata = fs::fstat(&child).map_err(invalid)?;
             if self.uid.is_some_and(|uid| metadata.st_uid != uid) {

@@ -25,13 +25,14 @@ const DEADLINE: usize = SEQUENCE + 8;
 const EXPIRATION: usize = DEADLINE + 8;
 const REVISION: usize = EXPIRATION + 8;
 const HEADER: usize = REVISION + 32 + 1;
-const REPLY: usize = SEQUENCE + 8 + 3;
+const REPLY: usize = SEQUENCE + 8 + 8;
 const EXCHANGE: Duration = Duration::from_millis(750);
 
 pub(super) enum Operation<'a> {
     Query,
     Write(u64, &'a [u8]),
     Eof(u64),
+    Resize(u16, u16),
 }
 
 #[repr(u8)]
@@ -45,12 +46,14 @@ enum Outcome {
     Closed,
     Hangup,
     Revoked,
+    NotPty,
+    ResizeFailed,
 }
 
 impl Outcome {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 10] = [
         Self::Current, Self::Accepted, Self::Consumed, Self::OutOfOrder,
-        Self::Backpressure, Self::Closed, Self::Hangup, Self::Revoked,
+        Self::Backpressure, Self::Closed, Self::Hangup, Self::Revoked, Self::NotPty, Self::ResizeFailed,
     ];
 
     fn label(&self) -> &'static str {
@@ -63,6 +66,8 @@ impl Outcome {
             Self::Closed => "closed",
             Self::Hangup => "hangup",
             Self::Revoked => "policy_changed",
+            Self::NotPty => "not_pty",
+            Self::ResizeFailed => "resize_failed",
         }
     }
 }
@@ -125,21 +130,28 @@ pub(super) fn exchange(
         let mut reply = [0; REPLY + 1];
         if client.recv(&mut reply)? != REPLY
             || reply[TAG..SEQUENCE] != correlation
-            || reply[REPLY - 3] != kind
+            || reply[SEQUENCE + 8] != kind
             || !authentic(key, &reply[..REPLY])
         {
             return Err(invalid());
         }
         let outcome = Outcome::ALL
-            .get(usize::from(reply[REPLY - 2]))
+            .get(usize::from(reply[SEQUENCE + 9]))
             .ok_or_else(invalid)?;
         if *outcome == Outcome::Revoked {
             return Err(io::Error::from(ErrorKind::PermissionDenied));
         }
+        if *outcome == Outcome::NotPty {
+            return Err(io::Error::new(ErrorKind::InvalidInput, "Session is not a PTY"));
+        }
+        if *outcome == Outcome::ResizeFailed { return Err(io::Error::other("PTY resize failed")); }
         Ok(json!({
             "status": outcome.label(),
-            "next_sequence": number(&reply[SEQUENCE..REPLY - 3]),
-            "stdin_closed": reply[REPLY - 1] != 0,
+            "next_sequence": number(&reply[SEQUENCE..SEQUENCE + 8]),
+            "stdin_closed": reply[SEQUENCE + 10] != 0,
+            "pty": reply[SEQUENCE + 11] != 0,
+            "rows": if reply[SEQUENCE + 11] != 0 { Some(u16::from_be_bytes([reply[SEQUENCE + 12], reply[SEQUENCE + 13]])) } else { None },
+            "cols": if reply[SEQUENCE + 11] != 0 { Some(u16::from_be_bytes([reply[SEQUENCE + 14], reply[SEQUENCE + 15]])) } else { None },
         }))
     };
     // A local peer could reuse an abstract name after its original socket
@@ -153,6 +165,7 @@ pub(super) fn exchange(
         Operation::Query => Ok(current),
         Operation::Write(sequence, data) => transfer(1, sequence, data),
         Operation::Eof(sequence) => transfer(2, sequence, &[]),
+        Operation::Resize(rows, cols) => transfer(3, 0, &[rows.to_be_bytes(), cols.to_be_bytes()].concat()),
     }
 }
 
@@ -166,6 +179,8 @@ pub(in crate::jobs) struct Channel {
     key: [u8; 32],
     stdin: Option<Input>,
     next: u64,
+    pty: bool,
+    size: Option<(u16, u16)>,
 }
 
 impl Channel {
@@ -175,7 +190,8 @@ impl Channel {
         }
         let socket = UnixDatagram::bind_addr(&session_address(&key)?)?;
         socket.set_nonblocking(true)?;
-        Ok(Self { socket, key, stdin: Some(stdin), next: 0 })
+        let pty = matches!(stdin, Input::Pty(_));
+        Ok(Self { socket, key, stdin: Some(stdin), next: 0, pty, size: pty.then_some((24, 80)) })
     }
 
     pub(in crate::jobs) fn drain_terminal(&mut self, log: &mut logs::Log) -> io::Result<bool> {
@@ -227,10 +243,15 @@ impl Channel {
 
         let mut reply = [0; REPLY];
         reply[TAG..TAG + CORRELATION].copy_from_slice(correlation);
-        reply[SEQUENCE..REPLY - 3].copy_from_slice(&self.next.to_be_bytes());
-        reply[REPLY - 3] = packet[HEADER - 1];
-        reply[REPLY - 2] = outcome as u8;
-        reply[REPLY - 1] = u8::from(self.stdin.is_none());
+        reply[SEQUENCE..SEQUENCE + 8].copy_from_slice(&self.next.to_be_bytes());
+        reply[SEQUENCE + 8] = packet[HEADER - 1];
+        reply[SEQUENCE + 9] = outcome as u8;
+        reply[SEQUENCE + 10] = u8::from(self.stdin.is_none());
+        reply[SEQUENCE + 11] = u8::from(self.pty);
+        if let Some((rows, cols)) = self.size {
+            reply[SEQUENCE + 12..SEQUENCE + 14].copy_from_slice(&rows.to_be_bytes());
+            reply[SEQUENCE + 14..SEQUENCE + 16].copy_from_slice(&cols.to_be_bytes());
+        }
         sign(&self.key, &mut reply);
         // A peer may leave before reading. The accepted sequence stays consumed.
         let _ = self.socket.send_to_addr(&reply, &sender);
@@ -240,6 +261,16 @@ impl Channel {
     fn apply(&mut self, kind: u8, sequence: u64, data: &[u8]) -> Outcome {
         if kind == 0 && data.is_empty() {
             return Outcome::Current;
+        }
+        if kind == 3 && data.len() == 4 {
+            if !self.pty { return Outcome::NotPty; }
+            let rows = u16::from_be_bytes([data[0], data[1]]);
+            let cols = u16::from_be_bytes([data[2], data[3]]);
+            if !(1..=512).contains(&rows) || !(1..=512).contains(&cols) { return Outcome::ResizeFailed; }
+            return match &self.stdin {
+                Some(Input::Pty(terminal)) if terminal.resize(rows, cols).is_ok() => { self.size = Some((rows, cols)); Outcome::Accepted },
+                _ => Outcome::ResizeFailed,
+            };
         }
         if sequence < self.next {
             return Outcome::Consumed;

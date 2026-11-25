@@ -46,7 +46,7 @@ impl Scopes {
         };
         let id = random_hex().ok()?;
         let mut probe = scopes
-            .command(&id, "--job-scope-check", 2)
+            .command(&id, "--job-scope-check", 2, CPU_PERCENT, MEMORY_BYTES)
             .arg(&id)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -67,15 +67,15 @@ impl Scopes {
         }
     }
 
-    pub fn command(&self, id: &str, mode: &str, timeout_seconds: u64) -> Command {
+    pub fn command(&self, id: &str, mode: &str, timeout_seconds: u64, cpu_percent: u64, memory_bytes: u64) -> Command {
         let mut command = Command::new(SYSTEMD_RUN);
         command
             .env_clear()
             .env("XDG_RUNTIME_DIR", &self.runtime)
             .args(["--user", "--scope", "--collect", "--quiet"])
             .arg(format!("--unit={}", unit(id)))
-            .arg(format!("--property=CPUQuota={CPU_PERCENT}%"))
-            .arg(format!("--property=MemoryMax={MEMORY_BYTES}"))
+            .arg(format!("--property=CPUQuota={cpu_percent}%"))
+            .arg(format!("--property=MemoryMax={memory_bytes}"))
             // This manager-side backstop also ends the scope if its runner
             // dies. The runner normally times out and records the result first.
             .arg(format!(
@@ -90,7 +90,7 @@ impl Scopes {
     }
 }
 
-pub(crate) fn verify(id: &str) -> io::Result<()> {
+pub(crate) fn verify(id: &str, cpu_percent: u64, memory_bytes: u64) -> io::Result<()> {
     if !super::store::valid_id(id) {
         return Err(invalid());
     }
@@ -115,17 +115,17 @@ pub(crate) fn verify(id: &str) -> io::Result<()> {
     let quota: u64 = quota.parse().map_err(|_| invalid())?;
     let period: u64 = period.parse().map_err(|_| invalid())?;
     if period == 0
-        || u128::from(quota) * 100 != u128::from(period) * u128::from(CPU_PERCENT)
-        || memory != MEMORY_BYTES
+        || u128::from(quota) * 100 != u128::from(period) * u128::from(cpu_percent)
+        || memory != memory_bytes
     {
         return Err(invalid());
     }
     Ok(())
 }
 
-pub(super) fn status(enforced: bool) -> Value {
+pub(super) fn status(enforced: bool, cpu_percent: u64, memory_bytes: u64) -> Value {
     if enforced {
-        json!({"cpu_percent": CPU_PERCENT, "memory_bytes": MEMORY_BYTES})
+        json!({"cpu_percent": cpu_percent, "memory_bytes": memory_bytes})
     } else {
         json!({"cpu": "unavailable", "memory": "unavailable"})
     }

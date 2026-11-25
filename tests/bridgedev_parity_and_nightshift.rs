@@ -486,9 +486,12 @@ fn test_nightshift_primitives() {
             "wait_seconds": 15
         }),
     );
-    // Until a separate authorized Git workflow exists, reject the request
-    // before making any repository mutation or executing in the original cwd.
-    assert_eq!(wt_task["isError"], true);
+    assert_eq!(wt_task["isError"], false);
+    let wt_res: Value =
+        serde_json::from_str(wt_task["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(wt_res["ephemeral_worktree"], true);
+    assert_eq!(wt_res["worktree_cleaned"], true);
+    assert_eq!(wt_res["exit_code"], 0);
     assert_eq!(fs::read(fixture.root("base.txt")).unwrap(), b"base content");
     let branches = Command::new("git")
         .args(["branch", "--list", "veyl-task-*"])

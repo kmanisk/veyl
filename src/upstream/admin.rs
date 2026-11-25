@@ -11,7 +11,7 @@ use super::{server_name, tool_name};
 use crate::http::admission::{parse_clients, parse_document};
 use crate::http::operator::{PolicyFile, verify_approvals};
 
-const HELP: &str = "usage: veyl mcp-servers list | probe ID | add-stdio ID /absolute/COMMAND [ARGS...] | add-http ID URL [CONNECT_IP] | enable ID | disable ID | remove ID | restrict CLIENT | grant CLIENT ID TOOL | revoke CLIENT ID TOOL (append --config PATH)";
+const HELP: &str = "usage: veyl mcp-servers list | probe ID | add-stdio ID /absolute/COMMAND [ARGS...] | add-bundle ID /absolute/COMMAND [ARGS...] | add-http ID URL [CONNECT_IP] | enable ID | disable ID | remove ID | restrict CLIENT | grant CLIENT ID TOOL | revoke CLIENT ID TOOL (append --config PATH)";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args == ["--help"] {
@@ -96,13 +96,21 @@ pub(crate) fn manage(path: &Path, params: &[&str]) -> Result<Value, String> {
             entry["allowed_server_tools"] = json!({});
             ("restrict", "", Some(*principal), None)
         }
-        [op @ "add-stdio", id, command, args @ ..] | [op @ "add-http", id, command, args @ ..] => {
+        [
+            op @ ("add-stdio" | "add-bundle" | "add-http"),
+            id,
+            command,
+            args @ ..,
+        ] => {
             let candidate = match (*op, args) {
                 ("add-http", []) => json!({"transport":"http","url":command}),
                 ("add-http", [address]) => {
                     json!({"transport":"http","url":command,"connect_ip":address})
                 }
                 ("add-stdio", _) => json!({"transport":"stdio","command":command,"args":args}),
+                ("add-bundle", _) => {
+                    json!({"transport":"stdio","command":command,"args":args,"runtime_bundle":true})
+                }
                 _ => return Err(HELP.into()),
             };
             if let Some(previous) = servers.get(*id)

@@ -520,6 +520,10 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "allowed_servers",
         "allowed_server_tools",
         "job_runtime_limit_seconds",
+        "job_cpu_percent_limit",
+        "job_memory_bytes_limit",
+        "job_output_limit_bytes",
+        "job_retention_count",
     ];
     let allowed = |value: &Value, fields: &[&str]| {
         value
@@ -542,6 +546,16 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
     let version = document["policy_version"].as_u64();
     let entries = document["clients"].as_array().ok_or("Invalid clients")?;
     for entry in entries {
+        for (key, min, max) in [
+            ("job_cpu_percent_limit", 10, 1600),
+            ("job_memory_bytes_limit", 16 * 1024 * 1024, 16_u64 * 1024 * 1024 * 1024),
+            ("job_output_limit_bytes", 1, 16 * 1024 * 1024),
+            ("job_retention_count", 1, 1024),
+        ] {
+            if entry.get(key).is_some_and(|v| !v.as_u64().is_some_and(|n| (min..=max).contains(&n))) {
+                return Err(format!("Invalid {key}"));
+            }
+        }
         if let Some(limit) = entry.get("job_runtime_limit_seconds")
             && (version != Some(3)
                 || document.get("job_profiles").is_none()

@@ -1,5 +1,30 @@
 # Gateway Milestone 1 — Working Handoff
 
+## 0.3.0-beta candidate
+
+Continue in `~/.local/share/veyl-development/candidates/timeshift.o89oyRsF/source`. The disconnected FUSE sibling preflight issue is corrected and 25 debug integration cases passed. Preserve existing parity-86 and live-status sources and previous binaries. The versioned release does not contain TimeShift or Nightshift. Verify the exact release binaries and independent locked suites, then deliver an isolated personal preview before promotion. Do not claim final parity.
+
+## 86% Parity Candidate Ready for Personal Acceptance (2026-11-25)
+
+Candidate source: `~/.local/share/veyl-development/candidates/parity-86.hjODQIAS/source`
+Branch: `dev/parity-86` (base `0e2cf55`), version `0.2.5-beta` (unchanged until push/release approval).
+Shared build cache: `CARGO_TARGET_DIR=/home/onyx/Projects/veyl/target`.
+
+Completed in this candidate:
+1. Native updater fix & integration (`src/update_cli.rs`, `src/service_cli.rs`, `tests/updater_lifecycle.{sh,py}`) with crashed-unit rollback `reset-failed`, recovery journal, and `--recover`.
+2. Persistent processes + durable budgets (`process_resize`, `shell_status`, `job_logs` base64/utf8, `cpu_percent`, `memory_bytes`, `max_output_bytes`, `job_retention_count`, `task_run` `ephemeral_worktree: true`).
+3. 12 structured Git tools (`git_status` .. `git_push`) and BroadYolo `.git/hooks` workspace cwd preservation.
+4. System & context tools (`processes` section, `network` rates, wake-safe NVIDIA telemetry, `load_path_rules`, `remember`, `chezmoi_inspect`, `list_skills`, `load_skill`).
+5. Extension, skill validation & upstream workflows (`extensions_search`, `extensions_list`, `extensions_info`, `skills_validate`, `mcp_list`, `mcp_status`, `mcp_info`, `mcp_test`, 8 inert `*_propose_*` tools, dashboard `/api/dashboard/requests`).
+
+All checks passed after the final edit (157 Rust tests, 287/287 locked cases across 28/28 unchanged pins + 6/6 three-mode suite, Python feature/E2E suites, Brave CDP browser verification, delegated systemd & updater lifecycles, zero-test-hooks release build, Clippy, rustfmt, JS syntax). Production service, `~/.local/bin`, `~/.cargo/bin`, and GitHub `main` remain untouched awaiting operator personal verification and explicit push approval.
+
+To personally verify in isolated preview mode without touching production:
+```sh
+cd ~/.local/share/veyl-development/candidates/parity-86.hjODQIAS/source
+python3 -B tests/dashboard_preview.py --source "$PWD"
+```
+
 ## Persistent process sessions — ready for personal verification
 
 Continue in
@@ -1216,4 +1241,21 @@ Target Repository: `https://github.com/kmanisk/veyl`
    - Local dashboard (`http://127.0.0.1:7332/dashboard`) and private Tailscale dashboard (`https://onyx.tail646579.ts.net:9443/dashboard`) verified.
    - `veyl monitor` CLI subcommand and `veyl-monitor` verified with live health and client views.
    - Tailscale Funnel on port 443 path `/veyl/mcp/...` verified live with active ChatGPT session, discovery of all 25 tools, and execution.
+
+# TimeShift handoff (2026-11-25; incomplete)
+
+TimeShift and autonomous Nightshift remain unimplemented. BridgeDev exposes a
+single `rewind` tool with list, status, preview, restore and clear actions;
+its description excludes shell changes. The requested Veyl design also needs
+owner isolation, separately granted operations, confirmation, current-scope
+revalidation and durable signed snapshots. In particular, review the gap
+between an advisory directory lock plus check-before-rename and protection
+against non-cooperating concurrent writers before promising no clobber.
+Directory creation currently uses pathname-based `create_dir_all`; do not
+include it in checkpoint coverage without descriptor-confined handling.
+
+The focused mutation integration tests could not start their loopback gateway
+in this sandbox; direct IPv4 socket creation returned EPERM. See STATUS for the
+observed result. Preserve the existing dirty candidate, independent test pins,
+and production approval gate when continuing.
 

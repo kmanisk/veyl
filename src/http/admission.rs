@@ -50,6 +50,14 @@ pub struct Client {
     #[cfg(target_os = "linux")]
     pub job_runtime_limit_seconds: u64,
     #[cfg(target_os = "linux")]
+    pub job_cpu_percent_limit: u64,
+    #[cfg(target_os = "linux")]
+    pub job_memory_bytes_limit: u64,
+    #[cfg(target_os = "linux")]
+    pub job_output_limit_bytes: usize,
+    #[cfg(target_os = "linux")]
+    pub job_retention_count: Option<usize>,
+    #[cfg(target_os = "linux")]
     pub job_extra_roots: Vec<JobRoot>,
 }
 
@@ -253,10 +261,29 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
                     | Action::ApplyPatch
                     | Action::SearchFiles
                     | Action::GitInspect
+                    | Action::GitStatus
+                    | Action::GitDiff
+                    | Action::GitLog
+                    | Action::GitAdd
+                    | Action::GitCommit
+                    | Action::GitBranch
+                    | Action::GitCheckout
+                    | Action::GitRestore
+                    | Action::GitStash
+                    | Action::GitReset
+                    | Action::GitPull
+                    | Action::GitPush
                     | Action::SystemInfo
                     | Action::SystemInspect
                     | Action::ProjectContext
                     | Action::SystemContext
+                    | Action::LoadPathRules
+                    | Action::Remember
+                    | Action::ChezmoiInspect
+                    | Action::ListProjectSkills
+                    | Action::LoadProjectSkill
+                    | Action::SkillsValidate
+                    | Action::ExtensionsInspect
             )
         }) {
             Some(
@@ -346,6 +373,14 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
                 .get("job_runtime_limit_seconds")
                 .and_then(Value::as_u64)
                 .unwrap_or(crate::jobs::SHORT_RUNTIME_MAX),
+            #[cfg(target_os = "linux")]
+            job_cpu_percent_limit: entry.get("job_cpu_percent_limit").and_then(Value::as_u64).unwrap_or(100),
+            #[cfg(target_os = "linux")]
+            job_memory_bytes_limit: entry.get("job_memory_bytes_limit").and_then(Value::as_u64).unwrap_or(256 * 1024 * 1024),
+            #[cfg(target_os = "linux")]
+            job_output_limit_bytes: entry.get("job_output_limit_bytes").and_then(Value::as_u64).unwrap_or(65_536) as usize,
+            #[cfg(target_os = "linux")]
+            job_retention_count: entry.get("job_retention_count").and_then(Value::as_u64).map(|n| n as usize),
             #[cfg(target_os = "linux")]
             job_root: if has_job_grant {
                 Some(JobRoot::open(&configured_root)?)

@@ -477,9 +477,119 @@ fn lifecycle(action: &str, target: &Path, expected: &[u8]) -> Result<(), String>
     status(target, false)
 }
 
+/// Resolve only the original generated unit and its exact installed binary.
+pub(crate) fn update_target(home: &Path, config: Option<&Path>, executables: &[PathBuf]) -> Result<Option<(PathBuf, bool)>, String> {
+    update_target_with_query(home, config, executables, query_unit)
+}
+
+fn update_target_with_query(home: &Path, config: Option<&Path>, executables: &[PathBuf], query: impl FnOnce() -> Result<Value, String>) -> Result<Option<(PathBuf, bool)>, String> {
+    let target = home.join(".config/systemd/user").join(UNIT);
+    let unit_exists = match target.symlink_metadata() {
+        Ok(_) => true,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Err(_) => return Err("Cannot inspect user unit path".into()),
+    };
+    let listener = "127.0.0.1:7331".parse::<SocketAddrV4>().unwrap();
+    let state = match query() {
+        Ok(state) => state,
+        Err(e) if unit_exists => return Err(format!("Cannot safely inspect managed Veyl unit: {e}")),
+        Err(_) => {
+            if std::net::TcpStream::connect_timeout(&listener.into(), Duration::from_millis(200)).is_ok() {
+                return Err("Stop the foreground Veyl instance before updating".into());
+            }
+            return Ok(None);
+        }
+    };
+    if state["LoadState"] == "not-found" {
+        if std::net::TcpStream::connect_timeout(&listener.into(), Duration::from_millis(200)).is_ok() {
+            return Err("Stop the foreground Veyl instance before updating".into());
+        }
+        return Ok(None);
+    }
+    let config = config.ok_or("Existing service needs a recognized configuration")?;
+    if !unit_matches(&state, &target) {
+        return Err("Refusing to update an overridden or unknown service".into());
+    }
+    let executable = executables.iter().find(|exe| {
+        render(exe, config, listener).is_ok_and(|unit| owned_unit(&target, unit.as_bytes(), false).unwrap_or(false))
+    }).ok_or("Service is not the standard generated Veyl unit; update manually")?;
+    match state["ActiveState"].as_str() {
+        Some("inactive") => {
+            if std::net::TcpStream::connect_timeout(&listener.into(), Duration::from_millis(200)).is_ok() {
+                return Err("Stop the foreground Veyl instance before updating".into());
+            }
+            Ok(Some((executable.clone(), false)))
+        }
+        Some("active") if running_binary(&state, executable) => Ok(Some((executable.clone(), true))),
+        _ => Err("Service is not idle or its running executable does not match the installed file".into()),
+    }
+}
+
+fn running_binary(state: &Value, executable: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Some(pid) = state["MainPID"].as_str().and_then(|s| s.parse::<u32>().ok()).filter(|&pid| pid > 1) else { return false; };
+    std::fs::metadata(format!("/proc/{pid}/exe")).ok().zip(std::fs::metadata(executable).ok())
+        .is_some_and(|(running, installed)| (running.dev(),running.ino()) == (installed.dev(),installed.ino()))
+}
+
+pub(crate) fn update_stop() -> Result<(), String> {
+    manager(&["stop", UNIT])?;
+    let state = query_unit()?;
+    // A failed unit may retain ActiveState=failed after a successful stop.
+    // Rollback may proceed only when systemd confirms no main process.
+    if !matches!(state["ActiveState"].as_str(), Some("inactive" | "failed"))
+        || state["MainPID"] != "0"
+    {
+        return Err("Veyl service did not stop; refusing binary replacement".into());
+    }
+    if state["ActiveState"] == "failed" {
+        // Clear start-limit-hit before rollback restarts the restored binary.
+        let _ = manager(&["reset-failed", UNIT]);
+    }
+    Ok(())
+}
+
+pub(crate) fn update_start(executable: &Path) -> Result<(), String> {
+    manager(&["start", UNIT])?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let listener = "127.0.0.1:7331".parse().unwrap();
+    while std::time::Instant::now() < deadline {
+        let state = query_unit()?;
+        if state["ActiveState"] == "active" && running_binary(&state, executable)
+            && std::net::TcpStream::connect_timeout(&listener, Duration::from_millis(200)).is_ok()
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Err("Updated Veyl service did not become ready".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_manager_refuses_existing_unit() {
+        let home = std::env::temp_dir().join(format!("veyl-service-{}", crate::http::operator::revision().unwrap()));
+        let unit = home.join(".config/systemd/user").join(UNIT);
+        std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+        std::fs::write(&unit, b"unit").unwrap();
+        let result = update_target_with_query(&home, None, &[], || Err("manager unavailable".into()));
+        assert!(result.unwrap_err().contains("Cannot safely inspect managed Veyl unit"));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn unavailable_manager_without_unit_checks_listener() {
+        let home = std::env::temp_dir().join(format!("veyl-service-{}", crate::http::operator::revision().unwrap()));
+        let result = update_target_with_query(&home, None, &[], || Err("manager unavailable".into()));
+        if std::net::TcpStream::connect_timeout(&"127.0.0.1:7331".parse().unwrap(), Duration::from_millis(200)).is_ok() {
+            assert!(result.unwrap_err().contains("Stop the foreground Veyl instance"));
+        } else {
+            assert_eq!(result.unwrap(), None);
+        }
+    }
 
     #[test]
     fn renders_fixed_loopback_unit_and_escapes_systemd_interpolation() {

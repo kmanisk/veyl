@@ -271,6 +271,38 @@ struct View {
     cursor: String,
 }
 impl View {
+    fn live_status(&self) -> (String, &'static str) {
+        if !self.notice.is_empty() {
+            return ("MCP: status unavailable".into(), "\x1b[33m");
+        }
+        if self.details.is_some() || self.confirm.is_some() || self.editing_filter {
+            return ("MCP: refresh paused".into(), "\x1b[2m");
+        }
+        let Some(count) = self.health["active_calls"].as_u64() else {
+            return ("MCP: status unavailable".into(), "\x1b[33m");
+        };
+        if count == 0 {
+            return ("No active MCP call".into(), "\x1b[2m");
+        }
+        let mut line = format!("MCP running: {count}");
+        if let Some(tools) = self.health["active_tools"].as_array() {
+            for call in tools.iter().take(3) {
+                let name = strval(&call["tool"]);
+                line.push_str(&format!(" | {name}"));
+                if let Some(ms) = call["duration_ms"].as_u64() {
+                    line.push_str(&format!(" {}.{:03}s", ms / 1000, ms % 1000));
+                }
+                // Use only the explicitly opted-in, session-owned trace.
+                if matches!(self.tab, 2 | 3)
+                    && !self.audit_ledger
+                    && let Some(preview) = self.trace_preview(call)
+                {
+                    line.push_str(&format!(" | {preview}"));
+                }
+            }
+        }
+        (line, "\x1b[36m")
+    }
     fn matches(&self, value: &Value) -> bool {
         value
             .to_string()
@@ -700,7 +732,6 @@ impl View {
                         "activity"
                     };
                     let (value, _) = monitor.request(route, None)?;
-                    self.health["active_calls"] = value["active_calls"].clone();
                     Ok(value)
                 }
                 _ => monitor.show(VIEWS[self.tab], self.client.as_deref(), None),
@@ -766,9 +797,8 @@ impl View {
                 "\x1b[33m"
             });
             out.push_str(&format!("  {state}\x1b[0m\r\n"));
-            out.push_str("\x1b[2m");
-            out.push_str(&"─".repeat(w));
-            out.push_str("\x1b[0m\r\n");
+            let (live_status, color) = self.live_status();
+            row(&mut out, &live_status, w, color);
             let mut used = 0;
             for (position, tab) in TAB_ORDER.iter().enumerate() {
                 let label = format!(" {} {} ", position + 1, LABELS[*tab]);
@@ -802,12 +832,6 @@ impl View {
             }
             if !self.filter.is_empty() {
                 context.push_str(&format!("  Filter: {}", self.filter));
-            }
-            if self.tab == 3 && self.details.is_none() {
-                let calls = self.health["active_calls"].as_u64().unwrap_or(0);
-                if calls > 0 {
-                    context.push_str(&format!("  |  {calls} running"));
-                }
             }
             row(&mut out, &context, w, "\x1b[1m");
             let heading = if self.details.is_some() {
@@ -1195,6 +1219,26 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn live_header_distinguishes_idle_running_and_unavailable() {
+        let mut v = View::default();
+        assert_eq!(v.live_status().0, "MCP: status unavailable");
+        v.health = serde_json::json!({"active_calls":0});
+        assert_eq!(v.live_status().0, "No active MCP call");
+        v.health = serde_json::json!({"active_calls":2,"active_tools":[
+            {"tool":"exec_command","duration_ms":1250,"call_id":"call-1"},
+            {"tool":"job_wait","duration_ms":25,"call_id":"call-2"}
+        ]});
+        assert_eq!(
+            v.live_status().0,
+            "MCP running: 2 | exec_command 1.250s | job_wait 0.025s"
+        );
+        v.details = Some(Value::Null);
+        assert_eq!(v.live_status().0, "MCP: refresh paused");
+        v.notice = "network failure".into();
+        assert_eq!(v.live_status().0, "MCP: status unavailable");
+    }
+
     #[test]
     fn overlay_restores_selection_filter_and_list_after_scrolling() {
         let value = serde_json::json!({"events":[

@@ -81,6 +81,12 @@ impl Broad {
         Ok(plan)
     }
 
+    pub(crate) fn is_readonly(&self, path: &Path) -> bool {
+        self.readonly
+            .iter()
+            .any(|readonly| path.starts_with(readonly))
+    }
+
     pub(crate) fn file_parent(
         &self,
         path: &Path,
@@ -331,7 +337,22 @@ impl Broad {
                     .arg(fs::read_link(&child)?)
                     .arg(&child);
             } else if kind.is_file() || kind.is_dir() {
-                bind(sandbox, &child, false)?;
+                // A disconnected FUSE mount (for example a stale desktop
+                // redirection mount) is already inaccessible. Do not bind
+                // an unrelated sibling of a protected subtree in that state.
+                // Protected paths and ancestors are handled above; cwd and
+                // guard identity checks remain mandatory. All other lookup
+                // errors still fail closed.
+                match fs::symlink_metadata(&child) {
+                    Err(error)
+                        if error.raw_os_error()
+                            == Some(rustix::io::Errno::NOTCONN.raw_os_error()) =>
+                    {
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                    Ok(_) => bind(sandbox, &child, false)?,
+                }
             }
         }
         for target in &self.masked {
@@ -353,10 +374,9 @@ impl Broad {
                 .iter()
                 .any(|mask| mask.starts_with(path) && mask != path)
             || (path.starts_with(&self.home)
-                && self
-                    .readonly
-                    .iter()
-                    .any(|target| target.starts_with(path) && target != path))
+                && self.readonly.iter().any(|target| {
+                    target.starts_with(path) && target != path && !target.ends_with(".git/hooks")
+                }))
     }
 
     pub(crate) fn is_masked(&self, path: &Path) -> bool {

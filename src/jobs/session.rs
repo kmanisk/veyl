@@ -71,6 +71,10 @@ impl Jobs {
             return self.start_session(name, profile, request_id(args)?, owner, root, policy);
         }
 
+        if tool == Tool::ShellStatus {
+            return self.shell_status(args, owner, root, policy, auth);
+        }
+
         let id = args.get("job_id").and_then(Value::as_str).filter(|id| valid_id(id))
             .ok_or_else(|| argument_error("Expected a job identifier"))?;
         if tool == Tool::ShellReset {
@@ -91,7 +95,14 @@ impl Jobs {
             );
         }
 
-        let operation = if args.len() == 1 {
+        let operation = if tool == Tool::ProcessResize {
+            if args.len() != 3 { return Err(argument_error("Expected job_id, rows and cols")); }
+            let dimension = |key: &str| -> io::Result<u16> {
+                args.get(key).and_then(Value::as_u64).filter(|n| (1..=512).contains(n))
+                    .map(|n| n as u16).ok_or_else(|| argument_error("Rows and cols must be integers from 1 to 512"))
+            };
+            Operation::Resize(dimension("rows")?, dimension("cols")?)
+        } else if args.len() == 1 {
             Operation::Query
         } else {
             let sequence = args.get("sequence").and_then(Value::as_u64)
@@ -114,15 +125,66 @@ impl Jobs {
         let mut result = channel::exchange(
             &self.store.input_key(&receipt), auth.digest, auth.expires_at, operation,
         ).map_err(|error| {
-            if error.kind() == ErrorKind::PermissionDenied {
+            if matches!(error.kind(), ErrorKind::PermissionDenied | ErrorKind::InvalidInput) {
                 error
             } else {
                 io::Error::other("Input delivery uncertain")
             }
         })?;
+        if tool == Tool::ProcessResize {
+            if result["status"] != "accepted" { return Err(io::Error::other("Resize unavailable")); }
+            return Ok(json!({"job_id": id, "resized": true, "pty": true, "rows": result["rows"], "cols": result["cols"]}));
+        }
         result["job_id"] = json!(id);
         result["transport"] = json!(receipt.session.as_ref().ok_or_else(invalid)?.transport());
         Ok(result)
+    }
+
+    fn shell_status(
+        &self, args: &Map<String, Value>, owner: &str, root: &JobRoot,
+        policy: JobPolicy<'_>, auth: Authorization<'_>,
+    ) -> io::Result<Value> {
+        if args.keys().any(|key| key != "job_id") { return Err(argument_error("Unexpected shell status argument")); }
+        let _guard = self.store.lock(false)?;
+        if let Some(value) = args.get("job_id") {
+            let id = value.as_str().filter(|id| valid_id(id)).ok_or_else(|| argument_error("Expected a job identifier"))?;
+            let receipt = self.owned_receipt(&self.store.job(id)?, owner)?;
+            return self.session_status(receipt, owner, root, policy, auth);
+        }
+        let mut sessions = Vec::new();
+        let mut truncated = false;
+        for id in self.store.jobs()? {
+            let job = self.store.job(&id)?;
+            let Some(receipt) = self.read_if_published(&job)? else { continue };
+            if receipt.client_id != owner || receipt.session.is_none() { continue; }
+            if sessions.len() == 40 { truncated = true; break; }
+            let receipt = self.owned_receipt(&job, owner)?;
+            sessions.push(self.session_status(receipt, owner, root, policy, auth)?);
+        }
+        Ok(json!({"count": sessions.len(), "sessions": sessions, "truncated": truncated}))
+    }
+
+    fn session_status(
+        &self, receipt: Receipt, owner: &str, root: &JobRoot,
+        policy: JobPolicy<'_>, auth: Authorization<'_>,
+    ) -> io::Result<Value> {
+        let binding = receipt.session.as_ref().ok_or_else(|| argument_error("Job is not a persistent process session"))?;
+        let mut status = self.present_status(&receipt);
+        status["transport"] = json!(binding.transport());
+        status["pty"] = json!(binding.pty);
+        status["rows"] = Value::Null;
+        status["cols"] = Value::Null;
+        status["sequence"] = Value::Null;
+        status["stdin_closed"] = Value::Null;
+        if receipt.state.active() && !self.recovered.contains(&receipt.job_id) {
+            self.session_receipt(&receipt.job_id, owner, root, policy, auth)?;
+            let live = channel::exchange(&self.store.input_key(&receipt), auth.digest, auth.expires_at, Operation::Query)?;
+            status["rows"] = live["rows"].clone();
+            status["cols"] = live["cols"].clone();
+            status["sequence"] = live["next_sequence"].clone();
+            status["stdin_closed"] = live["stdin_closed"].clone();
+        }
+        Ok(status)
     }
 
     fn interactive_profile(&self, name: &str) -> io::Result<Profile> {
@@ -160,7 +222,7 @@ impl Jobs {
         &self, name: &str, profile: Profile, request: Option<&str>, owner: &str,
         root: &JobRoot, policy: JobPolicy<'_>,
     ) -> io::Result<Value> {
-        let (receipt, replay) = self.start(owner, root, name.to_owned(), profile, policy, request)?;
+        let (receipt, replay) = self.start(owner, root, name.to_owned(), profile, policy, request, None)?;
         let mut status = self.present_status(&receipt);
         if replay {
             status["idempotent_replay"] = json!(true);

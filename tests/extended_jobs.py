@@ -41,7 +41,11 @@ class ExtendedJobs(unittest.TestCase):
                 "read_file", "job_start", "job_status", "job_logs", "job_cancel",
                 "job_wait", "exec_command", "task_run", "run_command",
             ])
-        f.doc["clients"][0]["job_runtime_limit_seconds"] = 86400
+        f.doc["clients"][0].update(job_runtime_limit_seconds=86400,
+                                   job_cpu_percent_limit=100,
+                                   job_memory_bytes_limit=268435456,
+                                   job_output_limit_bytes=131072,
+                                   job_retention_count=2)
         f.write_config()
         self.process = f.start()
         self.session = f.connect()
@@ -101,6 +105,32 @@ class ExtendedJobs(unittest.TestCase):
         self.f.write_config()
         self.call("task_run", {"command": "true", "timeout_seconds": 301}, error=True)
         self.call("job_start", {"profile": "complete"}, error=True)
+
+    def test_dynamic_resources_output_and_retention(self):
+        args = {"command": "yes x | head -c 70000",
+                "cpu_percent": 50, "memory_bytes": 134217728,
+                "max_output_bytes": 100000, "wait_seconds": 10, "timeout_seconds": 30}
+        result = self.call("task_run", args)
+        self.assertEqual(result["exit_code"], 0, result)
+        self.assertEqual(result["resource_ceilings"]["cpu_percent"], 50)
+        self.assertEqual(result["resource_ceilings"]["memory_bytes"], 134217728)
+        self.assertEqual(result["stdout_bytes"], 70000)
+        self.assertFalse(result["stdout_truncated"])
+        self.call("task_run", dict(args, max_output_bytes=131073), error=True)
+        old = result["job_id"]
+        time.sleep(1.1)  # Receipts record creation time in whole seconds.
+        active = self.call("task_run", {"command": "sleep 10", "wait_seconds": 0,
+                                        "timeout_seconds": 20})["job_id"]
+        self.addCleanup(self.call, "job_cancel", {"job_id": active})
+        newer = []
+        for _ in range(3):
+            job = self.call("task_run", {"command": "true", "wait_seconds": 10,
+                                         "timeout_seconds": 10})
+            self.assertEqual(job["exit_code"], 0, job)
+            newer.append(job["job_id"])
+        self.call("job_status", {"job_id": old}, error=True)
+        self.call("job_status", {"job_id": newer[-1]})
+        self.call("job_status", {"job_id": active})
 
     def test_24h_budget_session_recovery_restart_and_cancel(self):
         args = {"profile": "extended", "request_id": "extended-recover"}

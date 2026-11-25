@@ -1,5 +1,38 @@
 # BridgeDev capability comparison
 
+## 0.3.0-beta candidate scope
+
+The six-domain planning score remains approximately 86%, not 100%. Includes the real runtime bundle extension probes (REA, Rust Anything and a custom Node MCP provider), compact live TUI status, and a verified fix for disconnected FUSE siblings disrupting Broad YOLO. TimeShift and autonomous Nightshift remain unimplemented. The new version number does not imply final parity.
+
+## 86% functional parity milestone candidate (`parity-86`, 2026-11-25)
+
+Candidate `/home/onyx/.local/share/veyl-development/candidates/parity-86.hjODQIAS/source`
+(branch `dev/parity-86`, base `0e2cf55`, version `0.2.5-beta`) completes all
+six non-Nightshift functional domains against BridgeDev:
+
+- Six of seven functional domains are implemented (6/7 = 85.7%, ~86%
+  functional parity); only autonomous Nightshift orchestration and pre-edit
+  `rewind` checkpoints remain unimplemented (14.3%), alongside intentional
+  fail-closed differences (no remote package auto-install; explicit per-tool
+  grants for mutations, interactive processes, and upstream probing).
+- Native tool surface expands from 28 to 68 native MCP tools (plus verified
+  native updater `veyl update` / `--recover`).
+
+| Domain | BridgeDev reference (`bridge-dev/src/`) | Veyl candidate (`parity-86`) | Status & intentional difference |
+| --- | --- | --- | --- |
+| 1. Confined file tools & directory tree | `filesystem.ts`, `safe-edit.ts`, `patch.ts` | IMPLEMENTED (`read_file`, `write_file`, `apply_patch`, `edit_file`, `file_info`, `list_directory`, `directory_tree`, `create_directory`, `search_files`, read-only `chezmoi_inspect`) | Rewind checkpoint history excluded with domain 5 (Nightshift/rewind). |
+| 2. Persistent shell & process supervision | `shell.ts`, `persistent-shell.ts` | IMPLEMENTED (`process_start` pipe & kernel PTY, `process_input`, `process_resize`, `shell_status`, `shell_reset`, `job_status`, `job_logs` utf8/base64, `job_wait`, `job_cancel`, `cancel_job`, `list_jobs`, `exec_command`, `run_command`, `start_job`, `job_start`) | Explicitly granted profiles and HMAC-authenticated Unix datagram peer proofs; no unconfigured arbitrary host shell spawn. |
+| 3. Structured Git workflows | `git.ts` (12 operations + worktrees) | IMPLEMENTED (`git_inspect`, `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_restore`, `git_stash`, `git_reset`, `git_pull`, `git_push`, `task_run` `ephemeral_worktree: true`) | Hardened Bubblewrap git worker (`core.hooksPath=/dev/null`, RO `.git/hooks`, config masking on RO tools, explicit `confirm: true` for destructive/network ops). |
+| 4. Durable execution & task budgets | `jobs.ts` (budgets up to 86400s), retries, recovery | IMPLEMENTED (`job_runtime_limit_seconds` up to 86400s, `cpu_percent` 10..1600, `memory_bytes` 16 MiB..16 GiB, `max_output_bytes` up to 16 MiB, `job_retention_count`, atomic `request_id` idempotency, cancellation, recovery) | Managed systemd user scope + signed receipts; no leased root `host-controller`. |
+| 5. Nightshift & checkpoints/rewind | `checkpoint.ts`, `rewind.ts`, `ponytail.ts` | NOT IMPLEMENTED as orchestration (`task_run` + `job_wait` + `tests/bridgedev_parity_and_nightshift.rs` cover primitives only) | Final 1/7 domain (~14.3%): autonomous multi-iteration Nightshift loops and pre-edit `rewind` store remain out of scope here. |
+| 6. System & context inspection | `system.ts`, `system-inspect.ts`, `context.ts`, `chezmoi.ts` | IMPLEMENTED (`system_info`, `system_inspect` 10 subsystems including `processes`, `network` TX/RX rates, wake-safe GPU/`nvidia_telemetry`, `service_status`, `project_context`, `system_context`, `load_path_rules`, `remember`, `chezmoi_inspect`, `list_skills`, `load_skill`, `skills_list`, `skills_read`) | Descriptor-pinned workspace traversal (`openat2`), zero env/cmdline scraping, and strict runtime PM active check before invoking `nvidia-smi`. |
+| 7. Extensions, marketplace & preview | `extensions.ts`, `marketplace.ts` | IMPLEMENTED (`extensions_list`, `extensions_info`, `extensions_search`, `skills_validate`, `mcp_list`, `mcp_status`, `mcp_info` with SHA-256 `provider_fingerprint`, `mcp_test`, 8 inert `*_propose_*` tools, `/api/dashboard/requests`, live-reload `tests/dashboard_preview.py`) | Proposals are strictly inert JSON records (`0600`) in state `proposals/` awaiting operator review; remote auto-download/install omitted by design. |
+
+Measured release resource & latency telemetry (`/home/onyx/Projects/veyl/target/release/mcp-gateway`, 7.4 MiB):
+- Idle RSS: `6348` KiB (`6464` KiB after 20 `read_file` calls)
+- Idle CPU over 1.0 s: `0` ticks
+- Authenticated HTTP MCP `read_file` median latency: `0.164 ms` (`p95 = 0.324 ms`)
+
 ## Persistent process candidate (2026-11-25)
 
 The isolated candidate adds explicitly granted `process_start`,
@@ -177,3 +210,11 @@ Git limits its snapshot to 64 MiB and 16,384 entries, history to 24 commits,
 and command output to 64 KiB. Links and special entries are omitted and
 counted. Oversized or incomplete snapshots fail explicitly. Service
 inspection always refers to the one Veyl user unit.
+# TimeShift checkpoint investigation (2026-11-25)
+
+Rewind and autonomous Nightshift remain unimplemented. BridgeDev's `rewind`
+interface offers list, status, preview, restore and clear, and excludes shell
+changes. Veyl still needs a signed owner-scoped store and conflict-safe,
+currently authorized restore. The existing advisory directory lock does not
+exclude external writers, and pathname-based directory creation is not a safe
+checkpoint primitive. No new parity percentage or preview is claimed.

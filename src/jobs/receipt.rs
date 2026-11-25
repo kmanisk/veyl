@@ -62,12 +62,24 @@ pub(super) struct Receipt {
     pub argv_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executable: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral_worktree: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_repo: Option<std::path::PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<std::path::PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_cleaned: Option<bool>,
     pub root: std::path::PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<super::session::Binding>,
     pub cwd: std::path::PathBuf,
     pub timeout_seconds: u64,
     pub max_output_bytes: usize,
+    #[serde(default = "super::config::default_cpu")]
+    pub cpu_percent: u64,
+    #[serde(default = "super::config::default_memory")]
+    pub memory_bytes: u64,
     pub state: State,
     pub created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,8 +129,12 @@ impl Receipt {
             "stdout_bytes": self.stdout_bytes,
             "stderr_bytes": self.stderr_bytes,
             "output_truncated": self.stdout_truncated || self.stderr_truncated,
-            "resource_ceilings": super::resources::status(self.resource_ceilings_enforced)
+            "resource_ceilings": super::resources::status(self.resource_ceilings_enforced, self.cpu_percent, self.memory_bytes)
         });
+        status["ephemeral_worktree"] = json!(self.ephemeral_worktree);
+        if self.ephemeral_worktree {
+            status["worktree_cleaned"] = json!(self.worktree_cleaned);
+        }
         if let Some(session) = &self.session {
             status["transport"] = json!(session.transport());
         }

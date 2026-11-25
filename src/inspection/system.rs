@@ -10,8 +10,9 @@ use std::{
 
 #[path = "live.rs"]
 mod live;
-const SECTIONS: [&str; 9] = [
+const SECTIONS: [&str; 10] = [
     "resources",
+    "processes",
     "gpu",
     "storage",
     "network",
@@ -53,7 +54,7 @@ fn link_name(path: impl AsRef<Path>) -> Option<String> {
 fn inventory(
     path: &str,
     select: impl Fn(&Path) -> bool,
-    collect: impl Fn(&Path) -> Value,
+    mut collect: impl FnMut(&Path) -> Value,
 ) -> Value {
     let Ok(entries) = fs::read_dir(path) else {
         return json!({"available":false,"source":path,"items":[],"truncated":false});
@@ -122,24 +123,104 @@ fn resources(root: Option<&MutationRoot>) -> Value {
         |_| true,
         |p| json!({"name":name(p),"type":text(p.join("type")),"status":text(p.join("status")),"capacity_percent":number(p.join("capacity")),"online":number(p.join("online"))}),
     );
+    v["top_processes"] = processes_list(8);
     v
 }
+fn parse_proc(pid_dir: &Path, page_size: u64) -> Option<(u64, Value)> {
+    let pid: u64 = pid_dir.file_name()?.to_str()?.parse().ok()?;
+    let stat = text(pid_dir.join("stat"))?;
+    let rparen = stat.rfind(')')?;
+    let lparen = stat.find('(')?;
+    if rparen <= lparen {
+        return None;
+    }
+    let comm: String = stat[lparen + 1..rparen].chars().take(64).collect();
+    let rest: Vec<&str> = stat[rparen + 1..].split_whitespace().collect();
+    let state = *rest.first()?;
+    let utime: u64 = rest.get(11)?.parse().ok()?;
+    let stime: u64 = rest.get(12)?.parse().ok()?;
+    let statm = text(pid_dir.join("statm"))?;
+    let resident_pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+    let rss_bytes = resident_pages.saturating_mul(page_size);
+    Some((
+        rss_bytes,
+        json!({
+            "pid": pid,
+            "comm": comm,
+            "state": state,
+            "rss_bytes": rss_bytes,
+            "cpu_ticks": utime.saturating_add(stime),
+        }),
+    ))
+}
+fn processes_list(limit: usize) -> Value {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return json!({"available":false,"items":[],"truncated":false});
+    };
+    let page_size = rustix::param::page_size() as u64;
+    let mut rows = Vec::new();
+    let mut scanned = 0usize;
+    let mut truncated = false;
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if !path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        {
+            continue;
+        }
+        scanned += 1;
+        if scanned > 1024 {
+            truncated = true;
+            break;
+        }
+        if let Some(row) = parse_proc(&path, page_size) {
+            rows.push(row);
+        }
+    }
+    rows.sort_by_key(|a| std::cmp::Reverse(a.0));
+    if rows.len() > limit {
+        truncated = true;
+    }
+    let items: Vec<Value> = rows.into_iter().take(limit).map(|(_, v)| v).collect();
+    json!({"available":true,"source":"/proc","scanned":scanned,"truncated":truncated,"items":items})
+}
 fn gpu() -> Value {
-    inventory(
+    let mut active_nvidia = false;
+    let mut any_nvidia = false;
+    let mut base = inventory(
         "/sys/bus/pci/devices",
         |p| text(p.join("class")).is_some_and(|v| v.starts_with("0x03")),
         |p| {
             // Do not wake a suspended discrete GPU for telemetry.
             let runtime = text(p.join("power/runtime_status"));
             let awake = runtime.as_deref() == Some("active");
-            json!({"pci_address":name(p),"vendor_id":text(p.join("vendor")),"device_id":text(p.join("device")),
-            "class":text(p.join("class")),"driver":link_name(p.join("driver")),
+            let vendor = text(p.join("vendor"));
+            let driver = link_name(p.join("driver"));
+            if vendor.as_deref() == Some("0x10de") {
+                any_nvidia = true;
+                if awake && driver.as_deref() == Some("nvidia") {
+                    active_nvidia = true;
+                }
+            }
+            json!({"pci_address":name(p),"vendor_id":vendor,"device_id":text(p.join("device")),
+            "class":text(p.join("class")),"driver":driver,
             "runtime_status":runtime,
             "busy_percent":awake.then(||number(p.join("gpu_busy_percent"))).flatten(),
             "vram_total_bytes":awake.then(||number(p.join("mem_info_vram_total"))).flatten(),
             "vram_used_bytes":awake.then(||number(p.join("mem_info_vram_used"))).flatten()})
         },
-    )
+    );
+    base["nvidia_telemetry"] = if active_nvidia {
+        live::nvidia_gpu()
+    } else if any_nvidia {
+        json!({"available":false,"reason":"NVIDIA GPU not active; skipped telemetry to avoid waking suspended device"})
+    } else {
+        json!({"available":false,"reason":"No NVIDIA PCI GPU detected"})
+    };
+    base
 }
 fn storage(root: Option<&MutationRoot>) -> Value {
     json!({"workspace_filesystem":super::system(root)["workspace_filesystem"],
@@ -151,13 +232,46 @@ fn storage(root: Option<&MutationRoot>) -> Value {
     })})
 }
 fn network() -> Value {
+    let mut initial = std::collections::BTreeMap::new();
+    if let Ok(entries) = fs::read_dir("/sys/class/net") {
+        for entry in entries.take(MAX_ENTRIES) {
+            let Ok(entry) = entry else { continue };
+            let p = entry.path();
+            if let (Some(rx), Some(tx)) = (
+                number(p.join("statistics/rx_bytes")),
+                number(p.join("statistics/tx_bytes")),
+            ) {
+                initial.insert(name(&p), (rx, tx));
+            }
+        }
+    }
+    let started = std::time::Instant::now();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let elapsed = started.elapsed().as_secs_f64().max(0.001);
     inventory(
         "/sys/class/net",
         |_| true,
         |p| {
-            json!({"interface":name(p),"state":text(p.join("operstate")),
-        "mtu":number(p.join("mtu")),"carrier":number(p.join("carrier")).map(|v|v!=0),
-        "rx_bytes":number(p.join("statistics/rx_bytes")),"tx_bytes":number(p.join("statistics/tx_bytes"))})
+            let iface = name(p);
+            let rx = number(p.join("statistics/rx_bytes"));
+            let tx = number(p.join("statistics/tx_bytes"));
+            let (rx_rate, tx_rate) = match (initial.get(&iface), rx, tx) {
+                (Some((r0, t0)), Some(r1), Some(t1)) => (
+                    Some(((r1.saturating_sub(*r0) as f64) / elapsed).round() as u64),
+                    Some(((t1.saturating_sub(*t0) as f64) / elapsed).round() as u64),
+                ),
+                _ => (None, None),
+            };
+            json!({
+                "interface": iface,
+                "state": text(p.join("operstate")),
+                "mtu": number(p.join("mtu")),
+                "carrier": number(p.join("carrier")).map(|v| v != 0),
+                "rx_bytes": rx,
+                "tx_bytes": tx,
+                "rx_bytes_per_sec": rx_rate,
+                "tx_bytes_per_sec": tx_rate,
+            })
         },
     )
 }
@@ -213,7 +327,7 @@ pub(super) fn inspect(
             let list = value
                 .as_array()
                 .filter(|v| !v.is_empty() && v.len() <= SECTIONS.len())
-                .ok_or("Expected 1 to 9 subsystem names")?;
+                .ok_or("Expected 1 to 10 subsystem names")?;
             let mut sections = Vec::new();
             for v in list {
                 let s = v
@@ -234,6 +348,7 @@ pub(super) fn inspect(
             s.into(),
             match s {
                 "resources" => resources(root),
+                "processes" => processes_list(24),
                 "gpu" => gpu(),
                 "storage" => storage(root),
                 "network" => network(),
@@ -266,15 +381,22 @@ mod tests {
         );
         assert!(inspect(json!({"sections":["gpu","gpu"]}).as_object().unwrap(), None).is_err());
         assert!(inspect(json!({"path":"/tmp"}).as_object().unwrap(), None).is_err());
-        let result=inspect(json!({"sections":["resources","gpu","storage","network","audio","bluetooth","desktop"]}).as_object().unwrap(),None).unwrap();
+        let result=inspect(json!({"sections":["resources","processes","gpu","storage","network","audio","bluetooth","desktop"]}).as_object().unwrap(),None).unwrap();
         assert_eq!(result["read_only"], true);
         assert!(
             result["sections"]["resources"]["memory_total_kib"]
                 .as_u64()
                 .is_some_and(|v| v > 0)
         );
+        assert!(result["sections"]["resources"]["top_processes"]["items"].is_array());
+        assert!(result["sections"]["processes"]["items"].is_array());
         assert!(result["sections"]["gpu"]["items"].is_array());
+        assert!(result["sections"]["gpu"]["nvidia_telemetry"].is_object());
         assert!(result["sections"]["storage"]["devices"]["items"].is_array());
         assert!(result["sections"]["network"]["items"].is_array());
+        if let Some(first) = result["sections"]["network"]["items"].as_array().and_then(|a| a.first()) {
+            assert!(first["rx_bytes_per_sec"].as_u64().is_some());
+            assert!(first["tx_bytes_per_sec"].as_u64().is_some());
+        }
     }
 }

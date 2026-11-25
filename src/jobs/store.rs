@@ -34,6 +34,15 @@ pub(super) struct Store {
 /// Used under the operator's exclusive policy lock before admitting the first
 /// managed request. Every job start in this binary holds the shared lock.
 pub(crate) fn has_unconfined_jobs(path: &Path) -> io::Result<bool> {
+    has_pending_jobs(path, true)
+}
+
+/// The updater holds the exclusive admission lock while checking all receipts.
+pub(crate) fn has_active_jobs(path: &Path) -> io::Result<bool> {
+    has_pending_jobs(path, false)
+}
+
+fn has_pending_jobs(path: &Path, unconfined_only: bool) -> io::Result<bool> {
     let directory = match open_operator_dir(path) {
         Ok(directory) => directory,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
@@ -53,11 +62,10 @@ pub(crate) fn has_unconfined_jobs(path: &Path) -> io::Result<bool> {
         let job = store.job(&id)?;
         let receipt = match job.read() {
             Ok(receipt) => receipt,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) if unconfined_only && error.kind() == ErrorKind::NotFound => continue,
             Err(error) => return Err(error),
         };
-        if !receipt.isolated
-            && !receipt.full
+        if (!unconfined_only || !receipt.isolated && !receipt.full)
             && (receipt.state.active() || receipt.state == super::receipt::State::Uncertain)
         {
             return Ok(true);
@@ -203,6 +211,50 @@ impl Store {
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// Remove a verified, idle job using the pinned store and job directories.
+    pub fn remove_finalized(&self, id: &str) -> io::Result<()> {
+        let job = self.job(id)?;
+        let receipt = job.read()?;
+        if receipt.state.active() || receipt.state == super::receipt::State::Uncertain {
+            return Err(invalid());
+        }
+        let _lease = job.idle_lease()?.ok_or_else(invalid)?;
+        for entry in Dir::read_from(&job.directory)? {
+            let entry = entry?;
+            let name = entry.file_name().to_str().map_err(|_| invalid())?;
+            if !matches!(name, "." | ".." | ".lease" | "receipt.json" | ".receipt.tmp" | "stdout.log" | "stderr.log") {
+                return Err(invalid());
+            }
+            if !matches!(name, "." | "..") {
+                open_private(&job.directory, name, OFlags::RDONLY)?;
+            }
+        }
+        // Legacy request indexes are keyed by plaintext request ID. Remove only
+        // verified private mappings that point to this particular job.
+        for entry in Dir::read_from(&self.directory)? {
+            let entry = entry?;
+            let name = entry.file_name().to_str().map_err(|_| invalid())?;
+            if name.starts_with(".req-") {
+                let bytes = read_private(&self.directory, name, 32)?;
+                if std::str::from_utf8(&bytes).is_ok_and(|value| value.trim() == id) {
+                    fs::unlinkat(&self.directory, name, AtFlags::empty())?;
+                }
+            }
+        }
+        job.check_binding()?;
+        for name in [".receipt.tmp", "receipt.json", "stdout.log", "stderr.log", ".lease"] {
+            match fs::unlinkat(&job.directory, name, AtFlags::empty()) {
+                Ok(()) | Err(Errno::NOENT) => (),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        fs::fsync(&job.directory)?;
+        job.check_binding()?;
+        fs::unlinkat(&self.directory, id, AtFlags::REMOVEDIR)?;
+        fs::fsync(&self.directory)?;
+        Ok(())
     }
 
 }

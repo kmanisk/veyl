@@ -15,15 +15,37 @@ pub enum Action {
     ReadFile,
     SearchFiles,
     GitInspect,
+    GitStatus,
+    GitDiff,
+    GitLog,
+    GitAdd,
+    GitCommit,
+    GitBranch,
+    GitCheckout,
+    GitRestore,
+    GitStash,
+    GitReset,
+    GitPull,
+    GitPush,
     SystemInfo,
     SystemInspect,
     ProjectContext,
     SystemContext,
+    LoadPathRules,
+    Remember,
+    ChezmoiInspect,
+    ListProjectSkills,
+    LoadProjectSkill,
     ServiceStatus,
     WriteFile,
     ApplyPatch,
     ListSkills,
     ReadSkill,
+    SkillsValidate,
+    ExtensionsInspect,
+    McpInspect,
+    McpTest,
+    ProposeExtension,
     ListUpstreams,
     CallUpstream,
     RunCommand,
@@ -31,6 +53,8 @@ pub enum Action {
     StartJob,
     ProcessStart,
     ProcessInput,
+    ProcessResize,
+    ShellStatus,
     ShellReset,
     JobStatus,
     JobLogs,
@@ -48,6 +72,8 @@ impl Action {
                 | Self::StartJob
                 | Self::ProcessStart
                 | Self::ProcessInput
+                | Self::ProcessResize
+                | Self::ShellStatus
                 | Self::ShellReset
                 | Self::JobStatus
                 | Self::JobLogs
@@ -166,16 +192,38 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
         Action::ReadFile
         | Action::SearchFiles
         | Action::GitInspect
+        | Action::GitStatus
+        | Action::GitDiff
+        | Action::GitLog
+        | Action::GitAdd
+        | Action::GitCommit
+        | Action::GitBranch
+        | Action::GitCheckout
+        | Action::GitRestore
+        | Action::GitStash
+        | Action::GitReset
+        | Action::GitPull
+        | Action::GitPush
         | Action::SystemInfo
         | Action::SystemInspect
         | Action::ProjectContext
         | Action::SystemContext
+        | Action::LoadPathRules
+        | Action::Remember
+        | Action::ChezmoiInspect
+        | Action::ListProjectSkills
+        | Action::LoadProjectSkill
         | Action::ServiceStatus
         | Action::ListTools
         | Action::WriteFile
         | Action::ApplyPatch
         | Action::ListSkills
         | Action::ReadSkill
+        | Action::SkillsValidate
+        | Action::ExtensionsInspect
+        | Action::McpInspect
+        | Action::McpTest
+        | Action::ProposeExtension
         | Action::ListUpstreams
         | Action::CallUpstream => Ok(()),
         _ => {

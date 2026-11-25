@@ -305,10 +305,13 @@ pub(crate) fn probe() -> io::Result<()> {
     // create them in the concurrent HTTP gateway, even for a no-op probe.
     let mut command = Command::new("/proc/self/exe");
     command.env_clear().arg("--job-sandbox-probe");
-    let (status, _) = crate::linux_command::capture(
-        &mut command, 256, std::time::Duration::from_secs(3),
-    )?;
-    if status.success() { Ok(()) } else { Err(unsupported()) }
+    let (status, _) =
+        crate::linux_command::capture(&mut command, 256, std::time::Duration::from_secs(3))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(unsupported())
+    }
 }
 
 pub(crate) fn probe_worker() -> io::Result<()> {
@@ -367,6 +370,34 @@ pub(crate) fn upstream_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
         Ok(file)
     }
 
+    let (bundle, args) = if args.first().is_some_and(|v| v == "--runtime-bundle") {
+        let path = Path::new(args.get(1).ok_or_else(unsupported)?);
+        let parent = path.parent().ok_or_else(unsupported)?;
+        let id = path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or_else(unsupported)?;
+        if parent.file_name() != Some(OsStr::new("upstream-bundles"))
+            || !crate::upstream::server_name(id)
+        {
+            return Err(unsupported());
+        }
+        let state = open_absolute_dir(parent.parent().ok_or_else(unsupported)?)?;
+        let anchored = mcp_gateway::security::linux_fs::open_beneath_dir(
+            &state,
+            &Path::new("upstream-bundles").join(id),
+        )?;
+        let layout = crate::state_cli::Layout::inspect(path).map_err(io::Error::other)?;
+        layout.validate_links().map_err(io::Error::other)?;
+        let handle = layout.into_root();
+        let (a, b) = (fd_fs::fstat(&anchored)?, fd_fs::fstat(&handle)?);
+        if (a.st_dev, a.st_ino) != (b.st_dev, b.st_ino) {
+            return Err(unsupported());
+        }
+        (Some(handle), &args[2..])
+    } else {
+        (None, args)
+    };
     let (program, args) = args.split_first().ok_or_else(unsupported)?;
     let program = Path::new(program);
     let canonical = program.canonicalize()?;
@@ -381,6 +412,10 @@ pub(crate) fn upstream_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
         "HOME",
         "/tmp",
     ]);
+    if let Some(bundle) = bundle {
+        sandbox.pass("--ro-bind-fd", bundle)?;
+        sandbox.command.arg("/upstream/bundle");
+    }
     let executable = if canonical.starts_with(BIN) {
         canonical.as_os_str()
     } else {
@@ -457,4 +492,185 @@ pub(crate) fn git_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
         ])
         .args(params);
     Err(sandbox.command.exec())
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub(crate) struct GitToolRequest {
+    pub repo: std::path::PathBuf,
+    pub argv: Vec<String>,
+    pub readonly: bool,
+    pub network: bool,
+    pub broad: Option<super::broad::Broad>,
+    pub identity: Option<[u64; 2]>,
+}
+
+pub(crate) fn git_tool_worker() -> io::Result<()> {
+    use std::io::Read;
+    use std::time::Duration;
+    check_inherited_fds()?;
+    rustix::thread::set_no_new_privs(true)?;
+    let mut input = Vec::new();
+    io::stdin().lock().take(32_769).read_to_end(&mut input)?;
+    if input.len() > 32_768 {
+        return Err(unsupported());
+    }
+    let request: GitToolRequest = serde_json::from_slice(&input).map_err(|_| unsupported())?;
+    if request.argv.is_empty()
+        || request.argv.len() > 128
+        || request.argv.iter().any(|arg| arg.contains('\0'))
+        || !request.repo.is_absolute()
+    {
+        return Err(unsupported());
+    }
+    let mut hardened: Vec<String> = [
+        "--no-pager",
+        "--no-optional-locks",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "submodule.recurse=false",
+        "-c",
+        "protocol.ext.allow=never",
+        "-c",
+        "protocol.fd.allow=never",
+        "-c",
+        "protocol.file.allow=never",
+        "-c",
+        "user.name=Veyl",
+        "-c",
+        "user.email=veyl@localhost",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    hardened.extend(request.argv);
+
+    let (status, stdout, stderr) = if let Some(broad) = request.broad {
+        let identity = request.identity.ok_or_else(unsupported)?;
+        let repo_str = request.repo.to_str().ok_or_else(unsupported)?.to_owned();
+        let mut env_args = vec![
+            "GIT_CONFIG_NOSYSTEM=1".to_owned(),
+            "GIT_CONFIG_GLOBAL=/dev/null".to_owned(),
+            "GIT_TERMINAL_PROMPT=0".to_owned(),
+            "GIT_AUTHOR_NAME=Veyl".to_owned(),
+            "GIT_AUTHOR_EMAIL=veyl@localhost".to_owned(),
+            "GIT_COMMITTER_NAME=Veyl".to_owned(),
+            "GIT_COMMITTER_EMAIL=veyl@localhost".to_owned(),
+        ];
+        if !request.network {
+            env_args.push("GIT_ALLOW_PROTOCOL=".to_owned());
+        }
+        env_args.push("/usr/bin/git".to_owned());
+        env_args.push("-C".to_owned());
+        env_args.push(repo_str);
+        env_args.extend(hardened);
+        let mut sandbox = broad.command(
+            &request.repo,
+            identity,
+            "/usr/bin/env",
+            &env_args,
+            request.network,
+        )?;
+        let (status, out, err) = crate::linux_command::capture_with_input(
+            &mut sandbox.command,
+            &[],
+            131_072,
+            Duration::from_secs(15),
+        )?;
+        drop(sandbox);
+        (status, out, err)
+    } else if request.network {
+        let mut cmd = Command::new("/usr/bin/git");
+        cmd.env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("LC_ALL", "C")
+            .env("HOME", "/tmp")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_AUTHOR_NAME", "Veyl")
+            .env("GIT_AUTHOR_EMAIL", "veyl@localhost")
+            .env("GIT_COMMITTER_NAME", "Veyl")
+            .env("GIT_COMMITTER_EMAIL", "veyl@localhost")
+            .arg("-C")
+            .arg(&request.repo)
+            .args(&hardened);
+        crate::linux_command::capture_with_input(&mut cmd, &[], 131_072, Duration::from_secs(15))?
+    } else {
+        let mut sandbox = Sandbox::new()?;
+        let dir = mcp_gateway::security::linux_fs::open_absolute_dir(&request.repo)?;
+        sandbox.pass(
+            if request.readonly {
+                "--ro-bind-fd"
+            } else {
+                "--bind-fd"
+            },
+            &dir,
+        )?;
+        sandbox.command.arg("/repo");
+        if request.repo.join(".git/hooks").is_dir() {
+            sandbox.command.args(["--tmpfs", "/repo/.git/hooks"]);
+        }
+        if request.readonly && request.repo.join(".git/config").is_file() {
+            let mut empty = File::from(memfd_create("git-empty-cfg", MemfdFlags::CLOEXEC)?);
+            empty.write_all(b"[core]\nrepositoryformatversion = 0\nbare = false\n")?;
+            empty.rewind()?;
+            sandbox.pass("--ro-bind-data", &empty)?;
+            sandbox.command.arg("/repo/.git/config");
+        }
+        sandbox
+            .command
+            .args([
+                "--new-session",
+                "--setenv",
+                "HOME",
+                "/tmp",
+                "--setenv",
+                "GIT_CONFIG_NOSYSTEM",
+                "1",
+                "--setenv",
+                "GIT_CONFIG_GLOBAL",
+                "/dev/null",
+                "--setenv",
+                "GIT_ALLOW_PROTOCOL",
+                "",
+                "--setenv",
+                "GIT_TERMINAL_PROMPT",
+                "0",
+                "--setenv",
+                "GIT_AUTHOR_NAME",
+                "Veyl",
+                "--setenv",
+                "GIT_AUTHOR_EMAIL",
+                "veyl@localhost",
+                "--setenv",
+                "GIT_COMMITTER_NAME",
+                "Veyl",
+                "--setenv",
+                "GIT_COMMITTER_EMAIL",
+                "veyl@localhost",
+                "--",
+                "/usr/bin/git",
+                "-C",
+                "/repo",
+            ])
+            .args(&hardened);
+        let (status, out, err) = crate::linux_command::capture_with_input(
+            &mut sandbox.command,
+            &[],
+            131_072,
+            Duration::from_secs(15),
+        )?;
+        drop(sandbox);
+        (status, out, err)
+    };
+    let payload = serde_json::json!({
+        "exit_code": status.code().unwrap_or(1),
+        "stdout": String::from_utf8_lossy(&stdout),
+        "stderr": String::from_utf8_lossy(&stderr),
+    });
+    println!("{payload}");
+    Ok(())
 }

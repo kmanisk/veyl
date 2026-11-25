@@ -33,6 +33,8 @@ mod tools;
 mod transport;
 #[cfg(target_os = "linux")]
 mod upstream;
+#[cfg(target_os = "linux")]
+mod update_cli;
 
 use std::io;
 use std::path::PathBuf;
@@ -56,6 +58,7 @@ Daily use
   service on | status                            Manage the user service
   run                                            Run in the foreground
   portable                                       Switch to foreground operation
+  update [--check | --reinstall | --from-dir DIR] Update installed user binaries
   mode                                           List client modes
   mode get [CLIENT]                              Show a client mode and state
   mode standard|yolo|full [CLIENT]               Change a client mode
@@ -80,7 +83,7 @@ fn main() {
         args[1] = "monitor".into();
     }
     let public_command = |arg: &std::ffi::OsString| matches!(arg.to_str(),
-        Some("init" | "setup" | "connect" | "run" | "portable" | "ui" | "dashboard" | "monitor" | "service" | "mode" | "diagnostics" | "audit" | "skills" | "mcp-servers" | "state" | "serve" | "protected-paths" | "yolo" | "http"));
+        Some("init" | "setup" | "connect" | "run" | "portable" | "update" | "ui" | "dashboard" | "monitor" | "service" | "mode" | "diagnostics" | "audit" | "skills" | "mcp-servers" | "state" | "serve" | "protected-paths" | "yolo" | "http"));
     if args.len() == 2 && args[0] == "help" && public_command(&args[1]) {
         args.swap(0, 1);
         args[1] = "--help".into();
@@ -130,6 +133,10 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
         return Ok(());
     }
     #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "update") {
+        return update_cli::run(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
     let args = local_cli::normalize(args)?;
     if args == ["--help"] {
         println!("{HELP}");
@@ -165,7 +172,7 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     if args.len() == 2 && args[0] == "--job-scope-check" {
-        return jobs::verify_scope(args[1].to_str().unwrap_or_default())
+        return jobs::verify_scope(args[1].to_str().unwrap_or_default(), 100, 256 * 1024 * 1024)
             .map_err(|_| "job resource ceilings unavailable".into());
     }
     #[cfg(target_os = "linux")]
@@ -199,6 +206,11 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
     {
         return jobs::git_worker(&args[1..])
             .map_err(|_| "Git worker confinement unavailable".into());
+    }
+    #[cfg(target_os = "linux")]
+    if args.len() == 1 && args[0] == "--git-tool-worker" {
+        return jobs::git_tool_worker()
+            .map_err(|_| "Git tool worker confinement unavailable".into());
     }
     #[cfg(target_os = "linux")]
     if args

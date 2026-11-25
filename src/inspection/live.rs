@@ -180,3 +180,43 @@ pub(super) fn bluetooth() -> Value {
         .collect();
     json!({"available":true,"connected_names":names})
 }
+
+pub(super) fn nvidia_gpu() -> Value {
+    let bytes = match run(
+        "/usr/bin/nvidia-smi",
+        &[
+            "--query-gpu=name,driver_version,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw",
+            "--format=csv,noheader,nounits",
+        ],
+        None,
+    ) {
+        Ok(v) => v,
+        Err(v) => return v,
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let num = |s: Option<&str>| -> Option<f64> { s?.trim().parse::<f64>().ok() };
+    let rows: Vec<_> = text
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .take(8)
+        .map(|line| {
+            let mut cols = line.split(',').map(str::trim);
+            json!({
+                "name": cols.next(),
+                "driver": cols.next(),
+                "temperature_c": num(cols.next()),
+                "utilization_percent": num(cols.next()),
+                "memory_used_mib": num(cols.next()),
+                "memory_total_mib": num(cols.next()),
+                "power_w": num(cols.next()),
+            })
+        })
+        .collect();
+    json!({
+        "available": !rows.is_empty(),
+        "source": "nvidia-smi",
+        "units": {"temperature": "C", "utilization": "percent", "memory": "MiB", "power": "W"},
+        "rows": rows,
+    })
+}

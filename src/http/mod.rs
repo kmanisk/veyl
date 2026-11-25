@@ -1015,7 +1015,7 @@ fn dispatch_tools(
                 );
             }
             #[cfg(target_os = "linux")]
-            if tool.inspection() {
+            if tool.inspection() || tool == Tool::Remember {
                 let mode = client.mode.audit_mode().unwrap_or("standard");
                 let record = |phase| {
                     state
@@ -1027,6 +1027,62 @@ fn dispatch_tools(
                 }
                 let result =
                     crate::inspection::run(tool, args, state.policy.path(), settings, client);
+                let phase = if result["isError"] == true {
+                    AuditPhase::Failure
+                } else {
+                    AuditPhase::Success
+                };
+                return Some(if record(phase) {
+                    result
+                } else {
+                    tool_text(true, "Audit outcome unavailable")
+                });
+            }
+            #[cfg(target_os = "linux")]
+            if tool.is_git() {
+                let mode = client.mode.audit_mode().unwrap_or("standard");
+                let record = |phase| {
+                    state
+                        .mutations
+                        .record_runtime_mode(&client.id, name, mode, phase)
+                };
+                if !record(AuditPhase::Intent) {
+                    return Some(tool_text(true, "Audit intent unavailable"));
+                }
+                let result =
+                    crate::tools::git::run(tool, args, state.policy.path(), settings, client);
+                let phase = if result["isError"] == true {
+                    AuditPhase::Failure
+                } else {
+                    AuditPhase::Success
+                };
+                return Some(if record(phase) {
+                    result
+                } else {
+                    tool_text(true, "Audit outcome unavailable")
+                });
+            }
+            #[cfg(target_os = "linux")]
+            if tool.is_extension() {
+                let mode = client.mode.audit_mode().unwrap_or("standard");
+                let record = |phase| {
+                    state
+                        .mutations
+                        .record_runtime_mode(&client.id, name, mode, phase)
+                };
+                if !record(AuditPhase::Intent) {
+                    return Some(tool_text(true, "Audit intent unavailable"));
+                }
+                let result = match crate::tools::extensions::run(
+                    tool,
+                    args,
+                    state.policy.path(),
+                    settings,
+                    client,
+                ) {
+                    Ok(value) => tool_text(false, &value.to_string()),
+                    Err(err) => tool_text(true, &err),
+                };
                 let phase = if result["isError"] == true {
                     AuditPhase::Failure
                 } else {
@@ -1072,6 +1128,10 @@ fn dispatch_tools(
                             session: None,
                             full: false,
                             job_runtime_limit_seconds: client.job_runtime_limit_seconds,
+                            job_cpu_percent_limit: client.job_cpu_percent_limit,
+                            job_memory_bytes_limit: client.job_memory_bytes_limit,
+                            job_output_limit_bytes: client.job_output_limit_bytes,
+                            job_retention_count: client.job_retention_count,
                             broad: None,
                             workspace_mounts: settings.managed.then_some(&client.job_extra_roots),
                         },
@@ -1172,6 +1232,10 @@ fn privileged_tool(
                                 expires_at: client.expires_at,
                             }),
                             job_runtime_limit_seconds: client.job_runtime_limit_seconds,
+                            job_cpu_percent_limit: client.job_cpu_percent_limit,
+                            job_memory_bytes_limit: client.job_memory_bytes_limit,
+                            job_output_limit_bytes: client.job_output_limit_bytes,
+                            job_retention_count: client.job_retention_count,
                             broad: broad.as_ref(),
                             workspace_mounts: (!full
                                 && broad.is_none()
@@ -1304,7 +1368,7 @@ fn permit_tool(
     if !client.tools.contains(&tool) || !authorized(client, tool.action(), state, audited, now) {
         return Err(DENIED);
     }
-    if matches!(tool, Tool::ProcessInput | Tool::ShellReset)
+    if matches!(tool, Tool::ProcessInput | Tool::ProcessResize | Tool::ShellStatus | Tool::ShellReset)
         && (!client.tools.contains(&Tool::ProcessStart)
             || !authorized(client, Action::ProcessStart, state, audited, now))
     {
@@ -1351,9 +1415,23 @@ fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configu
         #[cfg(not(target_os = "linux"))]
         return false;
     }
+    if tool.is_extension() {
+        #[cfg(target_os = "linux")]
+        return state.mutations.available();
+        #[cfg(not(target_os = "linux"))]
+        return false;
+    }
     if tool.inspection() {
         #[cfg(target_os = "linux")]
         return state.mutations.available();
+        #[cfg(not(target_os = "linux"))]
+        return false;
+    }
+    if tool.is_git() {
+        #[cfg(target_os = "linux")]
+        return state.mutations.available()
+            && (client.mutation_root.is_some()
+                || matches!(client.mode, ExecutionMode::BroadYolo | ExecutionMode::Full));
         #[cfg(not(target_os = "linux"))]
         return false;
     }

@@ -83,6 +83,7 @@ enum Transport {
     Stdio {
         command: String,
         args: Vec<String>,
+        bundle: bool,
     },
     Http {
         uri: Uri,
@@ -113,6 +114,81 @@ impl Catalog {
 
     pub fn empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub fn contains_server(&self, id: &str) -> bool {
+        self.0.contains_key(id)
+    }
+
+    pub fn fingerprint_and_info(&self, grants: &Grants, id: &str) -> Result<Value, &'static str> {
+        use sha2::{Digest, Sha256};
+
+        if !server_name(id) || !grants.servers.contains(id) {
+            return Err("PROVIDER_NOT_FOUND");
+        }
+        let server = self.0.get(id).ok_or("PROVIDER_NOT_FOUND")?;
+        let canonical = match &server.transport {
+            Transport::Stdio {
+                command,
+                args,
+                bundle,
+            } => {
+                let mut value = json!({
+                    "id": id, "enabled": !server.disabled, "transport": "stdio",
+                    "command": command, "args": args,
+                });
+                if *bundle {
+                    value["runtime_bundle"] = json!(true);
+                }
+                value
+            }
+            Transport::Http {
+                uri,
+                route,
+                use_token,
+                private_ca,
+            } => json!({
+                "id": id,
+                "enabled": !server.disabled,
+                "transport": "http",
+                "url": uri.to_string(),
+                "route": route.to_string(),
+                "use_token": use_token,
+                "private_ca": private_ca,
+            }),
+        };
+        let provider_fingerprint =
+            format!("{:x}", Sha256::digest(canonical.to_string().as_bytes()));
+        let mut granted_tools: Vec<&str> = grants
+            .tools
+            .as_ref()
+            .and_then(|map| map.get(id))
+            .map(|set| set.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        granted_tools.sort();
+        Ok(json!({
+            "id": id,
+            "enabled": !server.disabled,
+            "provider_fingerprint": provider_fingerprint,
+            "config": {
+                "transport": canonical["transport"],
+                "command": canonical
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .and_then(|p| Path::new(p).file_name())
+                    .and_then(|s| s.to_str()),
+                "url": match &server.transport {
+                    Transport::Http { uri, .. } => Some(format!(
+                        "{}://{}",
+                        uri.scheme_str().unwrap_or("https"),
+                        uri.authority().map_or("", hyper::http::uri::Authority::as_str)
+                    )),
+                    Transport::Stdio { .. } => None,
+                },
+                "credentials": matches!(server.transport, Transport::Http { use_token: true, .. }),
+                "granted_tools": granted_tools,
+            },
+        }))
     }
 
     pub fn listing(&self, grants: Option<&Grants>) -> Value {
@@ -222,7 +298,17 @@ impl Catalog {
         if !audit(&public, true, false) {
             return Err("Upstream audit intent unavailable");
         }
-        let result = with_link(config, &id, server, overall, |link| {
+        // An explicitly configured runtime bundle may need additional cold-start
+        // time for its language runtime. Keep ordinary providers and discovery
+        // at their existing limits, and stay below the HTTP request deadline.
+        let bundled = matches!(&server.transport, Transport::Stdio { bundle: true, .. });
+        let budget = if bundled { Duration::from_secs(4) } else { Duration::from_millis(1700) };
+        let overall = if bundled && requested.contains("__") {
+            Instant::now() + budget
+        } else {
+            overall
+        };
+        let result = with_link_budget(config, &id, server, overall, budget, |link| {
             if !link.discover()?.contains_key(name) {
                 return Err(io::Error::other("Tool not discovered"));
             }
@@ -245,7 +331,7 @@ impl Catalog {
         })
     }
 
-    fn probe(&self, config: &Path, id: &str) -> Result<Value, String> {
+    pub(crate) fn probe(&self, config: &Path, id: &str) -> Result<Value, String> {
         let server = self.0.get(id).ok_or("Unknown upstream server")?;
         if server.disabled {
             return Ok(json!({"id":id,"health":"disabled","tools":[]}));
@@ -277,7 +363,7 @@ impl Server {
                 if fields.keys().all(|k| {
                     matches!(
                         k.as_str(),
-                        "transport" | "command" | "args" | "env" | "enabled"
+                        "transport" | "command" | "args" | "env" | "enabled" | "runtime_bundle"
                     )
                 }) =>
             {
@@ -307,9 +393,14 @@ impl Server {
                         })
                         .collect::<Result<Vec<_>, _>>()?,
                 };
+                let bundle = fields
+                    .get("runtime_bundle")
+                    .map_or(Some(false), Value::as_bool)
+                    .ok_or("Invalid runtime bundle flag")?;
                 Transport::Stdio {
                     command: command.to_owned(),
                     args,
+                    bundle,
                 }
             }
             Some("http")
@@ -446,13 +537,39 @@ fn with_link<T>(
     overall: Instant,
     f: impl FnOnce(&mut Link) -> io::Result<T>,
 ) -> io::Result<T> {
-    let deadline = overall.min(Instant::now() + Duration::from_millis(1700));
+    with_link_budget(config, id, server, overall, Duration::from_millis(1700), f)
+}
+
+fn with_link_budget<T>(
+    config: &Path,
+    id: &str,
+    server: &Server,
+    overall: Instant,
+    budget: Duration,
+    f: impl FnOnce(&mut Link) -> io::Result<T>,
+) -> io::Result<T> {
+    let deadline = overall.min(Instant::now() + budget);
     if Instant::now() >= deadline {
         return Err(io::ErrorKind::TimedOut.into());
     }
     let connection = match &server.transport {
-        Transport::Stdio { command, args } => {
-            Connection::Stdio(stdio::Process::start(command, args)?)
+        Transport::Stdio {
+            command,
+            args,
+            bundle,
+        } => {
+            let root = if *bundle {
+                Some(
+                    config
+                        .parent()
+                        .ok_or(io::ErrorKind::InvalidInput)?
+                        .join("upstream-bundles")
+                        .join(id),
+                )
+            } else {
+                None
+            };
+            Connection::Stdio(stdio::Process::start(command, args, root.as_deref())?)
         }
         Transport::Http {
             uri,

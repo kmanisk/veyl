@@ -82,10 +82,19 @@ pub(super) fn excerpts_offset(
     max_bytes: usize,
 ) -> io::Result<Value> {
     let mut value = excerpts_streams(job, receipt, offset, offset, max_bytes)?;
-    let stdout = value["next_stdout_offset"].as_u64().ok_or_else(super::invalid)?;
-    let stderr = value["next_stderr_offset"].as_u64().ok_or_else(super::invalid)?;
+    let stdout = value["next_stdout_offset"]
+        .as_u64()
+        .ok_or_else(super::invalid)?;
+    let stderr = value["next_stderr_offset"]
+        .as_u64()
+        .ok_or_else(super::invalid)?;
     let object = value.as_object_mut().ok_or_else(super::invalid)?;
-    for key in ["stdout_offset", "stderr_offset", "next_stdout_offset", "next_stderr_offset"] {
+    for key in [
+        "stdout_offset",
+        "stderr_offset",
+        "next_stdout_offset",
+        "next_stderr_offset",
+    ] {
         object.remove(key);
     }
     value["offset"] = json!(offset);
@@ -102,19 +111,75 @@ pub(super) fn excerpts_streams(
     stderr_offset: usize,
     max_bytes: usize,
 ) -> io::Result<Value> {
+    excerpts_encoded(job, receipt, stdout_offset, stderr_offset, max_bytes, false)
+}
+
+pub(super) fn excerpts_encoded(
+    job: &JobDir<'_>,
+    receipt: &Receipt,
+    stdout_offset: usize,
+    stderr_offset: usize,
+    max_bytes: usize,
+    base64: bool,
+) -> io::Result<Value> {
     let limit = max_bytes.min(receipt.max_output_bytes);
-    let stdout = excerpt_offset(job, "stdout.log", stdout_offset, limit, receipt.stdout_truncated)?;
-    let stderr = excerpt_offset(job, "stderr.log", stderr_offset, limit, receipt.stderr_truncated)?;
-    let next_stdout = stdout_offset.checked_add(stdout.2).ok_or_else(super::invalid)?;
-    let next_stderr = stderr_offset.checked_add(stderr.2).ok_or_else(super::invalid)?;
-    Ok(json!({
+    let stdout = excerpt_offset(
+        job,
+        "stdout.log",
+        stdout_offset,
+        limit,
+        receipt.stdout_truncated,
+    )?;
+    let stderr = excerpt_offset(
+        job,
+        "stderr.log",
+        stderr_offset,
+        limit,
+        receipt.stderr_truncated,
+    )?;
+    let next_stdout = stdout_offset
+        .checked_add(stdout.2)
+        .ok_or_else(super::invalid)?;
+    let next_stderr = stderr_offset
+        .checked_add(stderr.2)
+        .ok_or_else(super::invalid)?;
+    let mut result = json!({
         "job_id": receipt.job_id,
-        "stdout": stdout.0, "stderr": stderr.0,
+        "stdout": String::from_utf8_lossy(&stdout.0), "stderr": String::from_utf8_lossy(&stderr.0),
         "stdout_offset": stdout_offset, "stderr_offset": stderr_offset,
         "next_stdout_offset": next_stdout, "next_stderr_offset": next_stderr,
         "ended": !receipt.state.active(),
         "stdout_truncated": stdout.1, "stderr_truncated": stderr.1,
-    }))
+    });
+    if base64 {
+        result["encoding"] = json!("base64");
+        result["stdout_base64"] = json!(encode_base64(&stdout.0));
+        result["stderr_base64"] = json!(encode_base64(&stderr.0));
+    }
+    Ok(result)
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 fn excerpt_offset(
@@ -123,10 +188,10 @@ fn excerpt_offset(
     offset: usize,
     limit: usize,
     truncated: bool,
-) -> io::Result<(String, bool, usize)> {
+) -> io::Result<(Vec<u8>, bool, usize)> {
     let mut file = match job.open_log(name, OFlags::RDONLY) {
         Ok(file) => file,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((String::new(), false, 0)),
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((Vec::new(), false, 0)),
         Err(err) => return Err(err),
     };
     if offset > 0 {
@@ -138,5 +203,19 @@ fn excerpt_offset(
     let truncated = truncated || bytes.len() > limit;
     bytes.truncate(limit);
     let consumed = bytes.len();
-    Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated, consumed))
+    Ok((bytes, truncated, consumed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_base64;
+
+    #[test]
+    fn base64_preserves_binary_and_padding() {
+        assert_eq!(encode_base64(b""), "");
+        assert_eq!(encode_base64(b"f"), "Zg==");
+        assert_eq!(encode_base64(b"fo"), "Zm8=");
+        assert_eq!(encode_base64(b"foo"), "Zm9v");
+        assert_eq!(encode_base64(&[0, 255, 128]), "AP+A");
+    }
 }

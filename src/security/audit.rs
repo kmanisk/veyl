@@ -412,7 +412,7 @@ impl AuditSink {
             || !details.argv_sha256.bytes().all(|b| b.is_ascii_hexdigit())
             || !details.cwd.is_absolute()
             || details.cwd.as_os_str().as_encoded_bytes().len() > 4096
-            || details.max_output_bytes > 65_536
+            || details.max_output_bytes > 16 * 1024 * 1024
             || details.stdout_bytes > details.max_output_bytes
             || details.stderr_bytes > details.max_output_bytes
         {

@@ -20,6 +20,9 @@ const MAX_ARGS: usize = 32;
 const MAX_ARG_BYTES: usize = 1024;
 const MAX_ARGV_BYTES: usize = 8192;
 pub(super) const MAX_OUTPUT: usize = 65_536;
+pub(super) const MAX_PROFILE_OUTPUT: usize = 16 * 1024 * 1024;
+pub(super) const fn default_cpu() -> u64 { 100 }
+pub(super) const fn default_memory() -> u64 { 256 * 1024 * 1024 }
 pub(crate) const SHORT_RUNTIME_MAX: u64 = 300;
 pub(crate) const EXTENDED_RUNTIME_MAX: u64 = 86_400;
 const DEFAULT_OUTPUT: usize = 4096;
@@ -39,6 +42,10 @@ pub(super) struct Profile {
     pub extended_runtime: bool,
     #[serde(default = "default_output_limit")]
     pub max_output_bytes: usize,
+    #[serde(default = "default_cpu")]
+    pub cpu_percent: u64,
+    #[serde(default = "default_memory")]
+    pub memory_bytes: u64,
 }
 
 fn default_output_limit() -> usize {
@@ -72,7 +79,9 @@ impl Profile {
                 SHORT_RUNTIME_MAX
             })
                 .contains(&self.timeout_seconds)
-            || !(1..=MAX_OUTPUT).contains(&self.max_output_bytes)
+            || !(1..=MAX_PROFILE_OUTPUT).contains(&self.max_output_bytes)
+            || !(10..=1600).contains(&self.cpu_percent)
+            || !(16 * 1024 * 1024..=16 * 1024 * 1024 * 1024).contains(&self.memory_bytes)
         {
             return Err(invalid());
         }
@@ -159,6 +168,14 @@ struct JobClient {
     _disabled: Option<bool>,
     #[serde(default, rename = "job_runtime_limit_seconds")]
     _job_runtime_limit_seconds: Option<u64>,
+    #[serde(default, rename = "job_cpu_percent_limit")]
+    _job_cpu_percent_limit: Option<u64>,
+    #[serde(default, rename = "job_memory_bytes_limit")]
+    _job_memory_bytes_limit: Option<u64>,
+    #[serde(default, rename = "job_output_limit_bytes")]
+    _job_output_limit_bytes: Option<usize>,
+    #[serde(default, rename = "job_retention_count")]
+    _job_retention_count: Option<usize>,
 }
 
 pub(crate) fn parse_settings(bytes: &[u8]) -> Result<(PathBuf, Profiles), String> {
@@ -320,6 +337,27 @@ pub(super) fn restrict_child_privileges() -> io::Result<()> {
 mod runtime_tests {
     use super::*;
     #[test]
+    fn resource_budgets_validate_and_default() {
+        let mut profile: Profile = serde_json::from_value(serde_json::json!({
+            "executable": "/usr/bin/true", "args": [], "timeout_seconds": 1
+        })).unwrap();
+        assert_eq!(profile.cpu_percent, 100);
+        assert_eq!(profile.memory_bytes, 256 * 1024 * 1024);
+        assert_eq!(profile.max_output_bytes, 4096);
+        profile.cpu_percent = 9;
+        assert!(profile.check_limits().is_err());
+        profile.cpu_percent = 1600;
+        profile.memory_bytes = 16 * 1024 * 1024 * 1024;
+        profile.max_output_bytes = MAX_PROFILE_OUTPUT;
+        assert!(profile.check_limits().is_ok());
+        profile.memory_bytes += 1;
+        assert!(profile.check_limits().is_err());
+        profile.memory_bytes = 16 * 1024 * 1024;
+        profile.max_output_bytes += 1;
+        assert!(profile.check_limits().is_err());
+    }
+
+    #[test]
     fn long_budget_requires_explicit_operator_profile_opt_in() {
         let mut profile = Profile {
             interactive: false,
@@ -329,6 +367,8 @@ mod runtime_tests {
             timeout_seconds: 300,
             extended_runtime: false,
             max_output_bytes: 4096,
+            cpu_percent: default_cpu(),
+            memory_bytes: default_memory(),
         };
         assert!(profile.check_limits().is_ok());
         profile.timeout_seconds = 301;

@@ -32,7 +32,7 @@ impl Jobs {
         }
         let empty = serde_json::Map::new();
         let args = match args {
-            None if tool == Tool::ListJobs => &empty,
+            None if matches!(tool, Tool::ListJobs | Tool::ShellStatus) => &empty,
             Some(Value::Object(args)) => args,
             _ => return tool_text(true, "Expected a job arguments object"),
         };
@@ -72,7 +72,7 @@ impl Jobs {
                 if short {
                     profile.timeout_seconds = profile.timeout_seconds.min(SHORT_TIMEOUT);
                 }
-                self.start(owner, root, name, profile, policy, req_id)
+                self.start(owner, root, name, profile, policy, req_id, None)
                     .and_then(|(receipt, replay)| {
                         let mut result = if short {
                             self.wait_short(owner, &receipt.job_id)?
@@ -100,7 +100,7 @@ impl Jobs {
                 };
                 self.owned_tool(tool, id, owner, args)
             }
-            Tool::ProcessStart | Tool::ProcessInput | Tool::ShellReset => {
+            Tool::ProcessStart | Tool::ProcessInput | Tool::ProcessResize | Tool::ShellStatus | Tool::ShellReset => {
                 self.session_call(tool, args, owner, root, policy)
             }
             Tool::ExecCommand | Tool::TaskRun => {
@@ -111,7 +111,10 @@ impl Jobs {
         match result {
             Ok(value) => tool_text(false, &value.to_string()),
             Err(error) if tool == Tool::ProcessInput && error.kind() == ErrorKind::Other => {
-                tool_text(true, "Session input unavailable or delivery uncertain. Query with job_id before sending more input.")
+                tool_text(
+                    true,
+                    "Session input unavailable or delivery uncertain. Query with job_id before sending more input.",
+                )
             }
             Err(error) if error.kind() == ErrorKind::NotFound => tool_text(true, "Job not found"),
             Err(error) if error.kind() == ErrorKind::Unsupported => {
@@ -173,8 +176,58 @@ impl Jobs {
                     }
                 };
                 let max_bytes = number("max_bytes", 4096)?.min(65536);
+                let base64 = match args.get("encoding") {
+                    None => false,
+                    Some(Value::String(s)) if s == "utf8" => false,
+                    Some(Value::String(s)) if s == "base64" => true,
+                    _ => {
+                        return Err(io::Error::new(
+                            ErrorKind::InvalidInput,
+                            "Invalid log encoding",
+                        ));
+                    }
+                };
                 let separate =
                     args.contains_key("stdout_offset") || args.contains_key("stderr_offset");
+                if base64 {
+                    if separate && args.contains_key("offset") {
+                        return Err(io::Error::new(
+                            ErrorKind::InvalidInput,
+                            "Use either offset or independent stream offsets",
+                        ));
+                    }
+                    let offset = number("offset", 0)?;
+                    let mut value = logs::excerpts_encoded(
+                        &job,
+                        &receipt,
+                        number("stdout_offset", offset)?,
+                        number("stderr_offset", offset)?,
+                        max_bytes,
+                        true,
+                    )?;
+                    if !separate {
+                        let next = value["next_stdout_offset"]
+                            .as_u64()
+                            .ok_or_else(super::invalid)?
+                            .max(
+                                value["next_stderr_offset"]
+                                    .as_u64()
+                                    .ok_or_else(super::invalid)?,
+                            );
+                        let object = value.as_object_mut().ok_or_else(super::invalid)?;
+                        for key in [
+                            "stdout_offset",
+                            "stderr_offset",
+                            "next_stdout_offset",
+                            "next_stderr_offset",
+                        ] {
+                            object.remove(key);
+                        }
+                        value["offset"] = json!(offset);
+                        value["next_offset"] = json!(next);
+                    }
+                    return Ok(value);
+                }
                 if separate {
                     if args.contains_key("offset") {
                         return Err(io::Error::new(
@@ -335,20 +388,17 @@ impl Jobs {
             !matches!(
                 key.as_str(),
                 "command" | "argv" | "cwd" | "timeout_seconds" | "request_id"
-            ) && !(task && matches!(key.as_str(), "wait_seconds" | "ephemeral_worktree"))
+            ) && !(task && matches!(key.as_str(), "wait_seconds" | "ephemeral_worktree" | "cpu_percent" | "memory_bytes" | "max_output_bytes"))
         }) {
             return Err(argument_error("Unexpected command argument"));
         }
         if !policy.full && policy.broad.is_none() && policy.workspace_mounts.is_none() {
             return Err(io::Error::from(ErrorKind::Unsupported));
         }
-        if let Some(value) = args.get("ephemeral_worktree")
-            && value.as_bool() != Some(false)
-        {
-            return Err(argument_error(
-                "Automatic worktree creation is unavailable; use an explicitly approved workspace",
-            ));
-        }
+        let ephemeral = match args.get("ephemeral_worktree") {
+            None => false,
+            Some(value) => value.as_bool().ok_or_else(|| argument_error("Invalid ephemeral_worktree"))?,
+        };
         let req = request_id(args)?;
         let number = |key: &str, default: u64, min: u64, max: u64| -> io::Result<u64> {
             match args.get(key) {
@@ -427,7 +477,9 @@ impl Jobs {
             args: argv,
             timeout_seconds: timeout,
             extended_runtime: task && timeout > SHORT_RUNTIME_MAX,
-            max_output_bytes: MAX_OUTPUT,
+            max_output_bytes: if task { number("max_output_bytes", (MAX_OUTPUT as u64).min(policy.job_output_limit_bytes as u64), 1, policy.job_output_limit_bytes as u64)? as usize } else { MAX_OUTPUT },
+            cpu_percent: if task { number("cpu_percent", 100.min(policy.job_cpu_percent_limit), 10, policy.job_cpu_percent_limit)? } else { super::config::default_cpu() },
+            memory_bytes: if task { number("memory_bytes", super::config::default_memory().min(policy.job_memory_bytes_limit), 16 * 1024 * 1024, policy.job_memory_bytes_limit)? } else { super::config::default_memory() },
         };
         profile.validate()?;
         // Revalidate original approved handles before resolving a nested cwd.
@@ -436,6 +488,14 @@ impl Jobs {
             mount.identity().handle()?;
         }
         let canonical = resolve_cwd(root, cwd, policy)?;
+        let repo = if ephemeral {
+            let repo = super::worktree::repository(&canonical)?;
+            let allowed = canonical == repo || repo.starts_with(root.path())
+                || policy.workspace_mounts.unwrap_or_default().iter().any(|mount| repo.starts_with(mount.path()))
+                || policy.full || policy.broad.is_some_and(|broad| !broad.is_masked(&repo));
+            if !allowed { return Err(argument_error("Git repository is outside the permitted scope")); }
+            Some(repo)
+        } else { None };
         let effective_root = JobRoot::open(&canonical).map_err(io::Error::other)?;
         if canonical == root.path() && effective_root.identity() != root.identity() {
             return Err(invalid());
@@ -444,6 +504,7 @@ impl Jobs {
         if let Some(approved) = policy.workspace_mounts {
             for source in std::iter::once(root).chain(approved.iter()) {
                 if source.path() == canonical
+                    || repo.as_ref().is_some_and(|repo| repo.starts_with(source.path()))
                     || mounts
                         .iter()
                         .any(|item: &JobRoot| item.path() == source.path())
@@ -472,6 +533,7 @@ impl Jobs {
             profile,
             effective_policy,
             req,
+            repo.as_deref(),
         )?;
         let receipt = if wait > 0 && receipt.state.active() {
             self.wait_for_end(owner, &receipt.job_id, Duration::from_secs(wait))?
@@ -492,7 +554,7 @@ impl Jobs {
         }
         if task {
             result["task_id"] = json!(receipt.job_id);
-            result["ephemeral_worktree"] = json!(false);
+            result["ephemeral_worktree"] = json!(receipt.ephemeral_worktree);
             result["checkpoint"] = json!(false);
         }
         Ok(result)

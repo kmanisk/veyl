@@ -84,7 +84,7 @@ class ProcessSessions(unittest.TestCase):
                      })
         for client in f.doc["clients"]:
             client.update(mode="standard", disabled=False, job_runtime_limit_seconds=86400,
-                          tools=["process_start", "process_input", "shell_reset",
+                          tools=["process_start", "process_input", "process_resize", "shell_status", "shell_reset",
                                  "job_start", "job_status", "job_logs", "job_cancel"])
         f.write_config()
         self.gateway = f.start()
@@ -249,6 +249,35 @@ class ProcessSessions(unittest.TestCase):
         time.sleep(2.1)
         self.assertFalse(marker.exists(), "Canceled descendant survived")
 
+    def test_resize_and_shell_status(self):
+        pty = self.start(profile="pty_shell", transport="pty")
+        pipe = self.start(profile="echo")
+        initial = self.call("shell_status", {"job_id": pty})
+        self.assertEqual((initial["pty"], initial["rows"], initial["cols"], initial["sequence"]),
+                         (True, 24, 80, 0))
+        resized = self.call("process_resize", {"job_id": pty, "rows": 35, "cols": 100})
+        self.assertEqual(resized, {"job_id": pty, "resized": True, "pty": True, "rows": 35, "cols": 100})
+        self.send(pty, 0, "stty size </dev/tty\n")
+        self.await_result(lambda: self.logs(pty), lambda logs: "35 100" in logs["stdout"])
+        status = self.call("shell_status", {"job_id": pty})
+        self.assertEqual((status["rows"], status["cols"], status["sequence"], status["stdin_closed"]),
+                         (35, 100, 1, False))
+        listing = self.call("shell_status", {})
+        self.assertEqual(listing["count"], 2)
+        self.assertFalse(listing["truncated"])
+        self.assertEqual({entry["job_id"] for entry in listing["sessions"]}, {pty, pipe})
+        self.call("process_resize", {"job_id": pipe, "rows": 20, "cols": 80}, error=True)
+        for rows, cols in ((0, 80), (513, 80), (24, 0), (24, 513)):
+            self.call("process_resize", {"job_id": pty, "rows": rows, "cols": cols}, error=True)
+        self.call("shell_status", {"job_id": pty}, other=True, error=True)
+        self.call("process_resize", {"job_id": pty, "rows": 20, "cols": 80}, other=True, error=True)
+        ordinary = self.call("job_start", {"profile": "closed"})["job_id"]
+        self.call("shell_status", {"job_id": ordinary}, error=True)
+        self.edit_client(lambda client: client.update(deny_tools=["process_resize", "shell_status"]))
+        self.call("process_resize", {"job_id": pty, "rows": 20, "cols": 80}, error=True)
+        self.call("shell_status", {}, error=True)
+        self.edit_client(lambda client: client.pop("deny_tools"))
+
     def test_kernel_pty_terminal_state_and_hangup(self):
         for mode in ("standard", "yolo"):
             with self.subTest(mode=mode):
@@ -306,7 +335,7 @@ class ProcessSessions(unittest.TestCase):
             self.assertEqual(reply[:32], hmac.digest(key, reply[32:], "sha256"))
             self.assertEqual(reply[32:48], nonce)
             self.assertEqual(struct.unpack(">Q", reply[48:56])[0], 0)
-            self.assertEqual(reply[-2], 7, "Runner did not refuse a stale admission")
+            self.assertEqual(reply[57], 7, "Runner did not refuse a stale admission")
 
         delayed_packet(old_revision, -500, int(time.time()) + 60)
         delayed_packet(old_revision, 500, int(time.time()) - 1)
@@ -325,7 +354,7 @@ class ProcessSessions(unittest.TestCase):
         _, listing = self.f.rpc("tools/list", self.session, product.TOKEN)
         names = {tool["name"] for tool in listing["result"]["tools"]}
         self.assertIn("task_run", names)
-        self.assertFalse(names & {"process_start", "process_input", "shell_reset"})
+        self.assertFalse(names & {"process_start", "process_input", "process_resize", "shell_status", "shell_reset"})
         self.call("process_start", {"profile": "shell"}, error=True)
         self.mode("standard")
         self.edit_client(lambda client: client["tools"].extend(["process_start", "process_input"]))

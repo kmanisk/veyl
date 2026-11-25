@@ -25,6 +25,12 @@ use crate::tools::{
 mod system_details;
 #[path = "inspection/context.rs"]
 mod context;
+#[path = "inspection/extra.rs"]
+mod extra;
+pub(crate) use extra::{
+    list_project_skill_summaries as extra_project_skill_summaries,
+    validate_project_skills as extra_validate_project_skills,
+};
 pub(crate) fn local_diagnostics(section: &str) -> Result<Value,String> {
     system_details::inspect(json!({"sections":[section]}).as_object().unwrap(),None)
 }
@@ -108,6 +114,42 @@ fn inspect(
         } else {
             crate::service_cli::health()
         });
+    }
+    if matches!(
+        tool,
+        Tool::LoadPathRules
+            | Tool::ProjectSkillsList
+            | Tool::ProjectSkillLoad
+            | Tool::Remember
+            | Tool::ChezmoiInspect
+    ) {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let root_ref = client.mutation_root.as_ref();
+        let reserved = |path: &Path| {
+            let full = if path.is_absolute() {
+                path.to_path_buf()
+            } else if let Some(root) = root_ref {
+                root.path().join(path)
+            } else {
+                path.to_path_buf()
+            };
+            crate::protected_paths::is_mandatory(config, settings, &full)
+                || settings
+                    .skills
+                    .as_ref()
+                    .is_some_and(|skills| full.starts_with(skills.path()))
+                || settings
+                    .protected_paths
+                    .selected(Kind::Optional)
+                    .iter()
+                    .any(|rule| full.starts_with(&rule.path))
+                || home.as_ref().is_some_and(|home| {
+                    OPTIONAL_DEFAULTS
+                        .iter()
+                        .any(|dir| full.starts_with(home.join(dir)))
+                })
+        };
+        return extra::run(tool, Some(&Value::Object(args.clone())), config, settings, client, &reserved);
     }
     let root = client
         .mutation_root

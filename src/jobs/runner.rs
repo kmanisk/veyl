@@ -79,8 +79,13 @@ pub(crate) fn run_worker() -> io::Result<()> {
                 session.pty != launch.profile.pty || session.root != launch.root
             })
             || (launch.session.is_some() && (!launch.isolated || !launch.scoped || receipt.full))
-            || receipt.root != launch.root.path()
-            || receipt.cwd != launch.root.path()
+            || if receipt.ephemeral_worktree {
+                receipt.worktree_path.as_deref() != Some(launch.root.path())
+                    || receipt.worktree_repo.is_none()
+                    || receipt.worktree_cleaned != Some(false)
+            } else {
+                receipt.root != launch.root.path() || receipt.cwd != launch.root.path()
+            }
             || receipt.argv_sha256 != launch.profile.argv_hash()
             || receipt.timeout_seconds != launch.profile.timeout_seconds
             || receipt.max_output_bytes != launch.profile.max_output_bytes
@@ -94,7 +99,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
         if receipt.cancel_requested {
             return finish(&job, &mut audit, receipt, State::Cancelled);
         }
-        if launch.scoped && super::resources::verify(&launch.job_id).is_err() {
+        if launch.scoped && super::resources::verify(&launch.job_id, launch.profile.cpu_percent, launch.profile.memory_bytes).is_err() {
             return finish(&job, &mut audit, receipt, State::Failed);
         }
 

@@ -1,5 +1,37 @@
 # Gate 3d status
 
+## 0.3.0-beta release candidate (2026-11-25)
+
+Candidate `~/.local/share/veyl-development/candidates/timeshift.o89oyRsF/source`, base `0e2cf55`. Includes the previously operator-tested parity-86 and live-status/runtime-bundle candidates. TimeShift and Nightshift are NOT implemented and are excluded from this release scope.
+
+Broad YOLO preflight diagnosis: a disconnected FreeRDP FUSE mount in `/tmp` returned ENOTCONN; basic Bubblewrap isolation succeeded. A diagnostic-only stderr probe reproduced the exact failure. The final fix skips only ENOTCONN in unprotected projection siblings; all other lookup errors, protected paths, required ancestors and cwd identity remain fail-closed. No host mount or security configuration changed. The diagnostic stderr change was reverted. Debug regression suites passed: extensions 3/3, dynamic jobs 5/5, runtime bundles 2/2, process sessions 10/10, permission modes 5/5 (process `mwvy466n-g00d92`).
+
+Manifest and lockfile version bumped to 0.3.0-beta. Previous parity-86 release executables preserved under `~/.local/share/veyl-development/artifacts/parity-86-0e2cf55/release-bin/`, with verified checksums. The production version remains 0.2.5-beta pending the exact versioned candidate gate.
+
+## 86% parity milestone & native updater integration (`parity-86`, 2026-11-25)
+
+Base `0e2cf55da417d2bc580c786a7d0e784fdec8cb9f` on branch `dev/parity-86`, version `0.2.5-beta`.
+Candidate source: `~/.local/share/veyl-development/candidates/parity-86.hjODQIAS/source`.
+Production service (`mcp-gateway.service`), canonical `main`, and crates version remain unchanged pending operator approval.
+
+Integrated verified capabilities:
+- Native updater (`src/update_cli.rs`, `src/service_cli.rs`) with `reset-failed` on crashed-unit rollback, `REMOTE_LIMIT` (32 MiB) vs `LOCAL_LIMIT` (128 MiB), `~/.veyl-update-backups/active.json` recovery journal, `--recover`, and 4-phase delegated systemd E2E suite (`tests/updater_lifecycle.sh`).
+- Persistent processes & durable execution budgets: `process_resize`, `shell_status`, `job_logs` `encoding` (`utf8`/`base64`), configurable `cpu_percent` / `memory_bytes` / `max_output_bytes` (up to 16 MiB) / `job_retention_count`, and `task_run` `ephemeral_worktree: true`.
+- 12 native structured Git tools (`git_status` .. `git_push`) with hardened git worker (`--tmpfs /repo/.git/hooks`, RO `.git/config` memfd mask), exact per-tool grants, explicit `confirm: true` destructive/network confirmation, and fixed BroadYolo `.git/hooks` workspace cwd inode preservation (`src/jobs/broad.rs`).
+- System & context inspection: `system_inspect` 10th subsystem `processes` + top processes in `resources`, TX/RX interface rate sampling in `network`, wake-safe `nvidia-smi` telemetry in `gpu` (invoked only when PCI NVIDIA GPU `power/runtime_status == "active"`), plus `load_path_rules`, `remember`, `chezmoi_inspect`, `list_skills`, `load_skill`.
+- Extensions, validation & upstream workflows: `extensions_search` (offline 106-entry catalog), `extensions_list`, `extensions_info`, `skills_validate`, `mcp_list`, `mcp_status`, `mcp_info` (`provider_fingerprint`), fingerprint-bound `mcp_test`, 8 inert `*_propose_*` operator-review tools, and dashboard `GET/POST /api/dashboard/requests`.
+
+Independent verification results (2026-11-25, release + debug + test-hooks builds):
+- `cargo fmt --check`: PASS.
+- `cargo clippy --offline --locked --all-targets -- -D warnings`: PASS (0 warnings).
+- `cargo test --offline --locked -- --test-threads=1`: 157 tests PASS (lib 0, legacy_main 62, main 62, monitor 9, bridgedev_parity_and_nightshift 3, gate3_operator 11, onboarding 6, pass2_mutation 4; zero failures).
+- Release build (`cargo build --offline --locked --release --bins`): PASS; zero `test-hooks:` symbols confirmed (`mcp-gateway` `2a94fd0e...`, `veyl` `52eca707...`, `veyl-monitor` `ece4de60...`).
+- Locked acceptance battery: 28/28 original SHA-256 pins unchanged before and after; 28/28 locked suites (287/287 cases) PASS; `acceptance_pass4_three_modes/locked_three_modes.py` 6/6 PASS.
+- Feature & runtime suites (all PASS): `process_sessions.py` 10/10, `extended_jobs.py` 3/3, `dynamic_jobs.py` 5/5 (including real PTY monitor timing), `git_tools.py` 3/3, `context_and_system.py` 3/3, `extensions_and_proposals.py` 3/3, `linux_features.py` 16/16, `product_features.py` 9/9, `permission_modes.py` 5/5, `activity_features.py` 3/3, `job_streams.py` 1/1, `test_dashboard_preview.py` 1/1, `gate3_runtime.py` PASS, `onboarding_browser.py` + `dashboard_tabs.mjs` (Brave CDP on release binary) PASS, `systemd_lifecycle.sh` PASS, `updater_lifecycle.sh` (all 4 delegated systemd phases) PASS.
+- JS syntax: `node --check src/http/dashboard/app.js` PASS.
+- Release benchmark: idle RSS `6348` KiB (`6464` KiB post-calls), 1 s idle CPU `0` ticks, `read_file` median latency `0.164 ms` (`p95 = 0.324 ms`).
+- Security advisory limitation: `cargo-audit` is unavailable in this environment (`error: no such command: audit`).
+
 ## Persistent process sessions — isolated candidate (2026-11-25)
 
 Base `33e9f56cd2b51dc4f0878237b7971592b9e8c1ff`, version `0.2.5-beta`.
@@ -2030,4 +2062,22 @@ Implemented, tested, and published by AGY under direct authorization.
 - Local dashboard (http://127.0.0.1:7332/dashboard) and private Tailscale dashboard (https://onyx.tail646579.ts.net:9443/dashboard) operational with pairing workflow.
 - Terminal monitor utility (`veyl monitor` and `veyl-monitor`) verified with live health and clients views.
 - Tailscale Funnel on port 443 path `/veyl/mcp/...` live and verified with active ChatGPT session, tools/list discovery (25 tools), and execution.
+
+# TimeShift investigation (2026-11-25; incomplete)
+
+The candidate at base `0e2cf55` retains its prior uncommitted changes. No
+TimeShift or autonomous Nightshift implementation was added in this pass.
+The existing file publisher checks a snapshot before rename under an advisory
+directory lock, which does not exclude non-cooperating writers. A restore
+cannot claim the requested no-clobber guarantee solely by reusing that check.
+`create_directory` currently uses `create_dir_all` on a pathname and is not a
+descriptor-confined basis for checkpointing directory creation.
+
+The focused `pass2_mutation` integration test compiled but all four cases
+failed at gateway startup with `gateway should bind loopback: Disconnected`.
+A direct Python IPv4 socket creation failed with `PermissionError: [Errno 1]
+Operation not permitted` in this execution sandbox. This is distinct from the
+previously recorded Broad YOLO preflight failure; it does not establish a
+mutation regression. No isolation or host settings were changed. No new
+personal preview is available for the unimplemented feature.
 

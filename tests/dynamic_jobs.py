@@ -101,10 +101,29 @@ class DynamicJobs(unittest.TestCase):
         self.assertTrue(replay["idempotent_replay"])
         for invalid in ({"command": "true", "argv": ["true"]},
                         {"argv": ["true", 42]}, {"command": "true", "request_id": "../bad"},
-                        {"command": "true", "ephemeral_worktree": True},
                         {"command": "true", "timeout_seconds": 0},
                         {"command": "true", "unknown": True}):
             self.call("task_run", invalid, error=True)
+
+    def test_ephemeral_worktree_isolates_and_cleans_up(self):
+        repo = self.f.workspace
+        self.call("task_run", {"command": "true", "ephemeral_worktree": True}, error=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c",
+                        "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "initial"], check=True)
+        args = {"command": "pwd; printf isolated > result.txt", "ephemeral_worktree": True,
+                "request_id": "worktree-isolation", "timeout_seconds": 8}
+        result = self.call("task_run", args)
+        self.assertEqual(result["exit_code"], 0, result)
+        self.assertTrue(result["ephemeral_worktree"])
+        self.assertTrue(result["worktree_cleaned"])
+        self.assertFalse((repo / "result.txt").exists())
+        self.assertFalse(Path(result["stdout"].strip()).exists())
+        self.assertTrue(self.call("task_run", args)["idempotent_replay"])
+        self.call("task_run", dict(args, ephemeral_worktree=False), error=True)
+        subprocess.run(["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+                       check=True, capture_output=True, text=True)
+        self.call("exec_command", {"command": "true", "ephemeral_worktree": True}, error=True)
 
     def test_live_terminal_command_and_elapsed(self):
         f = self.f
@@ -139,7 +158,7 @@ class DynamicJobs(unittest.TestCase):
         try:
             os.write(write_fd, token)
             os.close(write_fd)
-            screen_until(lambda s: b"Veyl / activity" in s and b"COMMAND / SUMMARY" in s)
+            screen_until(lambda s: b"Veyl / activity" in s and b"COMMAND / SUMMARY" in s and b"No active MCP call" in s)
             os.write(terminal, b"t")
             screen_until(lambda s: b"y confirms" in s)
             os.write(terminal, b"y")
@@ -154,11 +173,13 @@ class DynamicJobs(unittest.TestCase):
             with ThreadPoolExecutor(max_workers=1) as pool:
                 call = pool.submit(self.call, "exec_command", {
                     "command": "printf LIVE_PREVIEW; sleep 3", "timeout_seconds": 8})
+                screen_until(lambda s: b"MCP running: 1 | exec_command" in s)
                 first = screen_until(running_elapsed)
                 second = screen_until(lambda s: (v if (v := running_elapsed(s)) and v > first else None))
                 self.assertGreater(second, first)
                 completed = call.result(timeout=10)
                 self.assertEqual(completed["exit_code"], 0)
+            screen_until(lambda s: b"No active MCP call" in s)
             job_id = completed["job_id"].encode()
             os.write(terminal, b"2")
             screen_until(lambda s: b"Veyl / jobs" in s and job_id in s and b"printf LIVE_PREVIEW" in s)
