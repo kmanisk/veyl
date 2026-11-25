@@ -93,12 +93,9 @@ configured providers, explicit health probes, discovered tool names and
 existing per-client grant/revoke operations. Skills retains validated local
 package import and instruction reading.
 
-REA is an example catalog entry, with three guidance tool names observed
-on the existing BridgeDev installation. A disposable Veyl registration
-of the installed REA launcher succeeded but probe health was unavailable;
-no REA tools were discovered. The current isolated stdio transport does
-not mount arbitrary Node package trees. Do not claim REA compatibility
-until an independently tested provider transport is available.
+The verified Marketplace installer supports pinned REA and Rust Anything runtime bundles, without running package lifecycle scripts or mounting arbitrary host Node package trees. Inspect the provider's installed version and probe its tools before granting them. Use the Workspace folders editor in Configured providers (also linked from Custom) to select a client and provider, enter an absolute local directory path, choose existing-client-root or explicit provider-only scope, and grant or revoke read-only access. The provider-only grant is pinned to the directory identity and does not change native client roots or execution mode.
+
+REA workspace access supports Python bytecode and Rust binary inspection; Rust Anything supports repository analysis. These calls project bounded, selected regular files rather than recursively mounting a host directory. Arbitrary custom providers retain bundle-only access until a reviewed path schema is supported. Folder mutations require a paired local dashboard and explicit confirmation; remote dashboard folder mutations are denied. CLI equivalents are `veyl mcp-servers workspace-folder CLIENT ID ROOT` and `veyl mcp-servers unworkspace CLIENT ID`.
 
 Optional local command tracing: on the Activity tab press t and confirm with
 y, or use the local dashboard's Capture button. The trace captures supported

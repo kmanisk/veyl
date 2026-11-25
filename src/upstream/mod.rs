@@ -79,6 +79,20 @@ impl Grants {
         })
     }
 
+    pub(crate) fn workspace_metadata(&self) -> Value {
+        json!(
+            self.workspaces
+                .iter()
+                .map(|(id, grant)| (
+                    id,
+                    json!({
+                        "root":grant.root,"provider_only":grant.provider_only
+                    })
+                ))
+                .collect::<BTreeMap<_, _>>()
+        )
+    }
+
     pub(crate) fn validate_workspaces(
         &self,
         config: &Path,
@@ -226,6 +240,7 @@ impl Catalog {
         if let Some(grant) = grants.workspaces.get(id) {
             canonical["workspace_root"] = json!(grant.root);
             canonical["workspace_identity"] = json!(grant.identity);
+            canonical["workspace_provider_only"] = json!(grant.provider_only);
         }
         let provider_fingerprint =
             format!("{:x}", Sha256::digest(canonical.to_string().as_bytes()));
@@ -258,6 +273,7 @@ impl Catalog {
                 "credentials": matches!(server.transport, Transport::Http { use_token: true, .. }),
                 "granted_tools": granted_tools,
                 "workspace_root": canonical.get("workspace_root"),
+                "workspace_provider_only": canonical.get("workspace_provider_only"),
             },
         }))
     }

@@ -137,7 +137,10 @@ pub(super) fn mount(sandbox: &mut Sandbox, args: &[OsString]) -> io::Result<()> 
     super::broad::check_workspace_mount(root)?;
     let root = open_absolute_dir(root)?;
     let st = fs::fstat(&root)?;
-    if [st.st_dev, st.st_ino] != expected || st.st_uid != rustix::process::geteuid().as_raw() {
+    if [st.st_dev, st.st_ino] != expected
+        || st.st_uid != rustix::process::geteuid().as_raw()
+        || st.st_mode & 0o7022 != 0
+    {
         return Err(unsupported());
     }
     let destination = Path::new("/workspace").join(relative);

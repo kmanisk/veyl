@@ -11,7 +11,7 @@ use super::{server_name, tool_name};
 use crate::http::admission::{parse_clients, parse_document};
 use crate::http::operator::{PolicyFile, verify_approvals};
 
-const HELP: &str = "usage: veyl mcp-servers list | probe ID | add-stdio ID /absolute/COMMAND [ARGS...] | add-bundle ID /absolute/COMMAND [ARGS...] | add-http ID URL [CONNECT_IP] | enable ID | disable ID | remove ID | restrict CLIENT | grant CLIENT ID TOOL | revoke CLIENT ID TOOL | workspace CLIENT ID ROOT | unworkspace CLIENT ID (append --config PATH)";
+const HELP: &str = "usage: veyl mcp-servers list | probe ID | add-stdio ID /absolute/COMMAND [ARGS...] | add-bundle ID /absolute/COMMAND [ARGS...] | add-http ID URL [CONNECT_IP] | enable ID | disable ID | remove ID | restrict CLIENT | grant CLIENT ID TOOL | revoke CLIENT ID TOOL | workspace CLIENT ID ROOT | workspace-folder CLIENT ID ROOT | unworkspace CLIENT ID (append --config PATH)";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args == ["--help"] {
@@ -126,7 +126,7 @@ pub(crate) fn manage(path: &Path, params: &[&str]) -> Result<Value, String> {
                 json!(*op == "enable");
             (*op, *id, None, None)
         }
-        ["workspace", principal, id, root] => {
+        [op @ ("workspace" | "workspace-folder"), principal, id, root] => {
             if !servers.contains_key(*id) {
                 return Err("Unknown upstream server".into());
             }
@@ -137,8 +137,17 @@ pub(crate) fn manage(path: &Path, params: &[&str]) -> Result<Value, String> {
             if entry.get("upstream_workspace_roots").is_none() {
                 entry["upstream_workspace_roots"] = json!({});
             }
-            entry["upstream_workspace_roots"][*id] = json!(root);
-            ("workspace", *id, Some(*principal), None)
+            let grant = if *op == "workspace-folder" {
+                if !settings.managed {
+                    return Err("Provider-only workspace requires managed policy".into());
+                }
+                let selected = super::workspace::Grant::parse(&json!(root))?;
+                json!({"root":selected.root,"device":selected.identity[0],"inode":selected.identity[1]})
+            } else {
+                json!(root)
+            };
+            entry["upstream_workspace_roots"][*id] = grant;
+            (*op, *id, Some(*principal), None)
         }
         ["unworkspace", principal, id] => {
             let entry = document["clients"]

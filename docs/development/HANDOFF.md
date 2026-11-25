@@ -1,5 +1,13 @@
 # Gateway Milestone 1 — Working Handoff
 
+## 0.3.1-beta release acceptance
+
+The operator requested GitHub promotion and a version bump. Exact versioned optimized build, 168 Rust cases, 287 locked cases, 6 three-mode cases, 33 focused integration cases, browser checks, and all 28 locked hashes passed. See current STATUS.md and the candidate's verification receipts. Publish the verified Linux x86_64 beta bundle, preserve rollback, and validate the operator-requested Projects workspace grants after local upgrade. TimeShift and Nightshift remain out of scope.
+
+## Previous gate: provider-only folder dashboard preview
+
+Previous workspace fix `2cf0ea0` is deployed and pushed. New candidate `workspace-dashboard.d9ELDmvu/source` contains folder grant CLI, local dashboard editor, custom staged bundle registration and visual refresh. Focused optimized 19/19, browser and real Projects provider tests passed. See STATUS.md and UPSTREAM_WORKSPACE.md; full locked/Rust process receipt unavailable, so complete that gate with fresh exact-release verification before operator approval. Personal preview: `python3 -B tests/dashboard_preview.py` (synthetic read-only UI at localhost:7333); functional fixture: `MCP_GATEWAY_BIN="$PWD/../release-bin/mcp-gateway" python3 -B tests/workspace_dashboard.py -v`. After approval, use native updater and audited `workspace-folder chatgpt rea /home/onyx/Projects` and `workspace-folder chatgpt rust-anything /home/onyx/Projects` commands. Preserve existing native roots, YOLO mode, other client grants, and provider restrictions; validate live ChatGPT calls. No new candidate promotion or production root grant performed yet.
+
 ## Next gate: personal preview and exact-candidate operator approval
 
 Corrected candidate `upstream-workspace.Dx2gWMVJ/source`, base `79f5d79`, passed direct BridgeDev verification: 168 Rust cases, 287 locked cases, six three-mode cases, 17 focused release regressions, and both real-provider/boundary acceptance cases (using a separately corrected non-locked fixture). See STATUS.md for receipts, fixture corrections and exact release checksums. Use `../release-bin/` for isolated preview; verify manifests. The operator may personally run `MCP_GATEWAY_BIN="$PWD/../release-bin/mcp-gateway" python3 -B tests/upstream_workspace_jobs.py -v` or the separate `python3 -B ../bridge-acceptance.py -v` real-provider acceptance fixture. Explicit personal approval of this exact candidate is required for deployment and promotion. Do not alter production or begin TimeShift/Nightshift before the approval gate.

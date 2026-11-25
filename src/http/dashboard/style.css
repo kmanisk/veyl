@@ -21,6 +21,20 @@
   }
 }
 * { box-sizing: border-box; }
+/* Local-first administration: clearer hierarchy without extra assets or scripts. */
+.workspace-intro { border:1px solid var(--stroke); background:var(--surface); padding:1rem; border-left:3px solid var(--accent); margin:1rem 0; }
+.workspace-intro p { margin:.45rem 0 .75rem; color:var(--dim); }
+.workspace-card { border-top:2px solid var(--accent) !important; }
+.workspace-card h3 { margin:0; }
+.workspace-label { color:var(--success); font-size:.85rem; border:1px solid var(--stroke); padding:.25rem .55rem; }
+.workspace-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.9rem; max-width:60rem; }
+.workspace-form label { display:grid; gap:.35rem; color:var(--dim); min-width:0; }
+.workspace-form input,.workspace-form select { width:100%; min-width:0; }
+.workspace-wide { grid-column:1 / -1; }
+.workspace-summary { overflow-wrap:anywhere; padding:.65rem .8rem; border:1px solid var(--stroke); background:var(--base); }
+button.primary-action { background:var(--accent); color:var(--base); font-weight:700; }
+button:disabled { opacity:.5; cursor:not-allowed; }
+@media (max-width:650px) { .workspace-form { grid-template-columns:minmax(0,1fr); } }
 [hidden], .inactive-tab { display: none !important; }
 body,h1,h2,dl,dd { margin: 0; }
 h1 { font-size: 1.5rem; }
@@ -127,6 +141,31 @@ dialog::backdrop { background:#0006; }
   nav { flex-direction:row; flex-wrap:wrap; border-right:0; border-bottom:1px solid var(--stroke); padding:.5rem; position:static; }
   .pair { margin:1rem; }
   .masthead { padding:.65rem; }
+}
+
+/* Dashboard visual hierarchy: retain compact operator density and keyboard focus. */
+:root { font-family: system-ui, -apple-system, sans-serif; }
+h1,h2,h3 { letter-spacing:-.015em; }
+h2 { font-size:1.45rem; font-weight:650; margin-bottom:.85rem; }
+h3 { font-size:1.02rem; font-weight:650; }
+code,pre,#workspace-path,.workspace-summary,.grant-grid,.job-command,.settings-list dd,.diag-fields dd { font-family:ui-monospace,monospace; }
+.masthead { background:var(--surface); }
+.dashboard { grid-template-columns:16rem minmax(0,1fr); }
+nav { min-height:calc(100vh - 4.2rem); gap:.15rem; padding:1rem .7rem; }
+nav a { border-radius:.3rem; padding:.6rem .8rem; font-weight:500; }
+nav a[aria-selected="true"] { border-color:var(--stroke); border-left:3px solid var(--accent); font-weight:650; }
+.section-card,.metrics > div,.catalog-card,#server-rows li,#skill-rows li,#job-rows li,.table,.workspace-intro { border-radius:.45rem; }
+.section-card { padding:1.15rem; }
+button,select,input { border-radius:.3rem; }
+input[type="checkbox"] { accent-color:var(--accent); }
+button:not(:disabled):active { transform:translateY(1px); }
+.metrics dd { font-size:1.1rem; font-variant-numeric:tabular-nums; }
+.metrics dt { font-size:.83rem; font-weight:500; }
+th { font-size:.8rem; font-weight:600; }
+@media(max-width:650px) {
+  nav { min-height:0; }
+  .section-card { padding:.85rem; }
+  h2 { font-size:1.25rem; }
 }
 
 /* Operator views: consistent field alignment, readable paths and compact rows. */

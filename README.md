@@ -8,14 +8,15 @@ commands, durable jobs, native diagnostics, skills and upstream MCP servers.
 
 ## Install
 
-Install the Linux beta from crates.io (no manual clone or symlink):
+Install the Linux beta from [GitHub Releases](https://github.com/kmanisk/veyl/releases). Download the three Linux x86_64 binaries and `SHA256SUMS` into a private folder, verify `sha256sum -c SHA256SUMS`, and use `veyl update --from-dir /absolute/path/to/bundle` for an existing installation. To build this release from source:
 
 ```sh
-cargo install veyl --version 0.3.0-beta --locked --bin veyl --bin veyl-monitor
+cargo install --git https://github.com/kmanisk/veyl --tag v0.3.1-beta --locked --bins
 ```
 
 Veyl is open source under the MIT license. Source code and prebuilt Linux
-binaries are available on GitHub, and the crate is available on crates.io.
+binaries are available on GitHub. Older published crate versions may also be
+available on crates.io; this release's source and binaries are on GitHub.
 
 Requires Linux, Bubblewrap (`bwrap`) and Git. Add Tailscale for remote
 access and a systemd user session for persistent service mode.
@@ -67,16 +68,17 @@ The durable audit remains metadata-only.
 
 ## Daily use
 
-Veyl v0.3.0-beta includes unified permission modes (`Standard`, `YOLO` with
+Veyl v0.3.1-beta includes unified permission modes (`Standard`, `YOLO` with
 native tool preset and `deny_tools`, `FULL` with confirmation), confined ad-hoc
 and durable commands (`exec_command`, `task_run` with optional isolated worktrees),
 persistent pipe/PTY sessions (`process_start`, `process_input`, `process_resize`,
 `shell_status`, `shell_reset`), structured Git workflows, workspace context/rule/skill
 helpers, extension/upstream management with verified one-click marketplace runtime
 bundle installation (`veyl marketplace`), read-only runtime bundles
-(`veyl mcp-servers add-bundle`), independent `stdout`/`stderr` log cursors, and
+(`veyl mcp-servers add-bundle`), explicit read-only provider workspace folders
+(`veyl mcp-servers workspace-folder` and the local dashboard), independent `stdout`/`stderr` log cursors, and
 live local-timezone AM/PM millisecond monitoring. TimeShift (`rewind` checkpoints)
-and autonomous Nightshift orchestration are not implemented in `0.3.0-beta`.
+and autonomous Nightshift orchestration are not implemented in `0.3.1-beta`.
 
 | Command | Action |
 | --- | --- |

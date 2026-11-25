@@ -155,19 +155,20 @@
       </section>
       <section aria-labelledby="custom" class="panel">
         <h2 id="custom">Custom integration</h2>
-        <p class="muted">Register a reviewed, already installed MCP executable or a supported HTTP endpoint. Veyl does not download packages or execute installation scripts.</p>
+        <p class="muted">Connect a reviewed local executable, staged runtime bundle or HTTP endpoint. Use Marketplace for verified package installation.</p>
+        <div class="workspace-intro"><strong>Need to give a provider access to a project?</strong><p>Register the provider first, then set a read-only workspace folder for supported tools. No host directory is mounted wholesale.</p><button id="custom-workspaces" type="button">Manage workspace folders</button></div>
         <p id="catalog-selection" class="muted"></p>
         <div class="section-card">
           <h3>Configure upstream MCP</h3>
           <form id="server-add" class="config-form">
             <label>Server ID <input name="id" required pattern="[a-z0-9_\-]{1,24}"></label>
-            <label>Transport <select name="action" id="server-transport"><option value="add-http">HTTP / HTTPS</option><option value="add-stdio">Sandboxed stdio</option></select></label>
+            <label>Transport <select name="action" id="server-transport"><option value="add-http">HTTP / HTTPS</option><option value="add-stdio">Sandboxed stdio</option><option value="add-bundle">Staged runtime bundle</option></select></label>
             <div id="server-http-fields">
               <label>Endpoint URL <input name="url" type="url" placeholder="http://127.0.0.1:9000/mcp"></label>
               <label>Connect IP for HTTPS <input name="connect_ip" placeholder="192.0.2.10"></label>
             </div>
             <div id="server-stdio-fields" hidden>
-              <label>Absolute executable path <input name="command"></label>
+              <label>Absolute executable path <input name="command" placeholder="/usr/bin/node" autocomplete="off"></label><p id="bundle-help" class="muted" hidden>Stage reviewed files in the provider's private upstream-bundles directory first. Use /upstream/bundle/… paths for the script or binary.</p>
               <label>Arguments as a JSON array <input name="argv" value="[]"></label>
             </div>
             <button type="submit">Add server</button>
@@ -179,6 +180,20 @@
         <div class="section-toolbar"><h2 id="servers">Configured providers &amp; upstreams</h2><button id="open-custom" type="button">Add custom</button><button id="open-marketplace" type="button">Browse marketplace</button></div>
         <p class="muted">Probe registered providers to inspect actual tools, then grant individual tools to a client.</p>
         <ul id="server-rows"></ul>
+        <div class="section-card workspace-card" id="workspace-card">
+          <div class="section-toolbar"><h3>Workspace folders</h3><span class="workspace-label">Read-only</span></div>
+          <p class="muted">Choose a client and a supported provider. Enter an absolute path on this machine, not a browser-uploaded folder. Only the requested files are projected; tool grants and execution modes remain separate.</p>
+          <form id="workspace-form" class="workspace-form">
+            <label>Client <select name="client" id="workspace-client" required></select></label>
+            <label>Provider <select name="id" id="workspace-provider" required></select></label>
+            <label class="workspace-wide">Folder path <input name="root" id="workspace-path" placeholder="/home/user/Projects" autocomplete="off" spellcheck="false" required></label>
+            <label class="workspace-wide">Scope <select name="action" id="workspace-scope"><option value="workspace">Inside existing client roots</option><option value="workspace-folder">Separate provider-only folder (explicit approval)</option></select></label>
+            <div class="workspace-wide workspace-summary" id="workspace-current" role="status">No folder selected.</div>
+            <div class="workspace-wide row"><button type="submit" class="primary-action">Grant folder access</button><button id="workspace-revoke" type="button">Revoke folder</button></div>
+          </form>
+          <p id="workspace-result" role="status" class="muted"></p>
+          <p class="muted">REA: Python bytecode and Rust binary inspection. Rust Anything: repository analysis. Custom providers without a reviewed path schema remain bundle-only.</p>
+        </div>
         <div class="section-card" id="upstream-bulk-card">
           <h3>Upstream tool grants matrix</h3>
           <p class="muted">Probe a provider first to discover tools, then grant or revoke individual or all discovered tools per client.</p>

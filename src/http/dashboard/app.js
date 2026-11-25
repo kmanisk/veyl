@@ -818,6 +818,7 @@ async function refresh() {
     for (const client of state.clients) add(bulkClient, "option", client.id).value = client.id;
     if (state.clients.some(client => client.id === prevBulk)) bulkClient.value = prevBulk;
   }
+  renderWorkspaceClients(state);
   const tasks = [loadServers(), loadIntegrations(), loadCatalog(), loadMarketplaceState()];
   byId("job-controls").hidden = !state.jobs_configured;
   if (state.jobs_configured) {
@@ -970,6 +971,72 @@ async function editServer(action, fields) {
   await refresh();
 }
 
+function renderWorkspaceClients(state) {
+  const select = byId("workspace-client");
+  const previous = select.value;
+  select.replaceChildren();
+  for (const client of state.clients) add(select, "option", client.id).value = client.id;
+  if (state.clients.some(client => client.id === previous)) select.value = previous;
+  renderWorkspaceCurrent();
+}
+function renderWorkspaceProviders(servers) {
+  const select = byId("workspace-provider");
+  const previous = select.value;
+  select.replaceChildren();
+  for (const server of servers.filter(s => ["rea","rust-anything"].includes(s.id))) {
+    add(select, "option", server.id === "rea" ? "REA" : "Rust Anything").value = server.id;
+  }
+  if ([...select.options].some(option => option.value === previous)) select.value = previous;
+  renderWorkspaceCurrent();
+}
+function renderWorkspaceCurrent() {
+  const client = lastStatus?.clients.find(c => c.id === byId("workspace-client").value);
+  const provider = byId("workspace-provider").value;
+  const grant = client?.upstream_workspaces?.[provider];
+  byId("workspace-current").textContent = grant ? "Current folder: " + grant.root + (grant.provider_only ? " · Provider-only" : " · Client scope") : "No workspace folder granted.";
+  byId("workspace-revoke").disabled = remote || !grant;
+  const canGrant = !!client && !!provider && (client.upstreams || []).includes(provider) && !remote;
+  byId("workspace-form").querySelector('[type="submit"]').disabled = !canGrant;
+  if (!canGrant && provider) byId("workspace-result").textContent = remote ? "Folder changes require the local dashboard." : "Grant this provider's tools to the selected client first.";
+  else byId("workspace-result").textContent = "";
+}
+function loadWorkspaceSelection() {
+  const client = lastStatus?.clients.find(c => c.id === byId("workspace-client").value);
+  const grant = client?.upstream_workspaces?.[byId("workspace-provider").value];
+  byId("workspace-path").value = grant?.root || "";
+  byId("workspace-scope").value = grant?.provider_only ? "workspace-folder" : "workspace";
+  renderWorkspaceCurrent();
+}
+byId("workspace-client").addEventListener("change", loadWorkspaceSelection);
+byId("workspace-provider").addEventListener("change", loadWorkspaceSelection);
+byId("custom-workspaces").addEventListener("click", () => {
+  openTab("servers");
+  byId("workspace-card").scrollIntoView({block:"start"});
+  byId("workspace-client").focus();
+});
+byId("workspace-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.currentTarget));
+  if (remote || !data.root.startsWith("/")) { byId("workspace-result").textContent = "Enter an absolute local folder path."; return; }
+  if (!window.confirm("Allow " + data.id + " to read selected files under " + data.root + " for " + data.client + "?")) return;
+  try {
+    await request("servers", { ...data, confirm: true });
+    await refresh();
+    byId("workspace-result").textContent = "Folder access granted.";
+  } catch (error) { byId("workspace-result").textContent = error.message; }
+});
+byId("workspace-revoke").addEventListener("click", async () => {
+  const client = byId("workspace-client").value;
+  const id = byId("workspace-provider").value;
+  if (remote || !window.confirm("Revoke folder access for " + client + " on " + id + "?")) return;
+  try {
+    await request("servers", {action:"unworkspace", client, id, confirm:true});
+    await refresh();
+    byId("workspace-path").value = "";
+    byId("workspace-result").textContent = "Folder access revoked.";
+  } catch (error) { byId("workspace-result").textContent = error.message; }
+});
+
 async function loadServers() {
   const { servers } = await request("servers");
   const list = byId("server-rows");
@@ -980,6 +1047,7 @@ async function loadServers() {
   select.replaceChildren();
   if (bulkSelect) bulkSelect.replaceChildren();
   probedTools.clear();
+  renderWorkspaceProviders(servers);
   registeredIds = new Set(servers.map(server => server.id));
   if (catalogLoaded) renderCatalog();
   if (!servers.length) add(list, "li", "No upstream servers configured.");
@@ -1079,9 +1147,10 @@ byId("bulk-upstream-save")?.addEventListener("click", async () => {
 });
 
 byId("server-transport").addEventListener("change", event => {
-  const stdio = event.target.value === "add-stdio";
+  const stdio = event.target.value !== "add-http";
   byId("server-stdio-fields").hidden = !stdio;
   byId("server-http-fields").hidden = stdio;
+  byId("bundle-help").hidden = event.target.value !== "add-bundle";
 });
 
 byId("server-add").addEventListener("submit", async event => {
@@ -1089,7 +1158,7 @@ byId("server-add").addEventListener("submit", async event => {
   const fields = Object.fromEntries(new FormData(event.currentTarget));
   const { action, id, url, connect_ip, command, argv } = fields;
   try {
-    const data = action === "add-stdio" ? { id, command, arguments: JSON.parse(argv) } : { id, url, connect_ip };
+    const data = action !== "add-http" ? { id, command, arguments: JSON.parse(argv) } : { id, url, connect_ip };
     await editServer(action, data);
   } catch (error) { notice.textContent = error.message; }
 });

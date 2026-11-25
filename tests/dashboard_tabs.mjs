@@ -143,6 +143,14 @@ try {
   assert.equal(await evaluate("document.querySelector('#server-add').elements.namedItem('id').value"),"rea");
   assert.equal(await evaluate("document.querySelector('#server-add').elements.namedItem('argv').value"),'["mcp"]');
   assert.equal(await evaluate("document.querySelector('#server-add').elements.namedItem('command').value"),"");
+  assert.ok(await evaluate("Array.from(document.querySelector('#server-transport').options).some(o=>o.value==='add-bundle')"));
+  await evaluate("document.querySelector('#custom-workspaces').click()");
+  assert.deepEqual(await evaluate(visible),["servers"]);
+  assert.equal(await evaluate("document.activeElement.id"),"workspace-client");
+  assert.equal(await evaluate("document.querySelector('#workspace-path').required"),true);
+  assert.deepEqual(await evaluate("Array.from(document.querySelector('#workspace-scope').options,o=>o.value)"),["workspace","workspace-folder"]);
+  assert.equal(await evaluate("document.querySelector('#workspace-form button[type=submit]').disabled"),true);
+  assert.match(await evaluate("document.querySelector('#workspace-current').textContent"),/No workspace folder/);
   await evaluate("document.querySelector('nav a[href=\"#marketplace\"]').click()");
   await evaluate("document.querySelector('#catalog-query').value='no-such-entry';document.querySelector('#catalog-query').dispatchEvent(new Event('input'))");
   assert.equal(await evaluate("document.querySelectorAll('#catalog-cards article').length"),0);

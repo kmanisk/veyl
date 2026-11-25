@@ -577,10 +577,15 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             return forbidden();
         }
         let action = body["action"].as_str().unwrap_or_default();
+        if remote && matches!(action, "workspace" | "workspace-folder" | "unworkspace") {
+            return forbidden();
+        }
         let fields = match action {
+            "workspace" | "workspace-folder" => &["client", "id", "root"][..],
+            "unworkspace" => &["client", "id"][..],
             "probe" | "enable" | "disable" | "remove" => &["id"][..],
             "add-http" => &["id", "url"],
-            "add-stdio" => &["id", "command"],
+            "add-stdio" | "add-bundle" => &["id", "command"],
             "grant" | "revoke" => &["client", "id", "tool"],
             _ => return bad(),
         };
@@ -595,7 +600,7 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             .chain(values)
             .map(str::to_owned)
             .collect();
-        if action == "add-stdio" {
+        if matches!(action, "add-stdio" | "add-bundle") {
             let Some(argv) = body["arguments"].as_array() else {
                 return bad();
             };
@@ -813,6 +818,7 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
             "skills": client.skills,
             "upstreams": client.upstreams.servers,
             "upstream_tools": client.upstreams.tools,
+            "upstream_workspaces": client.upstreams.workspace_metadata(),
             "expired": client.expires_at <= unix_seconds()
         })).collect();
         let audit = settings.audit_log.as_deref().map(|path| if AuditSink::inspect(path, false).is_ok() { "verified" } else { "unavailable" });

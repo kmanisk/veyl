@@ -1,5 +1,9 @@
 # BridgeDev capability comparison
 
+## 0.3.1-beta release scope
+
+The 0.3.1-beta release adds verified marketplace installation, explicit bounded read-only workspace projections for reviewed REA and Rust Anything operations, persistent provider-only directory authorization, and a local dashboard folder editor. The native tool count remains 68; upstream discovery depends on installed providers and grants (81 in the reviewed three-provider configuration). This does not change the approximately 86% functional-domain estimate. TimeShift and autonomous Nightshift remain excluded.
+
 ## 0.3.0-beta release scope
 
 The six-domain BridgeDev functional-domain estimate is approximately 86% (6 of 7 domains implemented), not 100% parity or an acceptance score. Veyl `0.3.0-beta` adds real read-only runtime bundle extension support (`veyl mcp-servers add-bundle`, verified against REA, Rust Anything, and custom Node MCP providers), live MCP status in the TUI header, and verified skipping of `ENOTCONN` disconnected FUSE siblings during Broad YOLO home projection without weakening protected-path confinement. TimeShift (`rewind` checkpoints) and autonomous Nightshift orchestration remain unimplemented and are excluded from `0.3.0-beta`.

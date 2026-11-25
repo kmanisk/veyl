@@ -13,6 +13,7 @@ use mcp_gateway::security::policy::{Action, ExecutionMode};
 pub(super) struct Grant {
     pub root: PathBuf,
     pub identity: [u64; 2],
+    pub provider_only: bool,
 }
 
 pub(super) struct Input {
@@ -39,13 +40,43 @@ fn identity(fd: &rustix::fd::OwnedFd) -> io::Result<[u64; 2]> {
 
 impl Grant {
     pub fn parse(raw: &Value) -> Result<Self, String> {
-        let root = PathBuf::from(
-            raw.as_str()
-                .ok_or("Expected an absolute upstream workspace root")?,
-        );
+        let (path, pinned) = if let Some(path) = raw.as_str() {
+            (path, None)
+        } else {
+            let object = raw
+                .as_object()
+                .ok_or("Expected an upstream workspace grant")?;
+            if object.len() != 3 {
+                return Err("Invalid provider-only workspace grant".into());
+            }
+            let path = object
+                .get("root")
+                .and_then(Value::as_str)
+                .ok_or("Missing workspace root")?;
+            let device = object
+                .get("device")
+                .and_then(Value::as_u64)
+                .ok_or("Missing workspace device")?;
+            let inode = object
+                .get("inode")
+                .and_then(Value::as_u64)
+                .filter(|i| *i != 0)
+                .ok_or("Missing workspace inode")?;
+            (path, Some([device, inode]))
+        };
+        let root = PathBuf::from(path);
         protected_paths::validate_path(&root)?;
         if !visible(&root) {
             return Err("Hidden upstream workspace roots are not supported".into());
+        }
+        // Explicit folder grants persist the approved inode. A moved or missing
+        // folder must deny its calls, not make the entire policy unmanageable.
+        if let Some(identity) = pinned {
+            return Ok(Self {
+                root,
+                identity,
+                provider_only: true,
+            });
         }
         crate::jobs::broad::check_workspace_mount(&root)
             .map_err(|_| "Upstream workspace mount is unsafe")?;
@@ -55,7 +86,11 @@ impl Grant {
             return Err("Expected an operator-owned upstream workspace directory".into());
         }
         let identity = [st.st_dev, st.st_ino];
-        Ok(Self { root, identity })
+        Ok(Self {
+            root,
+            identity,
+            provider_only: false,
+        })
     }
 
     pub fn validate(
@@ -88,6 +123,19 @@ impl Grant {
             return Err(
                 "Upstream workspace overlaps protected state or lacks a native read grant".into(),
             );
+        }
+        // Provider-only grants are explicit operator delegation, not native scope changes.
+        // The operator-approved read-only scope is separate from execution mode.
+        if self.provider_only {
+            if !settings.managed
+                || !client.actions.contains(&Action::CallUpstream)
+                || settings.clients.iter().any(|other| {
+                    other.id != client.id && other.root != client.root && overlaps(&other.root)
+                })
+            {
+                return Err("Provider-only folders require managed policy and must not overlap another client's distinct workspace".into());
+            }
+            return Ok(());
         }
         // An explicit provider grant can only narrow an already approved client root.
         // No implicit broad-YOLO or FULL filesystem delegation to third-party code.
