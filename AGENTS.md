@@ -19,3 +19,11 @@ Explicit approval of that exact candidate is required before installing,
 restarting production, pushing main or publishing. A passing agent test is
 not operator acceptance. Never bump the version without explicit instruction.
 See docs/development/PREVIEW.md.
+
+Artifact retention: put pending worktrees under
+`~/.local/share/veyl-development/candidates/`, reuse the explicit shared
+`~/Projects/veyl/target` Cargo cache for serial builds, and store receipts in
+`~/.local/share/veyl-development/artifacts/<commit>/`. After operator-approved
+promotion, retain the accepted source commit, verified rollback binaries and
+receipts. Prune only inspected, inactive, reproducible build caches. Never
+clean an active or unaccepted source tree, the locked lab, or rollback data.

@@ -1,5 +1,15 @@
 # BridgeDev capability comparison
 
+## Planning score (2026-11-25)
+
+BridgeDev is the 100% comparison reference. With seven equally weighted
+functional domains below, one implemented, five partial (half credit), and
+one missing gives Veyl 50% approximate planning parity. This is not an
+acceptance score; the separate tool-count ratio is 28/52 (53.8%). Aliases,
+security differences and workflow depth make tool counts non-equivalent.
+TUI/preview corrections do not increase core functional parity. Next focus:
+persistent owned processes, long-running jobs, Git operations and Nightshift.
+
 ## v0.2.5-beta (checkpoint `7c2db86`) — verified parity & remaining gaps
 
 Compared current Veyl (`/home/onyx/Projects/veyl`, `7c2db86`) against BridgeDev

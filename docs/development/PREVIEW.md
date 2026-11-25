@@ -39,6 +39,26 @@ instance with disposable roots, separate state and local ports (no Funnel or
 production credentials). Provide a reproducible launch command and test cases.
 The production service remains unchanged while the operator tests.
 
+## Build storage and retention
+
+Use external candidate worktrees instead of nesting them inside Cargo output:
+
+```sh
+export CARGO_TARGET_DIR="$HOME/Projects/veyl/target"
+cargo build --offline --locked --bins -j 1
+```
+
+Serialize candidate builds sharing this cache. A shared-cache binary is not a
+stable baseline merely because it exists: record its source commit and SHA-256
+and recheck before deployment. Keep the accepted installed build and explicit
+rollback bundle separate. Archive verification logs, hashes and source-only
+snapshots under `~/.local/share/veyl-development/artifacts/<commit>/`, with
+private permissions. After acceptance, check active processes and worktrees,
+then prune only the inventoried redundant Cargo profiles. Never delete dirty
+source, the external acceptance lab, or a rollback bundle as cache cleanup.
+Historical paths under the old `target/` have been archived at
+`~/.local/share/veyl-development/artifacts/2d1bd03/legacy-target/`.
+
 ## Promotion
 
 1. Edit the isolated candidate, run focused tests, and provide the operator a runnable preview for personal acceptance before deploying.

@@ -1,5 +1,34 @@
 # Gate 3d status
 
+## Artifact retention and updater repair checkpoint (2026-11-25)
+
+`2d1bd03` was pushed and remote main verified. Both TUI regressions passed
+Linux 16/16, dynamic jobs 4/4 and monitor 9/9. No production installation of
+the correction occurred. Historical target receipts and source worktrees
+were moved to `~/.local/share/veyl-development/artifacts/2d1bd03/legacy-target/`;
+only confirmed inactive generated profiles were removed. `target` reduced
+from 31 GiB to 4.2 GiB, archive 90 MiB, filesystem available 42 to 47 GiB.
+Cargo's missing cache-marker refusal was resolved by inspecting individual
+Cargo profile contents, not by fabricating a marker. Preserve the archive
+and installed rollback backups. See PREVIEW.md for retention rules.
+
+The repaired updater candidate is
+`~/.local/share/veyl-development/candidates/updater-fix.QogvnTli/source`,
+based on 2d1bd03. Trusted bundle hardlinks are accepted while installation
+and backup hardlinks remain rejected; failed stopped units with MainPID=0
+permit rollback; private staging cleanup, separate rollback manifest,
+pinned directory rename operations, all-directory discovery, supported
+alpha/beta/rc selection and three-binary version checks are implemented.
+Rollback attempts each restoration even if one fails. Six focused tests per
+CLI (12 total), formatting and Clippy passed (process `mwvpd795-4padz0`).
+Not merged or deployed: portable no-manager behavior, debug size bounds,
+interrupted transaction recovery and isolated service/job rollback acceptance
+remain open. The original updater source remains in the legacy archive.
+
+Next functional parity checkpoint after updater acceptance: owned persistent
+process sessions with bounded incremental I/O, cancellation and recovery;
+then operator-approved multi-hour task budgets, structured Git and Nightshift.
+
 ## TUI regression correction (2026-11-25)
 
 BridgeDev independently confirmed AGY's two compatibility failures and fixed

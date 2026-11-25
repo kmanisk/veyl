@@ -1,5 +1,17 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current continuation checkpoint
+
+Main and origin/main are synchronized at 2d1bd03 before the retention-docs
+checkpoint. TUI compatibility fixes verified; production still runs the
+previous personally accepted build. Historical target references now resolve
+relative to `~/.local/share/veyl-development/artifacts/2d1bd03/legacy-target/`.
+Use `~/.local/share/veyl-development/candidates/updater-fix.QogvnTli/source`
+for remaining updater work. Six focused tests per CLI and Clippy passed;
+independent integration and crash recovery are still required. Do not merge
+or install that candidate yet. Next parity work is owned persistent processes,
+then longer durable jobs, Git workflows and Nightshift. Version stays 0.2.5-beta.
+
 ## TUI regression correction
 
 The two AGY TUI blockers below are resolved in the corrected candidate;
