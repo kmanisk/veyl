@@ -1,5 +1,9 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current gate: 0.4.0-beta deployed; Nightshift next
+
+Release `7da68e4ae3fb2aefb25183432d2268963cdc197e` is deployed locally and published to GitHub and crates.io. See the latest STATUS.md entry for receipts, rollback and limitations. Existing ChatGPT grants remain unchanged; separately authorize TimeShift tools if desired. Begin Nightshift only in a new isolated candidate. Follow AGENTS.md: exact-candidate operator approval now covers local upgrade, canonical main/GitHub release and matching crates.io publication, subject to verification and no silent permission expansion. Older HOLD entries below are historical.
+
 ## Current gate: revised TimeShift 0.4.0-beta with Activity details — APPROVED for promotion
 
 Use `../release-tui-bin/` (not the earlier `../release-bin/`) for the next personal preview/promotion. Activity Enter shows captured commands and d toggles JSON. The original gateway and CLI checksums are unchanged. See STATUS.md for focused verification. Verify the revised `../SOURCE_SHA256SUMS` and `../release-tui-bin/SHA256SUMS`; do not install or publish until the operator explicitly approves the revised candidate. Existing permissions and production service remain unchanged.
