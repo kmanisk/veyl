@@ -5,6 +5,18 @@ to the local MCP URL `http://127.0.0.1:7331/mcp`, or the dedicated HTTPS
 MCP URL printed by `mcp-gateway serve plan` after private activation. The
 dashboard address is separate.
 
+## Shared mode selection
+
+For policy version 3, a local operator can explicitly set the same mode for every enabled client:
+
+```sh
+veyl mode yolo --all
+veyl mode standard --all
+veyl mode full --all --confirm-full
+```
+
+The batch is atomic and audited. Existing client identities, credentials, explicit denials, roots and upstream approvals remain independent. Disabled clients stay disabled and retain their selected modes. Future clients do not inherit elevation automatically. An interrupted batch fails closed; recover with `veyl mode standard --all`, which removes elevation from all entries including disabled clients while preserving disabled state. Older policy schemas require explicit migration first. A single-client mode change continues to affect only that client.
+
 ## Codex
 
 Supply `VEYL_MCP_BEARER` from your local secret manager to the Codex process.

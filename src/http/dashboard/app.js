@@ -15,6 +15,12 @@ let activeTab = "health";
 let traceEnabled = false;
 let traceExpiryTimer;
 let liveInitialized = false;
+let diagnosticsRequest = 0;
+let diagnosticsBusy = false;
+let diagnosticsSample = 0;
+let liveBusy = false;
+let liveTimer;
+let lastSlowRefresh = 0;
 function clearTracePreviews() {
   for (const cell of document.querySelectorAll("[data-trace-preview]")) {
     cell.textContent = cell.dataset.safeSummary || "";
@@ -31,6 +37,8 @@ function commandPreview(record) {
   if (typeof args.command === "string") return args.command;
   if (Array.isArray(args.argv)) return JSON.stringify(args.argv);
   if (typeof args.profile === "string") return "Profile: " + args.profile;
+  if (typeof args.job_id === "string") return "Job " + args.job_id;
+  if (Array.isArray(args.sections)) return args.sections.join(", ");
   return null;
 }
 function updateTraceState(trace, requested) {
@@ -41,30 +49,70 @@ function updateTraceState(trace, requested) {
   else traceExpiryTimer = setTimeout(() => {
     traceEnabled = false;
     clearTracePreviews();
-    byId("trace-toggle").textContent = "Capture local command trace";
+    byId("trace-toggle").textContent = "Enable local trace";
     byId("trace-state").textContent = "Trace expired";
   }, Math.max(0, trace.remaining_ms - (performance.now() - requested)));
 }
 byId("trace-controls").hidden = remote;
 byId("diagnostics-nav").hidden = remote;
-byId("diagnostics-form").addEventListener("submit",async event=>{
-  event.preventDefault();
-  const section=byId("diagnostics-section").value;
-  const run=byId("diagnostics-run");
-  run.disabled=true;
-  byId("diagnostics-output").textContent="Inspecting "+section+"…";
+function diagnosticRows(section, value) {
+  if (!value || typeof value !== "object") return [["Status", "Unavailable"]];
+  const rows = [];
+  const label = key => key.replaceAll("_", " ");
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "source") continue;
+    if ((key === "memory_total_kib" || key === "memory_available_kib") && typeof item === "number") {
+      rows.push([label(key).replace(" kib", ""), (item / 1048576).toFixed(2) + " GiB"]);
+    } else if (Array.isArray(item)) {
+      if (item.every(v => typeof v !== "object")) rows.push([label(key), item.join(" / ") || "None"]);
+      else rows.push([label(key), item.length + " entries · see Raw JSON"]);
+    } else if (item !== null && typeof item === "object") {
+      if (Array.isArray(item.items)) rows.push([label(key), item.available === false ? "Unavailable" : item.items.length + " entries · see Raw JSON"]);
+      else if (typeof item.available === "boolean") rows.push([label(key), item.available ? "Available · see Raw JSON" : "Unavailable"]);
+      else rows.push([label(key), Object.entries(item).filter(([,v]) => v !== null && typeof v !== "object").map(([k,v]) => label(k) + ": " + v).join(" · ") || "See Raw JSON"]);
+    } else rows.push([label(key), item == null ? "Unavailable" : String(item)]);
+  }
+  return rows.length ? rows : [["Subsystem", section]];
+}
+async function loadDiagnostics() {
+  if (remote || activeTab !== "diagnostics" || byId("dashboard").hidden || document.hidden) return;
+  const section = byId("diagnostics-section").value;
+  const generation = ++diagnosticsRequest;
+  diagnosticsBusy = true;
+  byId("diagnostics-state").textContent = "Updating…";
   try {
-    const data=await request("diagnostics?section="+encodeURIComponent(section));
-    if (!byId("dashboard").hidden) byId("diagnostics-output").textContent=JSON.stringify(data,null,2);
-  } catch(error) { byId("diagnostics-output").textContent=error.message; }
-  finally { run.disabled=false; }
+    const data = await request("diagnostics?section=" + encodeURIComponent(section));
+    if (generation !== diagnosticsRequest || activeTab !== "diagnostics" || byId("dashboard").hidden) return;
+    byId("diagnostics-output").textContent = JSON.stringify(data, null, 2);
+    summary("diagnostics-summary", diagnosticRows(section, data.sections?.[section]));
+    byId("diagnostics-state").textContent = "Updated " + new Date().toLocaleTimeString();
+    diagnosticsSample = performance.now();
+  } catch (error) {
+    if (generation === diagnosticsRequest && activeTab === "diagnostics") byId("diagnostics-state").textContent = error.message;
+  } finally {
+    if (generation === diagnosticsRequest) diagnosticsBusy = false;
+  }
+}
+byId("diagnostics-form").addEventListener("submit", event => event.preventDefault());
+byId("diagnostics-section").addEventListener("change", () => {
+  byId("diagnostics-summary").replaceChildren();
+  byId("diagnostics-output").textContent = "Loading…";
+  loadDiagnostics();
 });
 byId("trace-toggle").addEventListener("click", async () => {
-  if (!traceEnabled && !window.confirm("Capture command arguments and responses for 10 minutes in this local session? They may contain secrets. No trace is written to disk.")) return;
+  const enable = !traceEnabled;
+  if (enable && !window.confirm("Capture command arguments and responses for 10 minutes in this local session? They may contain secrets. No trace is written to disk.")) return;
+  traceRequest++;
+  if (!enable) {
+    traceEnabled = false;
+    clearTimeout(traceExpiryTimer);
+    clearTracePreviews();
+  }
   try {
-    const state = await request("trace", {enabled: !traceEnabled, confirm:true});
+    const state = await request("trace", {enabled: enable, confirm:true});
     traceEnabled = state.enabled;
-    await loadActivity();
+    if (activeTab === "jobs") await loadJobs(currentJobCursor, true);
+    else await loadActivity();
   } catch(error) { notice.textContent=error.message; }
 });
 const themeModes = ["system", "dark", "light"];
@@ -96,7 +144,9 @@ document.addEventListener("keydown", event => {
 function selectTab(id, focus = false) {
   const available = tabs.filter(tab => !tab.hidden);
   if (!available.some(tab => tab.hash === "#" + id)) id = "health";
+  const changed = activeTab !== id;
   activeTab = id;
+  if (changed) { diagnosticsRequest++; diagnosticsBusy = false; }
   for (const tab of tabs) {
     const key = tab.hash.slice(1);
     const selected = key === id;
@@ -112,6 +162,7 @@ function selectTab(id, focus = false) {
     page.classList.toggle("inactive-tab", !selected);
     if (selected && focus) tab.focus();
   }
+  if (id === "diagnostics") loadDiagnostics();
 }
 for (const tab of tabs) {
   tab.addEventListener("click", event => {
@@ -148,14 +199,22 @@ async function request(path, body) {
 }
 
 function showPair() {
-  byId("diagnostics-output").textContent="Select a subsystem and inspect.";
+  diagnosticsRequest++;
+  diagnosticsBusy = false;
+  byId("diagnostics-summary").replaceChildren();
+  byId("diagnostics-output").textContent="Loading diagnostics…";
   if (byId("detail-dialog").open) byId("detail-dialog").close();
   activityRequest++;
+  jobRequest++;
+  logRequest++;
+  traceRequest++;
+  byId("header-status").hidden = true;
+  byId("job-rows").replaceChildren();
+  byId("logs").hidden = true;
   byId("audit-ledger").open = false;
   byId("audit-rows").replaceChildren();
-  byId("live-refresh").checked = false;
   liveInitialized = false;
-  clearTimeout(liveTimer);
+  clearInterval(liveTimer);
   clearTimeout(traceExpiryTimer);
   traceEnabled = false;
   clearTracePreviews();
@@ -322,19 +381,11 @@ async function loadIntegrations() {
   }
 }
 
-async function refresh() {
-  notice.textContent = "Loading gateway status…";
-  const state = await request("status");
-  csrf = state.csrf;
-  byId("pair").hidden = true;
-  byId("dashboard").hidden = false;
-  if (location.pathname === "/dashboard/login") history.replaceState(null, "", "/dashboard");
-  byId("controls").hidden = false;
-  notice.textContent = "";
+function renderStatus(state) {
   summary("metrics", [
     ["MCP listener", state.listener], ["MCP sessions", state.sessions], ["TCP connections", state.connections], ["Active MCP calls", state.active_calls],
     ["Memory", state.rss_kib == null ? "Unavailable" : (state.rss_kib / 1024).toFixed(1) + " MiB"],
-    ["CPU", state.cpu_percent == null ? "Refresh for sample" : state.cpu_percent.toFixed(2) + "%"],
+    ["CPU", state.cpu_percent == null ? "Waiting for sample" : state.cpu_percent.toFixed(2) + "%"],
     ["Audit", state.audit || "Unconfigured"]
   ]);
   const config = state.configuration;
@@ -346,23 +397,19 @@ async function refresh() {
     ["Job profiles", config.configured_job_profiles ? "Configured" : "Unconfigured"],
     ["Skills store", config.configured_skills_store ? "Configured" : "Unconfigured"],
   ]);
-  const homePaths = rules => rules.map(path => "~/" + path);
-  const describe = rules => rules.length ? rules.join(", ") : "None";
   summary("protected-summary", [
     ["Masked state", paths.state_directory || "Broad YOLO inactive"],
     ["Masked skill store", paths.skills_directory || "Unconfigured"],
-    ["Default masks", describe(homePaths(paths.default_masked))],
-    ["Default read-only paths", describe(homePaths(paths.default_readonly))],
-    ["Additional masks", describe(paths.extra_masked)],
-    ["Additional read-only paths", describe(paths.extra_readonly)],
+    ["Masked paths", ((paths.default_masked || []).length + (paths.extra_masked || []).length) + " rules"],
+    ["Read-only paths", ((paths.default_readonly || []).length + (paths.extra_readonly || []).length) + " rules"],
   ]);
-  const modes = { standard: "Standard", scoped_yolo: "Scoped YOLO (legacy)", broad_yolo: "YOLO", yolo: "YOLO", full: "FULL", disabled: "Disabled" };
+  const modes = modeLabels;
   const headerStatus = byId("header-status");
   if (headerStatus) {
     headerStatus.hidden = false;
     headerStatus.replaceChildren();
     add(add(headerStatus, "span", "Active calls: "), "strong", state.active_calls ?? 0).id = "header-active-count";
-    add(headerStatus, "span", state.clients.map(c => `${c.id}: ${modes[c.mode] || c.mode}`).join(" · "));
+    add(headerStatus, "span", modeSummary(state.clients)).id = "header-modes";
   }
   const maskedBody = byId("protected-masked-rows");
   if (maskedBody && paths) {
@@ -402,6 +449,18 @@ async function refresh() {
     ].filter(Boolean).join(" · ")
   ]));
   byId("client-empty").hidden = state.clients.length !== 0;
+}
+
+async function refresh() {
+  notice.textContent = "Loading gateway status…";
+  const state = await request("status");
+  csrf = state.csrf;
+  byId("pair").hidden = true;
+  byId("dashboard").hidden = false;
+  if (location.pathname === "/dashboard/login") history.replaceState(null, "", "/dashboard");
+  byId("controls").hidden = false;
+  notice.textContent = "";
+  renderStatus(state);
   const select = byId("job-client");
   const selected = select.value;
   select.replaceChildren();
@@ -437,23 +496,23 @@ async function refresh() {
     for (const result of results) if (result.status === "rejected") notice.textContent = result.reason.message;
   });
   if (!liveInitialized && !byId("dashboard").hidden) {
+    lastSlowRefresh = performance.now();
     liveInitialized = true;
-    byId("live-refresh").checked = true;
-    byId("live-refresh").dispatchEvent(new Event("change"));
+    startLive();
   }
 }
 
-async function loadJobs(cursor = "") {
+async function loadJobs(cursor = "", preserveLogs = false) {
   currentJobCursor = cursor;
   const generation = ++jobRequest;
   const client = byId("job-client").value;
   const list = byId("job-rows");
-  list.replaceChildren();
-  byId("more-jobs").hidden = true;
-  byId("logs").hidden = true;
-  if (!client) return;
+  if (!preserveLogs) byId("logs").hidden = true;
+  if (!client) { list.replaceChildren(); byId("more-jobs").hidden = true; return; }
   const { jobs, next_cursor: next } = await request("jobs?client=" + encodeURIComponent(client) + "&cursor=" + cursor);
-  if (jobRequest !== generation) return;
+  const trace = await localTrace();
+  if (jobRequest !== generation || byId("dashboard").hidden) return;
+  list.replaceChildren();
   if (jobs.length === 0) add(list, "li", "No job records.");
   for (const job of jobs) {
     const row = add(list, "li", "");
@@ -467,11 +526,22 @@ async function loadJobs(cursor = "") {
       : job.state;
     const details = add(row, "span", [job.created_at ? new Date(job.created_at * 1000).toLocaleString() : "", job.client, job.cwd, job.executable || job.profile, job.execution_duration_ms != null ? "Job duration " + formatDuration(job.execution_duration_ms) : job.live_elapsed_ms != null ? "Live job elapsed " + formatDuration(job.live_elapsed_ms) : ""].filter(Boolean).join(" · "));
     details.className = "job-details";
-    button(row, "Details", async () => showDetails(job));
+    const preview = traceEnabled && commandPreview(jobTrace(trace, job));
+    if (preview) {
+      const command = add(row, "code", preview);
+      command.className = "job-command";
+      command.dataset.tracePreview = "true";
+      command.dataset.safeSummary = "Command preview expired";
+    }
+    button(row, "Details", async () => {
+      const capture = await localTrace();
+      const record = traceEnabled && jobTrace(capture, job);
+      if (!byId("dashboard").hidden) showDetails(record ? {...job, local_trace:record} : {...job, trace_note:"No captured launch arguments; enable local trace before starting a new job."});
+    });
     button(row, "Logs", async () => {
       const requestId = ++logRequest;
       const logs = await request("jobs/" + job.job_id + "/logs?client=" + encodeURIComponent(client));
-      if (jobRequest !== generation || requestId !== logRequest) return;
+      if (requestId !== logRequest || byId("job-client").value !== client || activeTab !== "jobs" || byId("dashboard").hidden) return;
       byId("output").textContent = "STDOUT\n" + (logs.stdout || "(empty)") + "\n\nSTDERR\n" + (logs.stderr || "(empty)") + (logs.stdout_truncated || logs.stderr_truncated ? "\n\n[Output truncated]" : "");
       byId("logs").hidden = false;
       byId("logs").open = true;
@@ -621,26 +691,9 @@ async function loadActivity() {
   const generation = ++activityRequest;
   const funnel = byId("show-funnel-admission").checked;
   const data = await request(funnel ? "activity?funnel=1" : "activity");
-  let previews = new Map();
-  if (!remote) {
-    try {
-      const requested = performance.now();
-      const trace = await request(traceEnabled ? "trace" : "trace?metadata=1");
-      if (generation !== activityRequest) return;
-      updateTraceState(trace, requested);
-      if (traceEnabled) previews = new Map(trace.events.map(event => [event.call_id, commandPreview(event)]));
-      byId("trace-toggle").textContent = traceEnabled ? "Stop and clear local trace" : "Capture local command trace";
-      byId("trace-toggle").disabled = trace.busy;
-      byId("trace-state").textContent = traceEnabled ? "Local trace active · up to 24 calls" : trace.busy ? "Another local session owns the trace" : "Trace off";
-    } catch (error) {
-      if (generation === activityRequest) {
-        traceEnabled = false;
-        clearTracePreviews();
-        byId("trace-state").textContent = "Trace unavailable";
-      }
-    }
-  }
-  if (generation !== activityRequest) return;
+  const trace = await localTrace();
+  const previews = new Map(trace.map(event => [event.call_id, commandPreview(event)]));
+  if (generation !== activityRequest || byId("dashboard").hidden) return;
   byId("activity-active").textContent = data.active_calls + " active calls";
   const headerCount = byId("header-active-count");
   if (headerCount) headerCount.textContent = data.active_calls;
@@ -670,10 +723,10 @@ async function loadActivity() {
     button(add(tr, "td", ""), "Details", async () => {
       let trace;
       if (!remote && traceEnabled && event.call_id) {
-        const capture = await request("trace");
-        trace = capture.events.find(record => record.call_id === event.call_id);
+        const capture = await localTrace();
+        trace = traceEnabled && capture.find(record => record.call_id === event.call_id);
       }
-      if (!byId("dashboard").hidden) showDetails(trace ? { ...event, local_trace: trace } : event);
+      if (!byId("dashboard").hidden) showDetails(trace ? { ...event, local_trace: trace } : {...event, trace_note:"Metadata only; enable local trace to capture future calls."});
     });
   }
   filterRows("audit-rows", byId("audit-filter").value);
@@ -693,38 +746,69 @@ byId("audit-ledger").addEventListener("toggle", async (event) => {
   } catch (error) { output.textContent = error.message; }
 });
 
-let liveBusy = false;
-let liveTimer;
-let lastSlowRefresh = 0;
-byId("live-refresh").addEventListener("change", () => {
+const modeLabels = { standard: "Standard", scoped_yolo: "Scoped YOLO (legacy)", broad_yolo: "YOLO", yolo: "YOLO", full: "FULL", disabled: "Disabled" };
+function modeSummary(clients) {
+  const groups = new Map();
+  for (const c of clients) {
+    const mode = c.disabled ? "Disabled" : c.expired ? "Expired" : modeLabels[c.mode] || c.mode;
+    if (!groups.has(mode)) groups.set(mode, []);
+    groups.get(mode).push(c.id);
+  }
+  return Array.from(groups, ([mode, ids]) => mode + ": " + ids.join(", ")).join(" · ") || "No clients";
+}
+let traceRequest = 0;
+async function localTrace() {
+  if (remote || byId("dashboard").hidden) return [];
+  const generation = ++traceRequest;
+  try {
+    const requested = performance.now();
+    const trace = await request(traceEnabled ? "trace" : "trace?metadata=1");
+    if (generation !== traceRequest || byId("dashboard").hidden) return [];
+    updateTraceState(trace, requested);
+    byId("trace-toggle").textContent = traceEnabled ? "Clear trace" : "Enable local trace";
+    byId("trace-toggle").disabled = trace.busy;
+    byId("trace-state").textContent = traceEnabled ? "Trace active" : trace.busy ? "Trace in another session" : "";
+    byId("job-trace-state").textContent = traceEnabled ? "Command previews from this local trace; historical jobs may not have captured arguments." : "Enable local trace to capture future job command arguments.";
+    return traceEnabled ? trace.events : [];
+  } catch (error) {
+    if (generation === traceRequest) {
+      traceEnabled = false;
+      clearTracePreviews();
+      byId("trace-state").textContent = "Trace unavailable";
+    }
+    return [];
+  }
+}
+function jobTrace(events, job) {
+  return events.find(event => event.job_id === job.job_id && event.client === job.client);
+}
+function startLive() {
   clearInterval(liveTimer);
-  if (!byId("live-refresh").checked) return;
   liveTimer = setInterval(async () => {
-    if (!byId("live-refresh").checked) { clearInterval(liveTimer); return; }
     if (document.hidden || byId("dashboard").hidden || liveBusy) return;
-    if (!["audit", "health", "jobs"].includes(activeTab)) return;
-    if (activeTab === "jobs" && (!byId("logs").hidden || byId("job-controls").hidden)) return;
-    if (activeTab !== "audit" && performance.now() - lastSlowRefresh < 3000) return;
-    if (activeTab !== "audit") lastSlowRefresh = performance.now();
+    const now = performance.now();
+    const tab = activeTab;
+    const statusDue = now - lastSlowRefresh >= 5000;
+    const diagnosticsDue = tab === "diagnostics" && !diagnosticsBusy && now - diagnosticsSample >= 10000;
+    if (!statusDue && !diagnosticsDue && tab !== "audit" && tab !== "jobs") return;
     liveBusy = true;
     try {
-      if (activeTab === "audit") await loadActivity();
-      else if (activeTab === "jobs") await loadJobs(currentJobCursor);
-      else {
+      if (statusDue) {
+        lastSlowRefresh = now;
         const state = await request("status");
-        const headerCount = byId("header-active-count");
-        if (headerCount) headerCount.textContent = state.active_calls ?? 0;
-        summary("metrics", [
-          ["MCP listener", state.listener], ["MCP sessions", state.sessions], ["TCP connections", state.connections], ["Active MCP calls", state.active_calls],
-          ["Memory", state.rss_kib == null ? "Unavailable" : (state.rss_kib / 1024).toFixed(1) + " MiB"],
-          ["CPU", state.cpu_percent == null ? "Refresh for sample" : state.cpu_percent.toFixed(2) + "%"],
-          ["Audit", state.audit || "Unconfigured"]
-        ]);
+        if (byId("dashboard").hidden) return;
+        renderStatus(state);
       }
-    } catch (error) { notice.textContent = error.message; }
+      if (tab === activeTab) {
+        if (tab === "audit") await loadActivity();
+        else if (tab === "jobs" && !byId("job-controls").hidden) await loadJobs(currentJobCursor, true);
+        else if (diagnosticsDue) await loadDiagnostics();
+      }
+      byId("live-state").textContent = "Live";
+    } catch (error) { byId("live-state").textContent = "Stale"; notice.textContent = error.message; }
     finally { liveBusy = false; }
   }, 1000);
-});
+}
 
 async function pairBrowser(token) {
   try {
@@ -743,7 +827,6 @@ byId("pair").addEventListener("submit", event => {
   event.preventDefault();
   pairBrowser(byId("pairing-code").value.trim());
 });
-byId("refresh").addEventListener("click", () => refresh().catch(error => notice.textContent = error.message));
 byId("job-client").addEventListener("change", () => loadJobs().catch(error => notice.textContent = error.message));
 byId("more-jobs").addEventListener("click", () => loadJobs(nextPage).catch(error => notice.textContent = error.message));
 byId("logout").addEventListener("click", async () => {

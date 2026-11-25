@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::http::admission::Client;
 use crate::http::operator::{Mode, PolicyFile, verify_approvals};
 
-const USAGE: &str = "Usage: veyl mode [list]\n       veyl mode standard|yolo|full [CLIENT] [--confirm-full]\n       veyl mode get|enable|disable [CLIENT]\n       veyl mode migrate\nAll commands accept --config PATH. With multiple clients, select interactively or supply a client ID. FULL requires --confirm-full.";
+const USAGE: &str = "Usage: veyl mode [list]\n       veyl mode standard|yolo|full [CLIENT | --all] [--confirm-full]\n       veyl mode get|enable|disable [CLIENT]\n       veyl mode migrate\nAll commands accept --config PATH. With multiple clients, select interactively or supply a client ID. Use --all for an explicit atomic mode change of all enabled clients. FULL requires --confirm-full.";
 const LEGACY_USAGE: &str = "Compatibility: veyl yolo enable|disable|reset|status|set [--mode MODE] --client ID --config PATH. See veyl mode --help.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -18,6 +18,7 @@ enum Operation {
     Get,
     Migrate,
     Select(Mode),
+    SelectAll(Mode),
     SetDisabled(bool),
     EnableScoped,
     Reset,
@@ -40,6 +41,14 @@ fn dispatch(args: &[OsString], legacy: bool) -> Result<(), String> {
     let (operation, config, id) = parse(args, legacy)?;
     if operation == Operation::Migrate {
         return transition::migrate(&config);
+    }
+    if let Operation::SelectAll(mode) = operation {
+        transition::apply_all(&config, mode)?;
+        let settings = settings(&config)?;
+        for client in &settings.clients {
+            show(&config, &client.id, false)?;
+        }
+        return Ok(());
     }
     if operation == Operation::List {
         let settings = settings(&config)?;
@@ -169,6 +178,7 @@ fn parse(args: &[OsString], legacy: bool) -> Result<(Operation, PathBuf, Option<
     let mut config = None;
     let mut client = None;
     let mut confirm = false;
+    let mut all = false;
     let mut rest = args[usize::from(args[0] != "--config")..].iter();
     while let Some(arg) = rest.next() {
         match arg.to_str() {
@@ -182,6 +192,7 @@ fn parse(args: &[OsString], legacy: bool) -> Result<(Operation, PathBuf, Option<
                 selected = Some(selection(argument(rest.next(), usage)?)?);
             }
             Some("--confirm-full") if !confirm => confirm = true,
+            Some("--all") if !legacy && !all => all = true,
             Some(value) if !value.starts_with('-') && client.is_none() => {
                 client = Some(value.to_owned())
             }
@@ -203,10 +214,17 @@ fn parse(args: &[OsString], legacy: bool) -> Result<(Operation, PathBuf, Option<
         (_, "set" | "standard" | "yolo" | "full", Some(mode)) => Operation::Select(mode),
         _ => return Err(usage.into()),
     };
-    if operation == Operation::Select(Mode::Full) && !confirm {
+    let operation = if all {
+        match operation {
+            Operation::Select(mode) if client.is_none() => Operation::SelectAll(mode),
+            _ => return Err("--all requires a mode selection without a client ID".into()),
+        }
+    } else { operation };
+    let full = matches!(operation, Operation::Select(Mode::Full) | Operation::SelectAll(Mode::Full));
+    if full && !confirm {
         return Err("FULL requires --confirm-full".into());
     }
-    if confirm && operation != Operation::Select(Mode::Full) {
+    if confirm && !full {
         return Err(usage.into());
     }
     Ok((operation, config.ok_or(usage)?, client))
@@ -271,6 +289,16 @@ mod tests {
         let (op, _, id) = parse(&args(&["get", "dev", "--config", "/tmp/config"]), false).unwrap();
         assert!(op == Operation::Get);
         assert_eq!(id.as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn all_is_explicit_and_full_still_requires_confirmation() {
+        assert!(matches!(parse(&args(&["yolo", "--all", "--config", "/tmp/config"]), false).unwrap().0, Operation::SelectAll(Mode::BroadYolo)));
+        assert!(parse(&args(&["yolo", "dev", "--all", "--config", "/tmp/config"]), false).is_err());
+        assert!(parse(&args(&["enable", "--all", "--config", "/tmp/config"]), false).is_err());
+        assert!(parse(&args(&["full", "--all", "--config", "/tmp/config"]), false).is_err());
+        assert!(matches!(parse(&args(&["full", "--all", "--confirm-full", "--config", "/tmp/config"]), false).unwrap().0, Operation::SelectAll(Mode::Full)));
+        assert!(parse(&args(&["set", "--mode", "yolo", "--all", "--config", "/tmp/config"]), true).is_err());
     }
 
     #[test]

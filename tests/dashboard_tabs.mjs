@@ -75,7 +75,8 @@ try {
   assert.equal(await evaluate("document.querySelectorAll('#audit-rows [data-status=failed]').length"), 1);
   assert.ok(!(await evaluate("document.querySelector('#audit-rows').innerHTML")).includes("BROWSER_SYNTHETIC_CREDENTIAL"));
   assert.match(await evaluate("document.querySelector('#audit-rows td').textContent"), /[AP]M$/);
-  assert.equal(await evaluate("document.querySelector('#live-refresh').checked"), true);
+  assert.equal(await evaluate("document.querySelector('#live-refresh') === null"), true);
+  assert.equal(await evaluate("document.querySelector('#live-state').textContent"), "Live");
   assert.equal(await evaluate("document.querySelector('#header-active-count').textContent"), "0");
   assert.equal(await evaluate("formatDuration(42)"), "42 ms");
   assert.equal(await evaluate("formatDuration(1234)"), "1.234 s");
@@ -101,8 +102,14 @@ try {
   assert.equal(await evaluate("document.querySelector('link[rel=icon]').getAttribute('href')"),"/dashboard/icon.svg");
   await evaluate("document.querySelector('nav a[href=\"#diagnostics\"]').click()");
   assert.deepEqual(await evaluate(visible),["diagnostics"]);
-  await evaluate("document.querySelector('#diagnostics-run').click()");
   await until(()=>evaluate("document.querySelector('#diagnostics-output').textContent.includes('memory_total_kib')"));
+  assert.match(await evaluate("document.querySelector('#diagnostics-summary').textContent"), /GiB/);
+  await evaluate("document.querySelector('#diagnostics-section').value='storage';document.querySelector('#diagnostics-section').dispatchEvent(new Event('change'))");
+  await until(()=>evaluate("!!JSON.parse(document.querySelector('#diagnostics-output').textContent).sections.storage"));
+  assert.equal(await evaluate("document.querySelector('#diagnostics-run') === null"), true);
+  assert.match(await evaluate("modeSummary([{id:'chatgpt',mode:'yolo'},{id:'codex',mode:'standard'},{id:'agy',mode:'standard'}])"), /YOLO: chatgpt · Standard: codex, agy/);
+  assert.equal(await evaluate("commandPreview(jobTrace([{job_id:'a',client:'x',arguments:{command:'echo test'}}],{job_id:'a',client:'x'}))"), "echo test");
+  assert.equal(await evaluate("jobTrace([{job_id:'a',client:'x'}],{job_id:'a',client:'y'}) === undefined"), true);
   await evaluate("document.querySelector('nav a[href=\"#marketplace\"]').click()");
   await until(()=>evaluate("document.querySelectorAll('#catalog-cards article').length === 20"));
   assert.match(await evaluate("document.querySelector('#catalog-count').textContent"), /106 matching resources/);

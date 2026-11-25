@@ -1,5 +1,53 @@
 # Gate 3d status
 
+## 2026-11-25 — operator UI and explicit shared mode candidate
+
+Isolated worktree `target/operator-ui.hRrNjrGW/source` at release base
+`dcd0bf513bac76531a102debcd13385c32fc3c05`. No production changes.
+
+- Browser refresh is automatic: activity/jobs every second, status every
+  five seconds, selected diagnostics every ten seconds while visible.
+  Diagnostics load on entry/selection and expose readable summaries plus
+  complete JSON; hidden browser tabs stop polling.
+- Compact Activity controls, aligned Skills form, readable protection
+  cards, and grouped connection settings. Mode header groups clients by
+  their actual effective modes.
+- Local trace control available across dashboard views and from TUI Jobs
+  and Activity. Successful job launch traces associate returned job IDs
+  with the authenticated owner. Job rows and JSON details show captured
+  command/argv/profile when available; file targets remain bounded and
+  file content stays excluded. Metadata-only default, existing 24-call
+  and ten-minute session-owned trace boundary retained. Historical raw
+  commands and configured profile argv not captured cannot be recovered.
+- Local CLI `veyl mode MODE --all` performs one audited atomic v3
+  configuration transition for all enabled clients. FULL still requires
+  confirmation. Per-client grants/denials, credentials, roots, upstream
+  approvals and enabled state preserved. Explicit per-client changes
+  remain independent. Disabled entries skip ordinary bulk mode selection.
+  Interrupted bulk update is recovered by explicit bulk Standard, dropping
+  elevation from all entries while preserving disabled state.
+- Verification: full 109 Rust test executions on the initial UI/bulk build;
+  final offline rebuild, formatting, Clippy with warnings denied, JS syntax,
+  5 permission tests (including bulk negative controls and interrupted
+  marker recovery), 4 dynamic job tests (including real PTY job command
+  preview/detail and clearing), 3 activity tests, Brave CDP pairing and
+  dashboard navigation/automatic diagnostics all passed. Earlier browser
+  invocation used a nonexistent release binary; final run explicitly used
+  the isolated debug binaries. Receipts: operator-ui-final.log and
+  operator-ui-final-exact.log (exit 0). Locked acceptance suites not rerun
+  for this new candidate. No claims of final independent acceptance.
+
+Release v0.2.5-beta authorized by the operator. BridgeDev reran 109 Rust
+executions, 287 locked cases (28/28 pins unchanged), six draft mode cases,
+and all 38 Python probes on optimized binaries plus Brave CDP and PTY.
+AGY independently reviewed bulk mode and trace security: static PASS,
+not an independent test execution. An initial permission probe failed
+closed with Bubblewrap's missing /proc/self/fd source error; a synthetic
+unlinked-source test reproduced that error and the focused and full release
+probe reruns passed. Original cause not established; no sandbox weakening.
+Receipts: release-025-acceptance.log, release-025-retest.log,
+release-025-agy-review.log. Persistent process and Nightshift parity remain open.
+
 ## 2026-11-25 — v0.2.4-beta release verification and live upgrade
 
 AGY upgraded the production gateway, CLI and monitor to 0.2.4-beta after

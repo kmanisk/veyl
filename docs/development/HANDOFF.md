@@ -1,5 +1,13 @@
 # Gateway Milestone 1 — Working Handoff
 
+## v0.2.5-beta operator UI release checkpoint
+
+Source and verification receipts: `target/operator-ui.hRrNjrGW/source`.
+See STATUS.md and release-025-{acceptance,retest,agy-review}.log. AGY static
+security review passed; BridgeDev executed the locked acceptance and release
+integration suites. Bulk mode is explicit and does not alter existing grants
+on upgrade. Keep BridgeDev available for the next parity milestone.
+
 ## 2026-11-25 — v0.2.4-beta production handoff
 
 Production upgrade was authorized and completed by AGY. The matching

@@ -11,7 +11,7 @@ commands, durable jobs, native diagnostics, skills and upstream MCP servers.
 Install the Linux beta from crates.io (no manual clone or symlink):
 
 ```sh
-cargo install veyl --version 0.2.4-beta --locked --bin veyl --bin veyl-monitor
+cargo install veyl --version 0.2.5-beta --locked --bin veyl --bin veyl-monitor
 ```
 
 Veyl is open source under the MIT license. Source code and prebuilt Linux
@@ -67,7 +67,7 @@ The durable audit remains metadata-only.
 
 ## Daily use
 
-Veyl v0.2.4-beta includes unified permission modes (`Standard`, `YOLO` with
+Veyl v0.2.5-beta includes unified permission modes (`Standard`, `YOLO` with
 native tool preset and `deny_tools`, `FULL` with confirmation), confined ad-hoc
 commands (`exec_command`, `task_run`), independent `stdout`/`stderr` log cursors,
 and live local-timezone AM/PM millisecond monitoring.

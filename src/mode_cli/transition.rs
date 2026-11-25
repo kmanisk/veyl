@@ -369,3 +369,73 @@ pub(super) fn apply(
         &changes,
     )
 }
+
+/// Explicit local bulk selection. Preserve per-client grants, denials, roots,
+/// authentication and enabled state. Commit the whole configuration once.
+pub(super) fn apply_all(path: &Path, selected: Mode) -> Result<(), String> {
+    const MARKER: &str = "@mode-all";
+    require_operator()?;
+    if !matches!(selected, Mode::Standard | Mode::BroadYolo | Mode::Full) {
+        return Err("Unsupported bulk mode".into());
+    }
+    let policy = PolicyFile::lock(path, true)?;
+    let bytes = policy.bytes()?;
+    let mut document = parse_document(&bytes)?;
+    let settings = parse_clients(path, &bytes)?;
+    if document["policy_version"] != 3 {
+        return Err("Run veyl mode migrate before selecting a mode for all clients".into());
+    }
+    let pending = policy.pending_client()?;
+    let recovery = pending.as_deref() == Some(MARKER) && selected == Mode::Standard;
+    if pending.is_some() && !recovery {
+        return Err("Interrupted policy update; for an interrupted bulk selection, run veyl mode standard --all".into());
+    }
+    // Recovery removes every elevation, including those retained by disabled
+    // clients, before admitting anything. Other operations verify approvals.
+    if !recovery {
+        verify_approvals(&settings)?;
+    }
+    if selected == Mode::BroadYolo {
+        let plan = crate::jobs::broad::Broad::prepare(path, &settings)?;
+        for client in settings.clients.iter().filter(|c| !c.is_disabled()) {
+            plan.probe(&client.root).map_err(|_| "YOLO isolation is unavailable for an enabled client")?;
+        }
+    }
+    let mut changes = Vec::new();
+    for (entry, client) in document["clients"].as_array_mut().ok_or("Invalid clients")?
+        .iter_mut().zip(&settings.clients)
+    {
+        if client.is_disabled() && !recovery {
+            continue;
+        }
+        let previous = Mode::from_entry(entry)?;
+        let preset = selected == Mode::BroadYolo;
+        if !recovery && previous == selected && client.native_tool_preset == preset {
+            continue;
+        }
+        let change = ModeChange::new(
+            &client.id,
+            if client.native_tool_preset { "yolo_native" } else { previous.label() },
+            if preset { "yolo_native" } else { selected.label() },
+        )?;
+        entry["mode"] = if preset { "yolo" } else { selected.label() }.into();
+        let object = entry.as_object_mut().ok_or("Invalid client")?;
+        object.remove("yolo_revision");
+        object.remove("yolo_shared_roots");
+        object.remove("native_tool_preset");
+        if matches!(selected, Mode::BroadYolo | Mode::Full) {
+            object.insert("yolo_revision".into(), change.revision.as_str().into());
+        }
+        if preset {
+            object.insert("native_tool_preset".into(), true.into());
+        }
+        changes.push(change);
+    }
+    if changes.is_empty() && !recovery {
+        return Ok(());
+    }
+    if !settings.managed {
+        require_completed_legacy_jobs(&settings)?;
+    }
+    commit(&policy, &document, &settings, MARKER, false, None, &changes)
+}

@@ -114,3 +114,40 @@ dialog::backdrop { background:#0006; }
   .pair { margin:1rem; }
   .masthead { padding:.65rem; }
 }
+
+/* Operator views: consistent field alignment, readable paths and compact rows. */
+.live-state { color:var(--success); font-size:.88rem; white-space:nowrap; }
+#trace-controls { gap:.4rem; font-size:.85rem; }
+.header-status span { border:0; background:none; padding:.1rem 0; }
+.masthead { gap:.8rem; }
+.header-controls { gap:.65rem; }
+.activity-toolbar { display:flex; justify-content:space-between; align-items:center; gap:.75rem; flex-wrap:wrap; }
+.activity-toolbar input[type="search"] { width:min(100%,25rem); }
+#page-audit .table td { padding:.45rem .65rem; vertical-align:middle; }
+#page-audit td:last-child button { padding:.3rem .55rem; }
+#page-audit td:nth-child(5) { white-space:nowrap; font-variant-numeric:tabular-nums; }
+#page-audit td:nth-child(6) { min-width:12rem; overflow-wrap:anywhere; }
+#protected-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
+#protected-summary dd { font-weight:500; overflow-wrap:anywhere; }
+.protection-grid { gap:.8rem; }
+.protection-grid .section-card { margin:0; }
+.protection-grid td:first-child { white-space:normal; overflow-wrap:anywhere; }
+.settings-list { display:grid; gap:0; }
+.settings-list > div { display:grid; grid-template-columns:minmax(9rem, 12rem) minmax(0,1fr); gap:.8rem; border-bottom:1px solid var(--stroke); padding:.7rem 0; }
+.settings-list > div:last-child { border:0; }
+.settings-list dd { font-weight:500; }
+#configuration-summary { grid-template-columns:repeat(auto-fit,minmax(min(100%,13rem),1fr)); }
+.skill-controls { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:1rem; align-items:end; }
+.field { display:grid; min-width:0; gap:.35rem; }
+.field input,.field select { width:100%; min-width:0; }
+.skill-import { grid-column:1/-1; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.6rem; align-items:end; }
+.skill-controls #skill-count { grid-column:1/-1; }
+#diagnostics-summary { margin:.85rem 0; grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr)); }
+#diagnostics-summary dt { text-transform:capitalize; }
+#diagnostics-summary dd { font-weight:500; }
+.job-command { flex:1 0 100%; color:var(--accent); white-space:pre-wrap; overflow-wrap:anywhere; }
+@media (max-width:650px) {
+  .skill-controls,#protected-summary { grid-template-columns:minmax(0,1fr); }
+  .settings-list > div { grid-template-columns:minmax(0,1fr); gap:.25rem; }
+  .activity-toolbar input[type="search"] { width:100%; }
+}

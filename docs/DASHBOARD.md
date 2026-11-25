@@ -32,8 +32,7 @@ contain sensitive output written by the job itself.
 
 The sidebar switches between individual views. Arrow keys navigate focused
 tabs; / focuses the Activity or Jobs filter. The theme button selects
-system, dark or light. Details buttons open JSON dialogs. Live refresh
-is optional and runs on visible Health, Activity and Jobs views. Job rows
+system, dark or light. Details buttons open JSON dialogs. Live refresh is automatic while the browser is visible; Activity and Jobs refresh every second, gateway status every five seconds, and the selected diagnostics subsystem every ten seconds. Hidden tabs stop polling. No refresh checkbox or manual Inspect action is required. Job rows
 show creation timestamp, status, owner, directory, profile and (for new
 receipts) executable and measured job duration. The runner measures job
 duration from sandbox launch through supervision using a monotonic clock.
@@ -75,14 +74,11 @@ only with a live verified runner in the matching boot/time namespace; final
 `execution_duration_ms` remains separate. Local tracing can also show bounded
 target paths (`target_preview`) for file tools, never file contents, patch
 bodies, or responses.
-Scripts can use `veyl monitor --view activity`, `--view audit`, or `--view health`.
+Scripts can use `veyl monitor --view activity`, `--view audit`, or `--view health`. The local trace control is available from both Activity and Jobs. A successful job-launch trace is correlated with the actual returned job ID and owner; job rows and JSON details can show the captured command or profile while that trace is active. Historical jobs without a captured launch, expired traces, and configured profiles without caller-supplied argv cannot supply exact command arguments. Raw traces remain explicit, local, single-session, bounded, and expire after ten minutes; they are never stored in the durable audit.
 
 ## Marketplace and custom integrations
 
-System diagnostics is a paired-loopback-only view. Select a subsystem and
-press Inspect to retrieve live JSON; nothing polls automatically. Skills
-now provides name/description/status search, metadata details and a
-document viewer alongside existing import and per-client grants.
+System diagnostics is a paired-loopback-only view. Opening it or changing the subsystem automatically loads a bounded read-only snapshot. Summary cards show key values; Raw JSON retains the complete structured result. No diagnostics run in hidden views or wake suspended GPUs. Skills provides aligned search, import, and per-client grant controls.
 
 Marketplace is a bundled 106-entry metadata snapshot derived from
 BridgeDev's MIT-licensed catalog, with attribution in

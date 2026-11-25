@@ -626,7 +626,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "veyl"
-version = "0.2.4-beta"
+version = "0.2.5-beta"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",

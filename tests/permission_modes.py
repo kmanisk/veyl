@@ -167,6 +167,61 @@ class PermissionModes(unittest.TestCase):
         self.assertTrue(f.call("write_file", {"path": "denied", "content": "denied"}, restarted)["isError"])
         self.assertIn("VERIFY_RESULT=VALID", self.cli("audit", "verify"))
 
+    def test_explicit_bulk_mode_keeps_client_boundaries(self):
+        f = self.fixture
+        state = f.base / "state"
+        state.mkdir(mode=0o700)
+        jobs = state / "jobs"
+        jobs.mkdir(mode=0o700)
+        f.config = state / "clients.json"
+        f.audit = state / "ledger.jsonl"
+        f.audit.touch(mode=0o600)
+        f.doc.update(policy_version=3, audit_log=str(f.audit), job_state_dir=str(jobs))
+        for client in f.doc["clients"]:
+            client.update(mode="standard", disabled=False, tools=["read_file"])
+        f.doc["clients"][0]["deny_tools"] = ["apply_patch"]
+        f.write_config()
+        before = json.loads(f.config.read_text())["clients"]
+        f.start()
+        session = f.connect()
+        other = f.connect(product.OTHER_TOKEN)
+        self.cli("mode", "full", "--all", success=False)
+        self.cli("mode", "yolo", "--all", "primary", success=False)
+        alias = f.base / "alias"
+        alias.hardlink_to(f.config)
+        self.cli("mode", "yolo", "--all", success=False)
+        alias.unlink()
+        self.assertEqual(json.loads(f.config.read_text())["clients"], before)
+        self.assertEqual(self.tools(session), {"read_file"})
+        self.cli("mode", "yolo", "--all")
+        after = json.loads(f.config.read_text())["clients"]
+        self.assertTrue(all(c["mode"] == "yolo" and c["native_tool_preset"] for c in after))
+        for original, changed in zip(before, after):
+            for key in ("root", "tools", "deny_tools", "token_sha256", "disabled"):
+                self.assertEqual(original.get(key), changed.get(key))
+        self.assertNotIn("apply_patch", self.tools(session))
+        self.assertIn("apply_patch", self.tools(other, product.OTHER_TOKEN))
+        self.cli("mode", "disable", "secondary")
+        self.cli("mode", "standard", "--all")
+        self.assertEqual(self.tools(session), {"read_file"})
+        disabled = json.loads(f.config.read_text())["clients"][1]
+        self.assertTrue(disabled["disabled"])
+        self.assertEqual(disabled["mode"], "yolo")
+        # A synthetic interrupted batch marker keeps admission closed and can
+        # only be recovered by the explicit bulk Standard downgrade.
+        pending = state / ".clients.json.policy-pending"
+        pending.write_text("@mode-all")
+        pending.chmod(0o600)
+        self.cli("mode", "yolo", "--all", success=False)
+        self.cli("mode", "standard", "primary", success=False)
+        self.assertTrue(pending.exists())
+        self.cli("mode", "standard", "--all")
+        self.assertFalse(pending.exists())
+        recovered = json.loads(f.config.read_text())["clients"]
+        self.assertTrue(all(c["mode"] == "standard" and "yolo_revision" not in c for c in recovered))
+        self.assertTrue(recovered[1]["disabled"])
+        self.assertIn("VERIFY_RESULT=VALID", self.cli("audit", "verify"))
+
     def test_old_broad_approval_cannot_activate_native_preset(self):
         f = self.fixture
         state = f.base / "state"

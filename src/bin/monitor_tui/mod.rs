@@ -285,22 +285,52 @@ impl View {
         if !self.trace_enabled || self.trace_until.is_none_or(|until| Instant::now() >= until) {
             return None;
         }
-        let id = call["call_id"].as_str()?;
-        let event = self
-            .trace_rows
-            .as_array()?
-            .iter()
-            .find(|v| v["call_id"] == id)?;
+        let event = Self::matching_trace(&self.trace_rows, call)?;
         if let Some(path) = event["target_preview"].as_str() {
             return Some(safe(path));
         }
         let args = &event["arguments"];
-        for key in ["command", "argv", "profile"] {
+        for key in ["command", "argv", "profile", "job_id", "sections"] {
             if !args[key].is_null() {
                 return Some(format!("{} {}", key, strval(&args[key])));
             }
         }
         None
+    }
+
+    fn matching_trace<'a>(events: &'a Value, record: &Value) -> Option<&'a Value> {
+        let events = events.as_array()?;
+        if let Some(id) = record["call_id"].as_str() {
+            return events.iter().find(|event| event["call_id"] == id);
+        }
+        let id = record["job_id"].as_str()?;
+        let client = record["client"].as_str()?;
+        events
+            .iter()
+            .find(|event| event["job_id"] == id && event["client"] == client)
+    }
+
+    fn refresh_trace(&mut self, monitor: &Monitor) {
+        if !self.trace_enabled {
+            return;
+        }
+        let requested = Instant::now();
+        match monitor.request("trace", None) {
+            Ok((trace, _)) if trace["enabled"] == true => {
+                self.trace_rows = trace["events"].clone();
+                self.trace_until = trace["remaining_ms"]
+                    .as_u64()
+                    .map(|ms| requested + Duration::from_millis(ms.min(600_000)));
+                if self.trace_until.is_none_or(|until| Instant::now() >= until) {
+                    self.trace_enabled = false;
+                    self.clear_trace_preview();
+                }
+            }
+            _ => {
+                self.trace_enabled = false;
+                self.clear_trace_preview();
+            }
+        }
     }
 
     fn clear_trace_preview(&mut self) {
@@ -361,16 +391,13 @@ impl View {
             && self.logs.is_none()
             && let Some(mut value) = self.selected_record()
         {
-            if self.tab == 3
-                && !self.audit_ledger
-                && self.trace_enabled
-                && let Some(id) = value["call_id"].as_str()
-                && let Ok((trace, _)) = monitor.request("trace", None)
-                && let Some(event) = table_rows(&trace, "events")
-                    .into_iter()
-                    .find(|event| event["call_id"] == id)
-            {
-                value["local_trace"] = event;
+            if (self.tab == 2 || self.tab == 3 && !self.audit_ledger) && self.trace_enabled {
+                self.refresh_trace(monitor);
+                if self.trace_enabled
+                    && let Some(event) = Self::matching_trace(&self.trace_rows, &value)
+                {
+                    value["local_trace"] = event.clone();
+                }
             }
             self.details = Some(value);
             self.selected = 0;
@@ -494,7 +521,11 @@ impl View {
                                     .or_else(|| v["live_elapsed_ms"].as_u64())
                             ),
                             cell(&strval(&v["cwd"]), 26),
-                            format_args!("{} {}", strval(&v["profile"]), strval(&v["executable"]))
+                            self.trace_preview(v).unwrap_or_else(|| format!(
+                                "{} {}",
+                                strval(&v["profile"]),
+                                strval(&v["executable"])
+                            ))
                         ),
                         color,
                     )
@@ -623,6 +654,9 @@ impl View {
                 obj.remove("csrf");
             }
             self.health = status.clone();
+            if self.tab == 2 || self.tab == 3 && !self.audit_ledger {
+                self.refresh_trace(monitor);
+            }
             if let Some(job) = &self.logs {
                 return monitor.show("logs", self.client.as_deref(), Some(job));
             }
@@ -649,21 +683,6 @@ impl View {
                     };
                     let (value, _) = monitor.request(route, None)?;
                     self.health["active_calls"] = value["active_calls"].clone();
-                    if self.trace_enabled {
-                        let requested = Instant::now();
-                        match monitor.request("trace", None) {
-                            Ok((trace, _)) if trace["enabled"] == true => {
-                                self.trace_rows = trace["events"].clone();
-                                self.trace_until = trace["remaining_ms"]
-                                    .as_u64()
-                                    .map(|ms| requested + Duration::from_millis(ms.min(600_000)));
-                            }
-                            _ => {
-                                self.trace_enabled = false;
-                                self.clear_trace_preview();
-                            }
-                        }
-                    }
                     Ok(value)
                 }
                 _ => monitor.show(VIEWS[self.tab], self.client.as_deref(), None),
@@ -788,7 +807,7 @@ impl View {
                 match self.tab {
                     1 => "CLIENT             MODE             SESSIONS / GRANTS",
                     2 => {
-                        "JOB ID                            STATUS      EXIT   CREATED      JOB TIME   DIRECTORY       PROFILE"
+                        "JOB ID                            STATUS      EXIT   CREATED      JOB TIME   DIRECTORY                  COMMAND / PROFILE"
                     }
                     3 => {
                         "TIME          TOOL / EVENT            CLIENT         STATUS      ELAPSED         COMMAND / SUMMARY"
@@ -867,7 +886,7 @@ impl View {
                 if self.tab == 3 {
                     "[f] Funnel  [a] Audit ledger  [t] Trace  [r] Refresh  [q] Quit"
                 } else {
-                    "[n] Next page  [Esc] Back  [x] Cancel  [r] Refresh  [q] Quit"
+                    "[n] Next page  [Esc] Back  [x] Cancel  [t] Trace  [r] Refresh  [q] Quit"
                 },
                 w,
             ));
@@ -1057,7 +1076,7 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                     }
                     return Ok(());
                 }
-                b't' if v.tab == 3 && v.details.is_none() => {
+                b't' if matches!(v.tab, 2 | 3) && v.details.is_none() && v.logs.is_none() => {
                     if v.trace_enabled {
                         match monitor.request(
                             "trace",

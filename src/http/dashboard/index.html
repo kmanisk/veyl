@@ -13,9 +13,9 @@
   <div class="brand"><img src="/dashboard/icon.svg" alt="" width="30" height="30"> Veyl <small>operations</small></div>
   <div id="header-status" class="header-status muted" hidden></div>
   <div class="header-controls" id="controls" hidden>
+    <div class="row" id="trace-controls" hidden><button id="trace-toggle" type="button">Enable local trace</button><span id="trace-state" class="muted"></span></div>
     <button id="theme" type="button">Theme: system</button>
-    <label class="live-toggle"><input type="checkbox" id="live-refresh"> Live refresh</label>
-    <button id="refresh" type="button">Refresh</button>
+    <span id="live-state" class="live-state" role="status">Live</span>
     <button id="logout" type="button">Sign out</button>
   </div>
 </header>
@@ -60,16 +60,18 @@
       </section>
       <section aria-labelledby="diagnostics" class="panel">
         <h2 id="diagnostics">System diagnostics</h2>
-        <p class="muted">On-demand read-only Linux inspection. No continuous polling or GPU wakeup for telemetry.</p>
+        <p class="muted">Read-only Linux diagnostics. The selected subsystem loads automatically and refreshes while visible.</p>
         <form id="diagnostics-form" class="row">
           <label for="diagnostics-section">Subsystem</label>
           <select id="diagnostics-section"><option>resources</option><option>gpu</option><option>storage</option><option>network</option><option>audio</option><option>bluetooth</option><option>desktop</option><option>sway</option><option>services</option></select>
-          <button id="diagnostics-run" type="submit">Inspect</button>
+          <span id="diagnostics-state" class="muted" role="status"></span>
         </form>
-        <pre id="diagnostics-output" aria-live="polite">Select a subsystem and inspect.</pre>
+        <dl id="diagnostics-summary" class="metrics"></dl>
+        <details><summary>Raw JSON</summary><pre id="diagnostics-output">Loading diagnostics…</pre></details>
       </section>
       <section aria-labelledby="jobs" class="panel">
         <h2 id="jobs">Jobs</h2>
+        <p id="job-trace-state" class="muted">Command details are available in the local trace.</p>
         <div id="job-controls" class="row">
           <label for="job-client">Client</label>
           <select id="job-client"></select>
@@ -83,14 +85,15 @@
       <section id="skill-panel" aria-labelledby="skills" class="panel" hidden>
         <h2 id="skills">Skills</h2>
         <p class="muted">Browse validated instruction packages, inspect their contents and grant them individually to clients.</p>
-        <div class="row"><label for="skill-filter">Search skills</label><input id="skill-filter" type="search" placeholder="Name, description, status"><span id="skill-count" class="muted" role="status"></span></div>
-        <form id="import-skill" class="row">
-          <label for="skill-source">Local skill folder</label>
-          <input id="skill-source" placeholder="/absolute/path/skill-name" required>
-          <button type="submit">Import</button>
-        </form>
-        <label for="skill-client">Client for grants</label>
-        <select id="skill-client"></select>
+        <div class="skill-controls section-card">
+          <div class="field"><label for="skill-filter">Search skills</label><input id="skill-filter" type="search" placeholder="Name, description, status"></div>
+          <div class="field"><label for="skill-client">Grant to client</label><select id="skill-client"></select></div>
+          <form id="import-skill" class="skill-import">
+            <div class="field"><label for="skill-source">Local skill folder</label><input id="skill-source" placeholder="/absolute/path/skill-name" required></div>
+            <button type="submit">Import</button>
+          </form>
+          <span id="skill-count" class="muted" role="status"></span>
+        </div>
         <ul id="skill-rows"></ul>
         <pre id="skill-document" hidden></pre>
       </section>
@@ -149,11 +152,11 @@
       </section>
       <section aria-labelledby="audit" class="panel">
         <h2 id="audit">MCP activity</h2>
-        <div class="row" id="trace-controls" hidden><button id="trace-toggle" type="button">Capture local command trace</button><span id="trace-state" class="muted"></span></div>
-        <p class="muted">Live MCP elapsed time updates every second while this view is visible. Enable local command trace to show command arguments here; it may contain secrets. Job execution durations appear separately in Jobs.</p>
-        <div class="row"><span id="activity-active">0 active calls</span><label><input id="show-funnel-admission" type="checkbox"> Show Funnel admissions</label></div>
-        <label for="audit-filter">Filter events</label>
-        <input id="audit-filter" type="search" placeholder="Client, operation, phase…" autocomplete="off">
+        <div class="activity-toolbar">
+          <div class="row"><span id="activity-active">0 active calls</span><label><input id="show-funnel-admission" type="checkbox"> Funnel admissions</label></div>
+          <input id="audit-filter" type="search" aria-label="Filter events" placeholder="Filter client, tool, status…" autocomplete="off">
+        </div>
+        <p class="muted">MCP call duration and job execution duration are tracked separately.</p>
         <div class="table">
           <table>
             <thead><tr><th scope="col">Time</th><th scope="col">Tool / Event</th><th scope="col">Client</th><th scope="col">Status</th><th scope="col">Elapsed</th><th scope="col">Command / Summary</th><th scope="col">Details</th></tr></thead>
@@ -167,12 +170,12 @@
         </details>
       </section>
       <section aria-labelledby="configuration" class="panel">
-        <h2 id="configuration">Configuration and service</h2>
-        <dl id="configuration-summary" class="metrics"></dl>
-        <dl id="integrations-summary" class="metrics"></dl>
+        <h2 id="configuration">Connection &amp; settings</h2>
+        <div class="section-card"><h3>Gateway configuration</h3><dl id="configuration-summary" class="metrics"></dl></div>
+        <div class="section-card"><h3>Service and endpoints</h3><dl id="integrations-summary" class="settings-list"></dl></div>
       </section>
       <section aria-labelledby="protection" class="panel">
-        <h2 id="protection">Broad YOLO protected paths</h2>
+        <h2 id="protection">Access &amp; security</h2>
         <p class="muted">Active isolation mode, system protection boundaries, credential masks, and read-only invariants.</p>
         <div class="protection-grid">
           <div class="section-card">
