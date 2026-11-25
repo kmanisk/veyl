@@ -48,6 +48,8 @@ pub struct Client {
     #[cfg(target_os = "linux")]
     pub job_root: Option<JobRoot>,
     #[cfg(target_os = "linux")]
+    pub job_runtime_limit_seconds: u64,
+    #[cfg(target_os = "linux")]
     pub job_extra_roots: Vec<JobRoot>,
 }
 
@@ -65,6 +67,8 @@ impl Client {
 }
 
 pub struct Configuration {
+    #[cfg(target_os = "linux")]
+    pub(crate) digest: [u8; 32],
     #[cfg(target_os = "linux")]
     pub audit_limits: mcp_gateway::security::audit::AuditLimits,
     pub clients: Vec<Client>,
@@ -338,6 +342,11 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             #[cfg(target_os = "linux")]
             mutation_root,
             #[cfg(target_os = "linux")]
+            job_runtime_limit_seconds: entry
+                .get("job_runtime_limit_seconds")
+                .and_then(Value::as_u64)
+                .unwrap_or(crate::jobs::SHORT_RUNTIME_MAX),
+            #[cfg(target_os = "linux")]
             job_root: if has_job_grant {
                 Some(JobRoot::open(&configured_root)?)
             } else {
@@ -370,6 +379,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
     let protected_paths = crate::protected_paths::Rules::parse(&document)?;
     #[allow(unused_mut)]
     let mut settings = Configuration {
+        #[cfg(target_os = "linux")]
+        digest: Sha256::digest(bytes).into(),
         #[cfg(target_os = "linux")]
         audit_limits: mcp_gateway::security::audit::AuditLimits::from_config(&document)
             .map_err(|error| error.to_string())?,
@@ -429,7 +440,9 @@ fn effective_tools(
     jobs: bool,
     skills: bool,
 ) -> Result<(HashSet<Tool>, Vec<Action>), String> {
-    let allowed = entry["tools"].as_array().ok_or("client tools must be an array")?;
+    let allowed = entry["tools"]
+        .as_array()
+        .ok_or("client tools must be an array")?;
     let mut tools = HashSet::new();
     let mut seen_instruction_run = false;
     for grant in allowed {
@@ -453,14 +466,21 @@ fn effective_tools(
     let mut denied = HashSet::new();
     if let Some(value) = entry.get("deny_tools") {
         for denial in value.as_array().ok_or("deny_tools must be an array")? {
-            let tool = denial.as_str().and_then(Tool::parse).ok_or("unsupported tool denial")?;
+            let tool = denial
+                .as_str()
+                .and_then(Tool::parse)
+                .ok_or("unsupported tool denial")?;
             if !denied.insert(tool) {
                 return Err("duplicate tool denial".into());
             }
         }
     }
     if preset {
-        tools.extend(Tool::ALL.into_iter().filter(|tool| tool.in_yolo_preset(jobs, skills)));
+        tools.extend(
+            Tool::ALL
+                .into_iter()
+                .filter(|tool| tool.in_yolo_preset(jobs, skills)),
+        );
     }
     // A denial covers every name that can perform the denied action.
     tools.retain(|tool| !denied.iter().any(|denial| denial.action() == tool.action()));
@@ -597,10 +617,7 @@ pub fn authenticate(clients: &[Client], header: Option<&HeaderValue>, now: u64) 
     for (index, client) in clients.iter().enumerate() {
         // Inspect every verifier, even after a match.
         let matched: bool = client.digest.ct_eq(&candidate).into();
-        if matched
-            && now < client.expires_at
-            && !client.is_disabled()
-        {
+        if matched && now < client.expires_at && !client.is_disabled() {
             found = Some(index);
         }
     }

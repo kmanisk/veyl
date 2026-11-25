@@ -10,6 +10,7 @@ mod receipt;
 mod recovery;
 mod resources;
 mod runner;
+mod session;
 mod sandbox;
 mod store;
 
@@ -21,10 +22,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use mcp_gateway::security::audit::{AuditAction, AuditLimits, AuditPhase, AuditSink, JobAuditInfo};
 
-pub(crate) use config::{JobRoot, Profiles, parse_settings};
+pub(crate) use config::{
+    EXTENDED_RUNTIME_MAX, JobRoot, Profiles, SHORT_RUNTIME_MAX, parse_settings,
+};
 pub(crate) use resources::verify as verify_scope;
 pub(crate) use runner::run_worker;
-pub(crate) use sandbox::{git_worker, probe as probe_sandbox, probe_worker as probe_sandbox_worker, upstream_worker};
+pub(crate) use sandbox::{
+    git_worker, probe as probe_sandbox, probe_worker as probe_sandbox_worker, upstream_worker,
+};
+pub(crate) use session::Authorization as SessionAuthorization;
 pub(crate) use store::has_unconfined_jobs;
 
 use receipt::Receipt;
@@ -36,7 +42,9 @@ const SHORT_TIMEOUT: u64 = 2;
 #[derive(Clone, Copy)]
 pub(crate) struct JobPolicy<'a> {
     pub yolo: bool,
+    pub session: Option<SessionAuthorization<'a>>,
     pub full: bool,
+    pub job_runtime_limit_seconds: u64,
     pub broad: Option<&'a broad::Broad>,
     /// Some (including an empty slice) requires kernel isolation.
     pub workspace_mounts: Option<&'a [JobRoot]>,

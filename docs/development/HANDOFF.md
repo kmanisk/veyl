@@ -1,5 +1,26 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Persistent process sessions — ready for personal verification
+
+Continue in
+`~/.local/share/veyl-development/candidates/persistent-process.GgGwXhSb/source`
+at base `33e9f56`. Leave the existing production process and other candidates
+alone. The current binaries are copies in `.candidate-preview/sessions/`.
+Run the command in [Process sessions](PROCESS_SESSIONS.md) before handing
+the same source and binary manifests to AGY. All final local gates and
+100 relevant locked cases passed. Use the dedicated hook binary only for
+the audit suite. See [STATUS](STATUS.md) for logs, revisions and remaining
+limitations. Preserve the separately verified extended-runtime implementation.
+
+## Extended-runtime candidate
+
+Continue from the isolated durable-budget candidate documented in STATUS.md
+and EXTENDED_JOBS.md. Require independent acceptance and personal testing
+before merge or install. Do not treat a 24-hour budget test as a 24-hour soak.
+Complete persistent process I/O, durable log/resource budgets, structured Git,
+context/chezmoi inspection and extensions before expanding into Nightshift.
+Updater stays isolated at its prior repair checkpoint.
+
 ## Current continuation checkpoint
 
 Main and origin/main are synchronized at 2d1bd03 before the retention-docs

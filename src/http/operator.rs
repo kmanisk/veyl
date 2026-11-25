@@ -199,10 +199,22 @@ pub(crate) struct PolicyFile {
 
 impl PolicyFile {
     pub(crate) fn lock(path: &Path, exclusive: bool) -> Result<Self, String> {
-        Self::open(path, exclusive).map_err(|_| "Private authorization storage unavailable".into())
+        Self::open(path, exclusive, false).map_err(|_| "Private authorization storage unavailable".into())
     }
 
-    fn open(path: &Path, exclusive: bool) -> io::Result<Self> {
+    pub(crate) fn input_snapshot(path: &Path, digest: &[u8; 32]) -> io::Result<Self> {
+        use sha2::{Digest, Sha256};
+        use subtle::ConstantTimeEq;
+
+        let guard = Self::open(path, false, true)?;
+        let (bytes, _) = guard.admitted_snapshot().map_err(|_| invalid())?;
+        if !bool::from(Sha256::digest(bytes).as_slice().ct_eq(digest)) {
+            return Err(invalid());
+        }
+        Ok(guard)
+    }
+
+    fn open(path: &Path, exclusive: bool, nonblocking: bool) -> io::Result<Self> {
         if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
             return Err(invalid());
         }
@@ -227,6 +239,8 @@ impl PolicyFile {
             &lock,
             if exclusive {
                 FlockOperation::LockExclusive
+            } else if nonblocking {
+                FlockOperation::NonBlockingLockShared
             } else {
                 FlockOperation::LockShared
             },
@@ -505,6 +519,7 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "skills",
         "allowed_servers",
         "allowed_server_tools",
+        "job_runtime_limit_seconds",
     ];
     let allowed = |value: &Value, fields: &[&str]| {
         value
@@ -527,8 +542,20 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
     let version = document["policy_version"].as_u64();
     let entries = document["clients"].as_array().ok_or("Invalid clients")?;
     for entry in entries {
+        if let Some(limit) = entry.get("job_runtime_limit_seconds")
+            && (version != Some(3)
+                || document.get("job_profiles").is_none()
+                || !limit.as_u64().is_some_and(|n| {
+                    (crate::jobs::SHORT_RUNTIME_MAX..=crate::jobs::EXTENDED_RUNTIME_MAX)
+                        .contains(&n)
+                }))
+        {
+            return Err("Extended runtime requires a managed version 3 job policy and a limit from 300 to 86400 seconds".into());
+        }
         if entry.get("native_tool_preset").is_some()
-            && (version != Some(3) || entry["mode"] != "yolo" || entry["native_tool_preset"] != true)
+            && (version != Some(3)
+                || entry["mode"] != "yolo"
+                || entry["native_tool_preset"] != true)
         {
             return Err("Native tool preset requires an explicitly approved YOLO policy".into());
         }

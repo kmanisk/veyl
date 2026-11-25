@@ -20,6 +20,8 @@ const MAX_ARGS: usize = 32;
 const MAX_ARG_BYTES: usize = 1024;
 const MAX_ARGV_BYTES: usize = 8192;
 pub(super) const MAX_OUTPUT: usize = 65_536;
+pub(crate) const SHORT_RUNTIME_MAX: u64 = 300;
+pub(crate) const EXTENDED_RUNTIME_MAX: u64 = 86_400;
 const DEFAULT_OUTPUT: usize = 4096;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -28,6 +30,13 @@ pub(super) struct Profile {
     pub executable: String,
     pub args: Vec<String>,
     pub timeout_seconds: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub interactive: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pty: bool,
+    /// Explicit local operator opt-in; not accepted as an MCP argument.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub extended_runtime: bool,
     #[serde(default = "default_output_limit")]
     pub max_output_bytes: usize,
 }
@@ -48,7 +57,7 @@ impl Profile {
     }
 
     pub fn check_limits(&self) -> io::Result<()> {
-        if !Path::new(&self.executable).is_absolute()
+        if (self.pty && !self.interactive) || !Path::new(&self.executable).is_absolute()
             || self.executable.len() > MAX_ARG_BYTES
             || self.executable.contains('\0')
             || self.args.len() > MAX_ARGS
@@ -57,7 +66,12 @@ impl Profile {
                 .iter()
                 .any(|arg| arg.len() > MAX_ARG_BYTES || arg.contains('\0'))
             || self.args.iter().map(String::len).sum::<usize>() > MAX_ARGV_BYTES
-            || !(1..=300).contains(&self.timeout_seconds)
+            || !(1..=if self.extended_runtime {
+                EXTENDED_RUNTIME_MAX
+            } else {
+                SHORT_RUNTIME_MAX
+            })
+                .contains(&self.timeout_seconds)
             || !(1..=MAX_OUTPUT).contains(&self.max_output_bytes)
         {
             return Err(invalid());
@@ -143,6 +157,8 @@ struct JobClient {
     _native_tool_preset: Option<bool>,
     #[serde(default, rename = "disabled")]
     _disabled: Option<bool>,
+    #[serde(default, rename = "job_runtime_limit_seconds")]
+    _job_runtime_limit_seconds: Option<u64>,
 }
 
 pub(crate) fn parse_settings(bytes: &[u8]) -> Result<(PathBuf, Profiles), String> {
@@ -207,6 +223,10 @@ impl Profiles {
         self.0.get(name).cloned()
     }
 
+    pub(super) fn has_interactive(&self) -> bool {
+        self.0.values().any(|profile| profile.interactive)
+    }
+
     pub(super) fn matching(&self, args: &serde_json::Value) -> Option<(String, Profile)> {
         let args = args
             .as_array()
@@ -216,7 +236,7 @@ impl Profiles {
             return None;
         }
         self.0.iter().find_map(|(name, profile)| {
-            (profile.executable == executable
+            (!profile.interactive && profile.executable == executable
                 && profile.args.len() == args.len() - 1
                 && profile
                     .args
@@ -294,4 +314,43 @@ fn open_directory(path: &Path) -> io::Result<(File, [u64; 2])> {
 
 pub(super) fn restrict_child_privileges() -> io::Result<()> {
     set_no_new_privs(true).map_err(io::Error::from)
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+    #[test]
+    fn long_budget_requires_explicit_operator_profile_opt_in() {
+        let mut profile = Profile {
+            interactive: false,
+            pty: false,
+            executable: "/usr/bin/true".into(),
+            args: vec![],
+            timeout_seconds: 300,
+            extended_runtime: false,
+            max_output_bytes: 4096,
+        };
+        assert!(profile.check_limits().is_ok());
+        profile.timeout_seconds = 301;
+        assert!(profile.check_limits().is_err());
+        profile.extended_runtime = true;
+        assert!(profile.check_limits().is_ok());
+        profile.timeout_seconds = EXTENDED_RUNTIME_MAX;
+        assert!(profile.check_limits().is_ok());
+        profile.timeout_seconds += 1;
+        assert!(profile.check_limits().is_err());
+        profile.timeout_seconds = 0;
+        assert!(profile.check_limits().is_err());
+        let old: Profile = serde_json::from_value(serde_json::json!({
+            "executable": "/usr/bin/true", "args": [], "timeout_seconds": 300
+        }))
+        .unwrap();
+        assert!(!old.extended_runtime);
+        assert!(
+            serde_json::to_value(old)
+                .unwrap()
+                .get("extended_runtime")
+                .is_none()
+        );
+    }
 }

@@ -105,6 +105,10 @@ impl Store {
         &self.path
     }
 
+    pub(super) fn input_key(&self, receipt: &Receipt) -> [u8; 32] {
+        hmac(&self.key, format!("veyl/stdin/v1/{}/{}", receipt.job_id, receipt.launch_nonce).as_bytes())
+    }
+
     pub fn lock(&self, create: bool) -> io::Result<File> {
         self.check_binding()?;
         let lock = match create {
@@ -310,7 +314,7 @@ pub(super) fn hex(bytes: &[u8]) -> String {
     hex
 }
 
-fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
+pub(super) fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
     // HMAC-SHA-256 with a key no longer than the SHA-256 block.
     let mut inner = [0x36; 64];
     let mut outer = [0x5c; 64];

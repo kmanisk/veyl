@@ -1,5 +1,57 @@
 # Gate 3d status
 
+## Persistent process sessions — isolated candidate (2026-11-25)
+
+Base `33e9f56cd2b51dc4f0878237b7971592b9e8c1ff`, version `0.2.5-beta`.
+Candidate source remains uncommitted. The previous pass left closed stdin
+and the operator-verified extended-runtime code. This checkpoint preserves
+that code and adds separately granted `process_start`, `process_input` and
+`shell_reset`, reusing signed job status, logs, cancellation and resource
+scopes. Standard and Broad YOLO pass real pipe and PTY probes. The runner
+accepts sequenced input through MAC-authenticated Unix datagrams with a
+peer proof before input, current policy and expiry checks, bounded writes,
+backpressure, EOF or terminal hangup, and reconnect across gateway restart.
+
+The final build passed formatting, Clippy with warnings denied, offline
+builds and 115 Rust tests. Process sessions 9/9 (13.655 s), extended jobs
+2/2, dynamic jobs 4/4, product 9/9 and Linux 16/16 passed. Ten selected
+locked suites passed 100/100, including 13/13 audit cases with the dedicated
+hook executable. All 28 manifest pins matched. The first locked permission
+run inherited umask 077, which turned its intended 0755 negative fixture
+into 0700. Under umask 022, both the old and current binaries reject the
+actual 0755 fixture, and the final permission suite passed 17/17. Suites
+and harness files were unchanged.
+
+Binary and source manifests and raw logs are under `.candidate-preview/logs/`.
+`mcp-gateway` SHA-256 `dec223ef6dc9f09293ea9fa01e980f2d9a24f163b19dfd75e80fc38e072abe68`.
+Source-manifest SHA-256 `f5e86b51ab299d6fdd19ab2c606c7f5eb4156dd5cbfbf36b6e9aafd02f55358a`.
+Final logs are `cargo-session-peer-proof.log`, `peer-proof-*.log`,
+`locked-jobs-peer-proof.log`, `locked-audit-chain-peer-proof.log` and
+`abstract-peer-binding.log`. The final verification commands exited zero.
+See [Process sessions](PROCESS_SESSIONS.md) for the runnable personal check.
+
+FULL interactive sessions are unavailable. PTY uses a fixed 24×80 terminal,
+a merged UTF-8 output preview and hangup for EOF. The 24-hour budget was
+admitted and exercised without a full-day soak. Personal verification and
+AGY acceptance are pending. No commit, deployment, production restart,
+push, or version change occurred.
+
+## Extended durable execution — isolated candidate (2026-11-25)
+
+Base 33e9f56; source `~/.local/share/veyl-development/candidates/durable-budget.18J5Kerc/source`.
+Explicit managed per-client job runtime limit up to 86400 seconds, optional
+extended named profile opt-in and client-specific task_run schema. Default
+300-second budget, short exec/run limits, exact grants and confinement remain.
+Extended jobs require the existing systemd scope and signed runner.
+Final debug build, formatting, Clippy, extended job integration 2/2,
+dynamic jobs 4/4 and Linux 16/16 passed (`extended-jobs-final-retry.log`).
+Tested actual job execution, cross-client denial, limit reduction, session
+and gateway restart recovery, logs and cancellation with extended budgets;
+not a full-day soak. See EXTENDED_JOBS.md for isolated personal acceptance.
+No production configuration or service change, commit, push or version bump.
+The independent locked suite and AGY acceptance remain pending. Other partial
+parity domains and updater repairs remain separate, unaccepted checkpoints.
+
 ## Artifact retention and updater repair checkpoint (2026-11-25)
 
 `2d1bd03` was pushed and remote main verified. Both TUI regressions passed

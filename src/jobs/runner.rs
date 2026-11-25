@@ -17,6 +17,7 @@ use super::logs::{Log, nonblocking};
 use super::process::{self, Identity, OwnedProcess, TERM_GRACE, TICK};
 use super::receipt::{Receipt, State};
 use super::store::{JobDir, Store};
+use super::session::{Binding, channel::{Channel, Input}, terminal::{SETSID, Terminal}};
 use super::{invalid, record};
 
 pub(super) const WIRE_LIMIT: u64 = 65_536;
@@ -32,6 +33,8 @@ pub(super) struct Launch {
     pub profile: Profile,
     pub job_id: String,
     pub nonce: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<Binding>,
     pub scoped: bool,
     pub yolo: bool,
     pub isolated: bool,
@@ -53,6 +56,9 @@ pub(crate) fn run_worker() -> io::Result<()> {
     }
     let launch: Launch = serde_json::from_slice(&input)?;
     launch.profile.check_limits()?;
+    if launch.profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX && !launch.scoped {
+        return Err(invalid());
+    }
     let store = Store::open(&launch.store, false)?;
     let job = store.job(&launch.job_id)?;
     job.check_worker_lease(io::stdout())?;
@@ -67,6 +73,12 @@ pub(crate) fn run_worker() -> io::Result<()> {
         if receipt.state != State::Starting
             || receipt.runner.is_some()
             || receipt.launch_nonce != launch.nonce
+            || receipt.session != launch.session
+            || launch.session.is_some() != launch.profile.interactive
+            || launch.session.as_ref().is_some_and(|session| {
+                session.pty != launch.profile.pty || session.root != launch.root
+            })
+            || (launch.session.is_some() && (!launch.isolated || !launch.scoped || receipt.full))
             || receipt.root != launch.root.path()
             || receipt.cwd != launch.root.path()
             || receipt.argv_sha256 != launch.profile.argv_hash()
@@ -99,6 +111,15 @@ pub(crate) fn run_worker() -> io::Result<()> {
 
         let start = Instant::now();
         receipt.elapsed_clock = process::ElapsedClock::capture();
+        let pty_args;
+        let (executable, args) = if launch.profile.pty {
+            pty_args = ["--ctty", "--wait", "--", &launch.profile.executable]
+                .into_iter().map(str::to_owned).chain(launch.profile.args.iter().cloned())
+                .collect::<Vec<_>>();
+            (SETSID, &pty_args)
+        } else {
+            (launch.profile.executable.as_str(), &launch.profile.args)
+        };
         let mut sandbox;
         let mut standard;
         let command = if let Some(broad) = &launch.broad {
@@ -109,8 +130,8 @@ pub(crate) fn run_worker() -> io::Result<()> {
             sandbox = match broad.command(
                 launch.root.path(),
                 [workspace.st_dev, workspace.st_ino],
-                &launch.profile.executable,
-                &launch.profile.args,
+                executable,
+                args,
                 true,
             ) {
                 Ok(sandbox) => sandbox,
@@ -122,8 +143,8 @@ pub(crate) fn run_worker() -> io::Result<()> {
                 &launch.root,
                 &cwd,
                 &launch.sandbox_roots,
-                &launch.profile.executable,
-                &launch.profile.args,
+                executable,
+                args,
             ) {
                 Ok(sandbox) => sandbox,
                 Err(_) => return finish(&job, &mut audit, receipt, State::Failed),
@@ -138,27 +159,38 @@ pub(crate) fn run_worker() -> io::Result<()> {
                 .env("LC_ALL", "C");
             &mut standard
         };
-        let mut child = match command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .spawn()
-        {
+        let terminal = if launch.profile.pty {
+            match Terminal::attach(command) {
+                Ok(terminal) => Some(terminal),
+                Err(_) => return finish(&job, &mut audit, receipt, State::Failed),
+            }
+        } else {
+            command
+                .stdin(if launch.session.is_some() { Stdio::piped() } else { Stdio::null() })
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            None
+        };
+        let mut child = match command.process_group(0).spawn() {
             Ok(child) => child,
             Err(_) => return finish(&job, &mut audit, receipt, State::Failed),
         };
         let pid = child.id();
-        let stdout_pipe = child.stdout.take().expect("runner requested stdout pipe");
-        let stderr_pipe = child.stderr.take().expect("runner requested stderr pipe");
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+        let stdin = terminal.map(Input::Pty).or_else(|| child.stdin.take().map(Input::Pipe));
         let process = OwnedProcess::new(child);
+        let channel = match stdin {
+            Some(stdin) => Some(Channel::open(store.input_key(&receipt), stdin)?),
+            None => None,
+        };
         receipt.child = Some(Identity::capture(pid)?);
         receipt.state = State::Running;
         job.save(&receipt)?;
-        (stdout, stderr, (process, stdout_pipe, stderr_pipe, start))
+        (stdout, stderr, (process, stdout_pipe, stderr_pipe, start, channel))
     };
 
-    let (mut process, mut stdout, mut stderr, start) = spawned;
+    let (mut process, mut stdout, mut stderr, start, channel) = spawned;
     let outcome = supervise(
         &job,
         &audit,
@@ -166,6 +198,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
         (&mut stdout_log, &mut stdout),
         (&mut stderr_log, &mut stderr),
         start + Duration::from_secs(launch.profile.timeout_seconds),
+        channel.zip(launch.session.as_ref().map(|session| session.config.as_path())),
     );
     let supervision_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     drop(process);
@@ -193,19 +226,34 @@ fn supervise(
     job: &JobDir<'_>,
     audit: &AuditSink,
     child: &mut OwnedProcess,
-    (stdout_log, stdout): (&mut Log, &mut std::process::ChildStdout),
-    (stderr_log, stderr): (&mut Log, &mut std::process::ChildStderr),
+    (stdout_log, stdout): (&mut Log, &mut Option<std::process::ChildStdout>),
+    (stderr_log, stderr): (&mut Log, &mut Option<std::process::ChildStderr>),
     deadline: Instant,
+    mut input: Option<(Channel, &std::path::Path)>,
 ) -> io::Result<(State, std::process::ExitStatus)> {
-    nonblocking(&*stdout)?;
-    nonblocking(&*stderr)?;
+    if let Some(pipe) = stdout.as_ref() {
+        nonblocking(pipe)?;
+    }
+    if let Some(pipe) = stderr.as_ref() {
+        nonblocking(pipe)?;
+    } else {
+        stderr_log.ended = true;
+    }
     let mut cancel_poll = Instant::now();
     let mut stop = None;
     let mut killed = false;
     let mut status = None;
     loop {
-        let stdout_progress = stdout_log.drain(stdout)?;
-        let stderr_progress = stderr_log.drain(stderr)?;
+        let stdout_progress = if let Some(pipe) = stdout {
+            stdout_log.drain(pipe)?
+        } else {
+            input.as_mut().ok_or_else(invalid)?.0.drain_terminal(stdout_log)?
+        };
+        let stderr_progress = if let Some(pipe) = stderr {
+            stderr_log.drain(pipe)?
+        } else {
+            false
+        };
         let now = Instant::now();
         if stop.is_none() {
             let check_cancel = now >= cancel_poll;
@@ -227,6 +275,9 @@ fn supervise(
                 child.signal_group(Signal::TERM)?;
                 stop = Some((state, now + TERM_GRACE));
             }
+        }
+        if stop.is_none() && let Some((channel, config)) = &mut input {
+            channel.step(config)?;
         }
         if let Some((state, kill_at)) = stop
             && now >= kill_at

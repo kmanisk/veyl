@@ -43,6 +43,17 @@ impl Jobs {
         }
         let root = root.identity();
         root.handle()?;
+        let session = if profile.interactive {
+            if self.scopes.is_none()
+                || policy.full
+                || (policy.broad.is_none() && policy.workspace_mounts.is_none())
+            {
+                return Err(io::Error::from(ErrorKind::Unsupported));
+            }
+            Some(super::session::Binding::new(policy.session.ok_or_else(invalid)?, root, profile.pty))
+        } else {
+            None
+        };
         if let Some(plan) = policy.broad {
             plan.validate()?;
         } else if policy.workspace_mounts.is_some() {
@@ -56,7 +67,10 @@ impl Jobs {
         if let Some(id) = request_id
             && self.store.get_request_id(id)?.is_some()
         {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "Legacy request ID cannot be safely replayed; inspect the original job"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Legacy request ID cannot be safely replayed; inspect the original job",
+            ));
         }
         let request_key = request_id.map(|id| {
             let mut hash = Sha256::new();
@@ -74,15 +88,20 @@ impl Jobs {
                         || receipt.profile != name
                         || receipt.argv_sha256 != profile.argv_hash()
                         || receipt.cwd != root.path()
+                        || receipt.session != session
                         || receipt.timeout_seconds != profile.timeout_seconds
                         || receipt.max_output_bytes != profile.max_output_bytes
                         || receipt.yolo != policy.yolo
                         || receipt.full != policy.full
                         || receipt.broad.as_ref() != policy.broad
-                        || receipt.isolated != (policy.workspace_mounts.is_some() || policy.broad.is_some())
+                        || receipt.isolated
+                            != (policy.workspace_mounts.is_some() || policy.broad.is_some())
                         || receipt.sandbox_roots != sandbox_roots
                     {
-                        return Err(io::Error::new(ErrorKind::InvalidInput, "Request ID already belongs to a different admitted operation"));
+                        return Err(io::Error::new(
+                            ErrorKind::InvalidInput,
+                            "Request ID already belongs to a different admitted operation",
+                        ));
                     }
                     return Ok((receipt, true));
                 }
@@ -91,6 +110,19 @@ impl Jobs {
                     owned += usize::from(receipt.client_id == owner);
                 }
             }
+        }
+        if profile.timeout_seconds > policy.job_runtime_limit_seconds {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Requested job exceeds the locally configured client runtime limit",
+            ));
+        }
+        // Longer unattended work needs a manager-side time and resource backstop.
+        if profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX
+            && (self.scopes.is_none()
+                || (!policy.full && policy.broad.is_none() && policy.workspace_mounts.is_none()))
+        {
+            return Err(io::Error::from(ErrorKind::Unsupported));
         }
         if history_full || global >= GLOBAL_JOBS || owned >= CLIENT_JOBS {
             return Err(io::Error::from(ErrorKind::WouldBlock));
@@ -104,6 +136,7 @@ impl Jobs {
             argv_sha256: profile.argv_hash(),
             executable: Some(profile.executable.clone()),
             root: root.path().to_owned(),
+            session,
             cwd: root.path().to_owned(),
             timeout_seconds: profile.timeout_seconds,
             max_output_bytes: profile.max_output_bytes,
@@ -153,6 +186,7 @@ impl Jobs {
             profile,
             job_id: receipt.job_id.clone(),
             nonce: receipt.launch_nonce.clone(),
+            session: receipt.session.clone(),
             scoped: self.scopes.is_some(),
             yolo: receipt.yolo,
             isolated: receipt.isolated,

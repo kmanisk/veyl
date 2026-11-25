@@ -45,7 +45,7 @@ use mcp_gateway::security::policy::{self, Action, ExecutionMode, Grant, PolicyIn
 
 use crate::file_access::FileAccess;
 #[cfg(target_os = "linux")]
-use crate::jobs::{JobPolicy, Jobs};
+use crate::jobs::{JobPolicy, Jobs, SessionAuthorization};
 use crate::protocol::Protocol;
 use crate::tools::mutation::MutationAudit;
 #[cfg(not(target_os = "linux"))]
@@ -112,10 +112,12 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         match key.to_str() {
             Some("--listen") if listen.is_none() => listen = args.next(),
             Some("--config") if config.is_none() => config = args.next(),
-            _ => return Err(
-                "usage: veyl http --listen 127.0.0.1:PORT --config /absolute/clients.json"
-                    .into(),
-            ),
+            _ => {
+                return Err(
+                    "usage: veyl http --listen 127.0.0.1:PORT --config /absolute/clients.json"
+                        .into(),
+                );
+            }
         }
     }
     let addr: SocketAddr = listen
@@ -301,17 +303,23 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
                                 return dashboard::serve(request, state).await;
                             }
                             serve(
-                                request, state, peer.ip(),
+                                request,
+                                state,
+                                peer.ip(),
                                 #[cfg(target_os = "linux")]
                                 &mut call,
-                            ).await
+                            )
+                            .await
                         })
                         .await;
                         #[cfg(target_os = "linux")]
                         if let Some(call) = call {
                             call.finish(match &result {
-                                Ok(reply) => reply.extensions().get::<activity::Status>()
-                                    .copied().unwrap_or(activity::Status::Failure),
+                                Ok(reply) => reply
+                                    .extensions()
+                                    .get::<activity::Status>()
+                                    .copied()
+                                    .unwrap_or(activity::Status::Failure),
                                 Err(_) => activity::Status::TimedOut,
                             });
                         }
@@ -443,10 +451,15 @@ async fn serve(
         return simple(StatusCode::FORBIDDEN, "Invalid Origin");
     }
     serve_admitted(
-        request, state, peer, false, None,
+        request,
+        state,
+        peer,
+        false,
+        None,
         #[cfg(target_os = "linux")]
         call,
-    ).await
+    )
+    .await
 }
 
 #[cfg(target_os = "linux")]
@@ -594,7 +607,9 @@ async fn serve_admitted(
         if marker {
             #[cfg(target_os = "linux")]
             if let Some(admin) = &state.admin {
-                admin.activity.funnel_admission(None, activity::Status::Failure);
+                admin
+                    .activity
+                    .funnel_admission(None, activity::Status::Failure);
             }
             let _ = audit("funnel.denied");
             return simple(StatusCode::NOT_FOUND, "Not found");
@@ -637,7 +652,9 @@ async fn serve_admitted(
     }
     #[cfg(target_os = "linux")]
     if marker && let Some(admin) = &state.admin {
-        admin.activity.funnel_admission(Some(&client.id), activity::Status::Success);
+        admin
+            .activity
+            .funnel_admission(Some(&client.id), activity::Status::Success);
     }
     let accepted = audit("auth.accepted");
     if !accepted {
@@ -745,7 +762,10 @@ async fn serve_admitted(
         let Ok(worker) = state.tool_workers.clone().try_acquire_owned() else {
             return simple(StatusCode::SERVICE_UNAVAILABLE, "Tool workers busy");
         };
-        *call = state.admin.as_ref().and_then(|admin| admin.activity.start(&client.id, &payload));
+        *call = state
+            .admin
+            .as_ref()
+            .and_then(|admin| admin.activity.start(&client.id, &payload));
         let trace_key = call.as_ref().map(activity::Call::trace_key);
         return match tokio::task::spawn_blocking(move || {
             let _worker = worker;
@@ -786,7 +806,11 @@ async fn serve_admitted(
         };
     }
     dispatch_tools(
-        &mut session.protocol, payload, &state, client, &settings,
+        &mut session.protocol,
+        payload,
+        &state,
+        client,
+        &settings,
         #[cfg(target_os = "linux")]
         None,
     )
@@ -801,9 +825,14 @@ fn dispatch_tools(
     #[cfg(target_os = "linux")] trace_key: Option<(String, Instant)>,
 ) -> Reply {
     #[cfg(target_os = "linux")]
-    let trace = trace_key.filter(|(id, _)| state.admin.as_ref().is_some_and(|admin| {
-        admin.trace.lock().is_ok_and(|mut trace| trace.begin(id, &client.id, &payload))
-    }));
+    let trace = trace_key.filter(|(id, _)| {
+        state.admin.as_ref().is_some_and(|admin| {
+            admin
+                .trace
+                .lock()
+                .is_ok_and(|mut trace| trace.begin(id, &client.id, &payload))
+        })
+    });
     #[cfg(not(target_os = "linux"))]
     let _ = settings;
     let response = protocol.dispatch_with_tools(
@@ -833,7 +862,15 @@ fn dispatch_tools(
             let mut tools: Vec<_> = Tool::ALL
                 .into_iter()
                 .filter(|tool| permit_tool(*tool, client, state, settings, audited, now).is_ok())
-                .map(Tool::schema)
+                .map(|tool| {
+                    let mut schema = tool.schema();
+                    #[cfg(target_os = "linux")]
+                    if matches!(tool, Tool::TaskRun | Tool::ProcessStart) {
+                        schema["inputSchema"]["properties"]["timeout_seconds"]["maximum"] =
+                            serde_json::json!(client.job_runtime_limit_seconds);
+                    }
+                    schema
+                })
                 .collect();
             #[cfg(target_os = "linux")]
             if permit_tool(Tool::UpstreamsCall, client, state, settings, audited, now).is_ok()
@@ -1002,7 +1039,7 @@ fn dispatch_tools(
                 });
             }
             #[cfg(target_os = "linux")]
-            if client.mode.audit_mode().is_some() {
+            if client.mode.audit_mode().is_some() || tool.process_control() {
                 return Some(privileged_tool(
                     state, settings, client, tool, name, args, now,
                 ));
@@ -1032,7 +1069,9 @@ fn dispatch_tools(
                         root,
                         JobPolicy {
                             yolo: false,
+                            session: None,
                             full: false,
+                            job_runtime_limit_seconds: client.job_runtime_limit_seconds,
                             broad: None,
                             workspace_mounts: settings.managed.then_some(&client.job_extra_roots),
                         },
@@ -1060,7 +1099,7 @@ fn dispatch_tools(
     );
 
     #[cfg(target_os = "linux")]
-    if let Some((id,started)) = trace
+    if let Some((id, started)) = trace
         && let Some(admin) = &state.admin
         && let Ok(mut trace) = admin.trace.lock()
     {
@@ -1070,11 +1109,12 @@ fn dispatch_tools(
         None => simple(StatusCode::ACCEPTED, ""),
         Some(response) => {
             #[cfg(target_os = "linux")]
-            let outcome = if response.get("error").is_some() || response["result"]["isError"] == true {
-                activity::Status::Failure
-            } else {
-                activity::Status::Success
-            };
+            let outcome =
+                if response.get("error").is_some() || response["result"]["isError"] == true {
+                    activity::Status::Failure
+                } else {
+                    activity::Status::Success
+                };
             let reply = json_response(StatusCode::OK, response, None);
             #[cfg(target_os = "linux")]
             {
@@ -1098,9 +1138,7 @@ fn privileged_tool(
     args: Option<&Value>,
     now: u64,
 ) -> Value {
-    let Some(mode) = client.mode.audit_mode() else {
-        return tool_text(true, "Privileged execution mode unavailable");
-    };
+    let mode = client.mode.audit_mode().unwrap_or("standard");
     let full = client.mode == ExecutionMode::Full;
     if !state
         .mutations
@@ -1112,7 +1150,8 @@ fn privileged_tool(
         match (state.jobs.as_ref(), client.job_root.as_ref()) {
             (Some(jobs), Some(root)) => {
                 let broad = if client.mode == ExecutionMode::BroadYolo
-                    && matches!(tool.action(), Action::StartJob | Action::RunShortJob)
+                    && (tool.process_control()
+                        || matches!(tool.action(), Action::StartJob | Action::RunShortJob))
                 {
                     crate::jobs::broad::Broad::prepare(state.policy.path(), settings).map(Some)
                 } else {
@@ -1125,10 +1164,18 @@ fn privileged_tool(
                         &client.id,
                         root,
                         JobPolicy {
-                            yolo: !full,
+                            yolo: client.mode.audit_mode().is_some() && !full,
                             full,
+                            session: tool.process_control().then_some(SessionAuthorization {
+                                config: state.policy.path(),
+                                digest: &settings.digest,
+                                expires_at: client.expires_at,
+                            }),
+                            job_runtime_limit_seconds: client.job_runtime_limit_seconds,
                             broad: broad.as_ref(),
-                            workspace_mounts: (!full && broad.is_none())
+                            workspace_mounts: (!full
+                                && broad.is_none()
+                                && (settings.managed || client.mode.audit_mode().is_some()))
                                 .then_some(&client.job_extra_roots),
                         },
                     ),
@@ -1257,17 +1304,38 @@ fn permit_tool(
     if !client.tools.contains(&tool) || !authorized(client, tool.action(), state, audited, now) {
         return Err(DENIED);
     }
+    if matches!(tool, Tool::ProcessInput | Tool::ShellReset)
+        && (!client.tools.contains(&Tool::ProcessStart)
+            || !authorized(client, Action::ProcessStart, state, audited, now))
+    {
+        return Err(DENIED);
+    }
+    if tool == Tool::ShellReset && !authorized(client, Action::CancelJob, state, audited, now) {
+        return Err(DENIED);
+    }
     if tool_available(tool, client, state, settings) {
         return Ok(());
     }
     #[cfg(target_os = "linux")]
-    if matches!(tool.action(), Action::WriteFile | Action::ApplyPatch) && !state.mutations.available() {
+    if matches!(tool.action(), Action::WriteFile | Action::ApplyPatch)
+        && !state.mutations.available()
+    {
         return Err("Audit intent unavailable");
     }
     Err(DENIED)
 }
 
 fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configuration) -> bool {
+    if tool.process_control() {
+        #[cfg(target_os = "linux")]
+        return settings.managed
+            && !matches!(client.mode, ExecutionMode::Full)
+            && client.job_root.is_some()
+            && state.jobs.as_ref().is_some_and(Jobs::sessions_available)
+            && state.mutations.available();
+        #[cfg(not(target_os = "linux"))]
+        return false;
+    }
     if matches!(tool, Tool::SkillsList | Tool::SkillsRead) {
         #[cfg(target_os = "linux")]
         return settings.skills.is_some() && state.mutations.available();

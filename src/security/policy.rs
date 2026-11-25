@@ -29,6 +29,9 @@ pub enum Action {
     RunCommand,
     RunShortJob,
     StartJob,
+    ProcessStart,
+    ProcessInput,
+    ShellReset,
     JobStatus,
     JobLogs,
     CancelJob,
@@ -43,6 +46,9 @@ impl Action {
             self,
             Self::RunShortJob
                 | Self::StartJob
+                | Self::ProcessStart
+                | Self::ProcessInput
+                | Self::ShellReset
                 | Self::JobStatus
                 | Self::JobLogs
                 | Self::CancelJob

@@ -1,5 +1,24 @@
 # BridgeDev capability comparison
 
+## Persistent process candidate (2026-11-25)
+
+The isolated candidate adds explicitly granted `process_start`,
+`process_input` and `shell_reset` with pipe and kernel PTY profiles. Existing
+owner-scoped `job_status`, `job_logs`, `list_jobs` and `job_cancel` provide
+inspection, incremental output, listing and termination. Sessions retain shell
+state and reconnect to their signed job across a gateway restart. Managed
+profiles support explicit budgets up to 24 hours. This is verified candidate
+functionality and awaits personal and independent acceptance.
+
+BridgeDev's `run_command` keeps an implicit working directory and its
+`shell_status` shows command history. Veyl names sessions by job ID and
+keeps actual process state. One-shot commands stay one-shot. Veyl retains
+signed history rather than providing a `clear_processes` equivalent. FULL
+interactive sessions, binary terminal streaming, terminal resizing and leased
+root operations remain outside this checkpoint. See
+[Process sessions](development/PROCESS_SESSIONS.md) for the verification and
+the interface. The table below describes the historical baseline.
+
 ## Planning score (2026-11-25)
 
 BridgeDev is the 100% comparison reference. With seven equally weighted

@@ -38,10 +38,13 @@ pub(crate) enum Tool {
     ExecCommand,
     JobWait,
     TaskRun,
+    ProcessStart,
+    ProcessInput,
+    ShellReset,
 }
 
 impl Tool {
-    pub(crate) const ALL: [Self; 30] = [
+    pub(crate) const ALL: [Self; 33] = [
         Self::ReadFile,
         Self::SearchFiles,
         Self::GitInspect,
@@ -72,6 +75,9 @@ impl Tool {
         Self::ExecCommand,
         Self::JobWait,
         Self::TaskRun,
+        Self::ProcessStart,
+        Self::ProcessInput,
+        Self::ShellReset,
     ];
 
     pub(crate) fn parse(name: &str) -> Option<Self> {
@@ -110,6 +116,9 @@ impl Tool {
             Self::ExecCommand => "exec_command",
             Self::JobWait => "job_wait",
             Self::TaskRun => "task_run",
+            Self::ProcessStart => "process_start",
+            Self::ProcessInput => "process_input",
+            Self::ShellReset => "shell_reset",
         }
     }
 
@@ -142,6 +151,9 @@ impl Tool {
             Self::ExecCommand => Action::RunShortJob,
             Self::JobWait => Action::JobStatus,
             Self::TaskRun => Action::StartJob,
+            Self::ProcessStart => Action::ProcessStart,
+            Self::ProcessInput => Action::ProcessInput,
+            Self::ShellReset => Action::ShellReset,
         }
     }
 
@@ -161,6 +173,10 @@ impl Tool {
         )
     }
 
+    pub(crate) fn process_control(self) -> bool {
+        matches!(self, Self::ProcessStart | Self::ProcessInput | Self::ShellReset)
+    }
+
     pub(crate) fn in_yolo_preset(self, jobs: bool, skills: bool) -> bool {
         match self.action() {
             Action::ReadFile
@@ -174,7 +190,7 @@ impl Tool {
             | Action::WriteFile
             | Action::ApplyPatch => true,
             Action::ListSkills | Action::ReadSkill => skills,
-            action if action.is_job() => jobs,
+            action if action.is_job() => jobs && !self.process_control(),
             _ => false,
         }
     }
@@ -415,6 +431,36 @@ impl Tool {
                     "timeout_seconds": {"type": "integer", "default": 120, "minimum": 1, "maximum": 300}
                 }),
                 json!([]),
+                false,
+            ),
+            Self::ProcessStart => (
+                self.name(),
+                "Start an explicitly approved persistent pipe or PTY session. Use process_input, job_status, job_logs and job_cancel with the returned job_id.",
+                json!({
+                    "profile": {"type": "string"},
+                    "request_id": {"type": "string"},
+                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300}
+                }),
+                json!(["profile"]),
+                false,
+            ),
+            Self::ProcessInput => (
+                self.name(),
+                "Send up to 4096 UTF-8 bytes or EOF (PTY hangup) with the current sequence. Supply job_id alone to query the sequence after reconnect or uncertain delivery.",
+                json!({
+                    "job_id": id,
+                    "sequence": {"type": "integer", "minimum": 0},
+                    "data": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "eof": {"type": "boolean", "const": true}
+                }),
+                json!(["job_id"]),
+                false,
+            ),
+            Self::ShellReset => (
+                self.name(),
+                "Cancel an owned persistent process session and start one fresh instance of its original profile.",
+                json!({"job_id": id}),
+                json!(["job_id"]),
                 false,
             ),
             Self::JobStatus => (
