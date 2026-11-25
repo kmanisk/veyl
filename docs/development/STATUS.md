@@ -1,5 +1,83 @@
 # Gate 3d status
 
+## TUI regression correction (2026-11-25)
+
+BridgeDev independently confirmed AGY's two compatibility failures and fixed
+only the active-tab palette and filter label. The existing Linux integration
+suite is unchanged; the new selection regression asserts the restored label.
+Exact candidate: `~/.local/share/veyl-development/candidates/tui-regression.Ee2eTBot/source`.
+Offline build, formatting, Clippy, monitor unit tests 9/9, Linux 16/16 and
+dynamic jobs 4/4 passed (BridgeDev process `mwvp1hf7-pxsz3f`). AGY's prior
+287 locked passes apply to 7c2db86, not a fresh full run of this correction.
+Operator authorized source push; no new binary installed or version bumped.
+Updater remains blocked; next parity milestone is persistent process and
+durable execution.
+
+## AGY independent verification of TUI, preview and updater (2026-11-25)
+
+Target checkout: local `main` at `7c2db86edff8a51a090dc9ba582170a7935d3c56`
+(version `0.2.5-beta`). Production remains untouched (`mcp-gateway` and `veyl`
+at `2ba71c1`, `veyl-monitor` at `7c2db86`, `mcp-gateway.service` PID `330421`,
+`chatgpt=yolo` with 28 tool grants, `codex=standard`, `agy=standard`).
+`origin/main` was NOT updated because `7c2db86` fails `tests/linux_features.py`.
+
+1. **TUI independent acceptance (`target/agy-7c2db86-tui.log`) — PARTIAL / BLOCKED FROM PUSH:**
+   - Real PTY verification passed: simplified masthead (`Veyl  0.2.5-beta` and
+     `Veyl / preview` with `LIVE`), responsive sizing (`10x28`/`10x40` resize
+     banner, `18x50`, `36x160`), keyboard/tab/`Tab`/mouse tab switching,
+     contextual footer shortcuts, Health `Recent MCP sessions` (30-min expiry)
+     vs `Open MCP connections`, Clients `recent=` count, opening Details (`Enter`)
+     and Logs (`l`) from the 3rd entry with scrolling and `Esc` preserving
+     selection, filter and record identity, and selection stability across
+     concurrent MCP calls and jobs.
+   - **Blocking regression (`tests/linux_features.py` 15/16, 1 FAIL, `target/agy-7c2db86-linux.log`):**
+     `test_monitor_pairing_views_and_keyboard` fails on two incompatibilities
+     introduced in `7c2db86`: (a) `src/bin/monitor_tui/mod.rs:779` switches the
+     active tab to `\x1b[1;7m` (reverse video), violating the terminal palette
+     invariant (`allowed = {0,1,2,4,31,32,33,36,39}`) and removing
+     `\x1b[1;4;33m`; (b) `src/bin/monitor_tui/mod.rs:803-805` renders `/ <query>`
+     instead of `Filter: <query>`, breaking the PTY filter assertion.
+
+2. **Development preview pipeline (`target/agy-7c2db86-preview-cdp.log`) — PASS:**
+   - `tests/test_dashboard_preview.py` (1/1) plus isolated Brave CDP check of
+     `tests/dashboard_preview.py` passed: `DEVELOPMENT PREVIEW` banner, live
+     auto-reload on HTML, CSS and JS changes, all 9 diagnostic subsystems,
+     marketplace bundled SVG icons (zero external images), theme toggle, POST
+     and invalid Host rejection (403), hidden file refusal (404), port conflict
+     handling, and clean restart recovery.
+
+3. **Pending native updater (`target/update-ui.RH8qSZQf/source`) — BLOCKED (DO NOT MERGE):**
+   - Audit + probes (`target/agy-updater-probe.log`, `target/agy-updater-systemd.log`)
+     found blocking defects: (a) Cargo hardlinks `target/release/veyl` (`nlink=2`),
+     causing `read_owned()` (`st_nlink != 1`) to fail `README.md`'s `--from-dir
+     target/release` workflow (`Refusing linked, unsafe or non-owned file`);
+     (b) `systemctl --user stop` leaves a crashed `failed` unit in
+     `ActiveState=failed`, causing `service_cli::update_stop()` (`!= "inactive"`)
+     to abort automatic rollback before `change.restore()` runs;
+     (c) `.veyl-update-<nonce>` stage dirs in `~/.local/bin` / `~/.cargo/bin` are
+     never cleaned up on failure or success; (d) `install()` only scans dirs
+     containing `veyl`, requires active `systemd --user` even for non-service
+     `--from-dir`, rejects >32 MiB debug builds, and `/releases/latest` +
+     `version_key` exclude GitHub prereleases and `-alpha`/`-rc` tags;
+     (e) no integration test covers `install()`, service restart, active-job
+     blocking, or partial rollback.
+
+4. **Regression, 28 tools & 9 diagnostics:**
+   - Clean: `cargo fmt -- --check`, `cargo clippy --all-targets -- -D warnings`,
+     `node --check`, 28/28 locked SHA-256 pins and 287/287 locked cases
+     (`target/agy-7c2db86-locked-28.log`), draft three-mode suite 6/6
+     (`target/agy-7c2db86-pass4.log`), `product_features.py` 9/9,
+     `permission_modes.py` 5/5, `activity_features.py` 3/3, `dynamic_jobs.py`
+     4/4, `job_streams.py` 1/1, `systemd_lifecycle.sh` PASS, and
+     `onboarding_browser.py` PASS using `MCP_GATEWAY_BIN=target/debug/mcp-gateway`
+     (note `target/release/mcp-gateway` on disk is stale 0.2.4-beta).
+   - Rust `cargo test --offline --locked`: first run hit a transient Bubblewrap
+     error in `tests/onboarding.rs::mode_transitions_and_full_confirmation_workflow`
+     (108/109, `target/agy-7c2db86-rust-test.log`); rerun passed 109/109
+     (`target/agy-7c2db86-rust-test-2.log`).
+   - Verified all 28 advertised MCP tools and all 9 `system_inspect` subsystems
+     on an isolated YOLO+jobs+skills gateway (`target/agy-7c2db86-tui.log`).
+
 ## TUI preview and mandatory operator acceptance (2026-11-25)
 
 Candidate `target/dev-preview.oTcBcNyB/source`, based on 2ba71c1.

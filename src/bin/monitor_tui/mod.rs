@@ -776,7 +776,7 @@ impl View {
                     break;
                 }
                 out.push_str(if *tab == self.tab {
-                    "\x1b[1;7m"
+                    "\x1b[1;4;33m"
                 } else {
                     "\x1b[2m"
                 });
@@ -801,7 +801,7 @@ impl View {
                 context.push_str(&format!("  |  {}", self.client.as_deref().unwrap_or("-")));
             }
             if !self.filter.is_empty() {
-                context.push_str(&format!("  / {}", self.filter));
+                context.push_str(&format!("  Filter: {}", self.filter));
             }
             if self.tab == 3 && self.details.is_none() {
                 let calls = self.health["active_calls"].as_u64().unwrap_or(0);

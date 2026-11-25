@@ -1,5 +1,38 @@
 # Gateway Milestone 1 — Working Handoff
 
+## TUI regression correction
+
+The two AGY TUI blockers below are resolved in the corrected candidate;
+Linux 16/16, dynamic jobs 4/4 and monitor 9/9 pass. Keep the exact operator
+preview/approval gate for any new deployment. The updater is a separate
+unaccepted security-sensitive candidate.
+
+## Independent verification handoff for `7c2db86` and pending updater (2026-11-25)
+
+- **Push status**: Local `main` (`7c2db86`) was **NOT** pushed to `origin/main`
+  (`2ba71c1`) because `tests/linux_features.py::test_monitor_pairing_views_and_keyboard`
+  failed on reverse video `\x1b[1;7m` (must inherit terminal background with
+  `\x1b[1;4;33m`) and filter text `/ <query>` vs `Filter: <query>`. Fix those
+  in an isolated candidate, re-verify via `veyl-monitor` preview + full
+  `linux_features.py`, and obtain operator acceptance before pushing.
+- **Development preview**: `tests/dashboard_preview.py` and `tests/test_dashboard_preview.py`
+  passed full Brave CDP verification (HTML/CSS/JS live reload, 9 diagnostic views,
+  marketplace icons, theme toggle, isolation/mutation rejection, port conflicts,
+  stop/restart recovery). Keep the runnable preview workflow mandatory for all
+  future changes (see `docs/development/PREVIEW.md`).
+- **Pending updater (`target/update-ui.RH8qSZQf/source`)**: Held from merge/release.
+  Codex must resolve: Cargo `st_nlink=2` rejection breaking `--from-dir target/release`,
+  `update_stop()` aborting rollback when a crashed unit stays in `ActiveState=failed`,
+  `.veyl-update-<nonce>` stage directory cleanup, multi-dir `mcp-gateway`/`veyl-monitor`
+  coverage + non-systemd `--from-dir` support + prerelease/version tag handling,
+  and add isolated end-to-end updater + rollback integration tests.
+- **Parity matrix**: Updated `docs/PARITY.md` against current BridgeDev source
+  (`persistent-shell.ts`, `shell.ts`, `git.ts`, `checkpoint.ts`, `rewind.ts`,
+  `chezmoi.ts`, `context.ts`, `extensions.ts`, `host-controller.ts`). Next parity
+  work remains persistent shell/process supervision, structured Git mutations,
+  multi-hour/checkpoint/rewind Nightshift execution, chezmoi drift guard, project
+  skill/rule/memory loading, and extension proposals.
+
 ## Approved TUI and preview checkpoint
 
 The operator approved the compact TUI and selection fix. See STATUS.md and

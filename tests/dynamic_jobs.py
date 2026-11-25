@@ -173,13 +173,13 @@ class DynamicJobs(unittest.TestCase):
             for _ in range(3):
                 self.call("job_status", {"job_id": completed["job_id"]})
             os.write(terminal, b"/job_status\r")
-            screen_until(lambda s: b"Veyl / activity" in s and b"/ job_status" in s and b"selected 1" in s and s.count(b"job_status") >= 4)
+            screen_until(lambda s: b"Veyl / activity" in s and b"Filter: job_status" in s and b"selected 1" in s and s.count(b"job_status") >= 4)
             os.write(terminal, b"jj")
-            screen_until(lambda s: b"Veyl / activity" in s and b"/ job_status" in s and b"selected 3" in s)
+            screen_until(lambda s: b"Veyl / activity" in s and b"Filter: job_status" in s and b"selected 3" in s)
             os.write(terminal, b"\r")
             screen_until(lambda s: b"Details & Parameters" in s and b"job_status" in s)
             os.write(terminal, b"jjj\x1b")
-            screen_until(lambda s: b"Veyl / activity" in s and b"/ job_status" in s and b"selected 3" in s)
+            screen_until(lambda s: b"Veyl / activity" in s and b"Filter: job_status" in s and b"selected 3" in s)
             os.write(terminal, b"q")
         finally:
             os.close(terminal)

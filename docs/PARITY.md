@@ -1,5 +1,28 @@
 # BridgeDev capability comparison
 
+## v0.2.5-beta (checkpoint `7c2db86`) — verified parity & remaining gaps
+
+Compared current Veyl (`/home/onyx/Projects/veyl`, `7c2db86`) against BridgeDev
+(`/home/onyx/Projects/bridge-dev`). Veyl exposes 28 native MCP tools under
+Broad YOLO with jobs+skills (`apply_patch`, `cancel_job`, `create_directory`,
+`directory_tree`, `edit_file`, `exec_command`, `file_info`, `git_inspect`,
+`job_cancel`, `job_logs`, `job_start`, `job_status`, `job_wait`,
+`list_directory`, `list_jobs`, `project_context`, `read_file`, `run_command`,
+`search_files`, `service_status`, `skills_list`, `skills_read`, `start_job`,
+`system_context`, `system_info`, `system_inspect`, `task_run`, `write_file`) and
+9 `system_inspect` subsystems (`resources`, `gpu`, `storage`, `network`, `audio`,
+`bluetooth`, `desktop`, `sway`, `services`), all verified in `target/agy-7c2db86-tui.log`.
+
+| Domain | BridgeDev reference (`bridge-dev/src/`) | Veyl status (`7c2db86`) | Remaining gap |
+| --- | --- | --- | --- |
+| Confined file tools & directory tree | `filesystem.ts`, `safe-edit.ts`, `patch.ts` | IMPLEMENTED (`read_file`, `write_file`, `apply_patch`, `edit_file`, `file_info`, `list_directory`, `directory_tree`, `create_directory`, `search_files`) | Hash-free `edit_file` vs BridgeDev chezmoi-guard (`chezmoi-guard.ts`) and automatic pre-edit file checkpoints (`checkpoint.ts`). |
+| Persistent shell & process supervision | `shell.ts`, `persistent-shell.ts`, `global-shell-state.ts`: `run_command` (stateful cwd), `shell_status`, `shell_reset`, `start_process`, `process_status`, `process_output`, `stop_process`, `clear_processes` | PARTIAL (`exec_command`, `run_command`, `start_job`, `job_start`, `task_run`, `job_status`, `job_logs`, `job_wait`, `job_cancel`, `cancel_job`, `list_jobs`) | No persistent stateful shell session (`shell_status`, `shell_reset`, sticky `cwd` across calls) and no interactive background process API (`start_process` / `process_output` / `stop_process` / `clear_processes`); Veyl uses one-shot supervised jobs instead. |
+| Structured Git workflows | `git.ts`: `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_restore`, `git_push`, `git_pull`, `git_stash`, `git_reset` | PARTIAL (`git_inspect` read-only offline Bubblewrap snapshot for `info`/`status`/`diff`/`history`) | No discrete structured Git mutation/remote tools (`git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_restore`, `git_stash`, `git_reset`, `git_pull`, `git_push`) or `ephemeral_worktree: true` execution (`task_run` rejects `ephemeral_worktree=true`). |
+| Durable execution & task budgets | `jobs.ts` (`system_job` up to `86400s` via systemd), `host-controller.ts` (leased host-root up to `7200s`) | PARTIAL (signed Bubblewrap / FULL supervisor capped at `timeout_seconds: 300`, `live_elapsed_ms`, independent stdout/stderr cursors, `request_id` idempotency) | Maximum task timeout is 300s (no operator-approved multi-hour 2h–24h budget), no `node_repl`, and no host-controller lease equivalent outside `FULL` mode. |
+| Nightshift & checkpoints/rewind | `checkpoint.ts`, `rewind.ts` (`rewind` list/preview/restore/status/clear), `ponytail.ts` | NOT IMPLEMENTED as orchestration (`task_run` + `job_wait` + `tests/bridgedev_parity_and_nightshift.rs` cover primitives only) | No pre-edit file checkpoint store, `rewind` rollback tool, or autonomous multi-iteration Nightshift orchestration / stall recovery. |
+| System & context inspection | `system.ts`, `system-inspect.ts`, `context.ts` (`list_skills`, `load_skill`, `project_context`, `system_context`, `load_path_rules`, `remember`), `chezmoi.ts` (`chezmoi_inspect`) | PARTIAL (`system_info`, `system_inspect` 9 sections, `service_status`, `project_context`, `system_context`, `skills_list`, `skills_read`) | Missing `chezmoi_inspect` drift guard (source resolution, `.tmpl` & dirty Git checks), repo-local `.claude`/`.agents`/`.gemini` skill discovery, `load_path_rules`, and `remember` auto-memory. |
+| Extensions, marketplace & preview | `extensions.ts` (`extensions_*`, `mcp_*`, `skills_validate`, `*_propose_*`), `marketplace.ts` | PARTIAL (106-entry bundled marketplace, custom upstream registration/probe/grants, `tests/dashboard_preview.py` auto-reload preview) | No MCP `extensions_propose_*` / `mcp_propose_*` / `skills_propose_*` proposal workflow tools, no `skills_validate` MCP tool, and no bundled package install/REA Node tree mounting. |
+
 ## v0.2.4-beta — production-verified capability checkpoint
 
 The production gateway now runs the unified Standard/YOLO/FULL permission
