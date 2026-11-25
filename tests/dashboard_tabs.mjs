@@ -76,8 +76,8 @@ try {
   assert.ok(!(await evaluate("document.querySelector('#audit-rows').innerHTML")).includes("BROWSER_SYNTHETIC_CREDENTIAL"));
   assert.match(await evaluate("document.querySelector('#audit-rows td').textContent"), /[AP]M$/);
   assert.equal(await evaluate("document.querySelector('#live-refresh') === null"), true);
-  assert.equal(await evaluate("document.querySelector('#live-state').textContent"), "Live");
-  assert.equal(await evaluate("document.querySelector('#header-active-count').textContent"), "0");
+  assert.equal(await evaluate("document.querySelector('#live-state') === null && document.querySelector('#header-status') === null"),true);
+  assert.equal(await evaluate("document.querySelector('#trace-toggle svg') !== null && document.querySelector('#trace-toggle').getAttribute('aria-pressed') === 'false'"),true);
   assert.equal(await evaluate("formatDuration(42)"), "42 ms");
   assert.equal(await evaluate("formatDuration(1234)"), "1.234 s");
   assert.equal(await evaluate("formatDuration(62345)"), "1m 2.345s");
@@ -97,8 +97,11 @@ try {
   assert.ok(Number.isInteger(details.duration_ms));
   await evaluate("document.querySelector('#detail-close').click()");
   assert.equal(await evaluate("document.querySelector('#detail-dialog').open"),false);
-  await evaluate("document.querySelector('#theme').click()");
+  await evaluate("theme='light';applyTheme();document.querySelector('#theme').click()");
   assert.equal(await evaluate("document.documentElement.dataset.theme"),"dark");
+  assert.equal(await evaluate("document.querySelector('#theme svg') !== null"),true);
+  await evaluate("document.querySelector('#theme').click()");
+  assert.equal(await evaluate("document.documentElement.dataset.theme"),"light");
   assert.equal(await evaluate("document.querySelector('link[rel=icon]').getAttribute('href')"),"/dashboard/icon.svg");
   await evaluate("document.querySelector('nav a[href=\"#diagnostics\"]').click()");
   assert.deepEqual(await evaluate(visible),["diagnostics"]);
@@ -107,12 +110,26 @@ try {
   await evaluate("document.querySelector('#diagnostics-section').value='storage';document.querySelector('#diagnostics-section').dispatchEvent(new Event('change'))");
   await until(()=>evaluate("!!JSON.parse(document.querySelector('#diagnostics-output').textContent).sections.storage"));
   assert.equal(await evaluate("document.querySelector('#diagnostics-run') === null"), true);
+  for (const section of ["resources","gpu","storage","network","audio","bluetooth","desktop","sway","services"]) {
+    await evaluate("document.querySelector('#diagnostics-section').value="+JSON.stringify(section)+";document.querySelector('#diagnostics-section').dispatchEvent(new Event('change'))");
+    await until(()=>evaluate("(()=>{try{return !!JSON.parse(document.querySelector('#diagnostics-output').textContent).sections["+JSON.stringify(section)+"] && document.querySelectorAll('#diagnostics-summary .diag-card').length>0}catch{return false}})()"));
+    assert.equal(await evaluate("document.querySelector('#diagnostics-summary').textContent.includes('entries · see Raw JSON')"),false);
+  }
+  await evaluate("renderDiagnostics('network',{available:true,items:[{interface:'test0',state:'up',mtu:1500,carrier:true,rx_bytes:1048576,tx_bytes:2048}]})");
+  assert.match(await evaluate("document.querySelector('#diagnostics-summary').textContent"),/test0.*1.00 MiB.*2.00 KiB/);
+  await evaluate("renderDiagnostics('gpu',{available:true,items:[{pci_address:'test',runtime_status:'suspended',busy_percent:null,vram_total_bytes:null}]})");
+  assert.equal(await evaluate("document.querySelectorAll('#diagnostics-summary progress').length"),0);
+  await evaluate("renderDiagnostics('sway',{available:false,reason:'No compositor'})");
+  assert.match(await evaluate("document.querySelector('#diagnostics-summary').textContent"),/No compositor/);
   assert.match(await evaluate("modeSummary([{id:'chatgpt',mode:'yolo'},{id:'codex',mode:'standard'},{id:'agy',mode:'standard'}])"), /YOLO: chatgpt · Standard: codex, agy/);
   assert.equal(await evaluate("commandPreview(jobTrace([{job_id:'a',client:'x',arguments:{command:'echo test'}}],{job_id:'a',client:'x'}))"), "echo test");
   assert.equal(await evaluate("jobTrace([{job_id:'a',client:'x'}],{job_id:'a',client:'y'}) === undefined"), true);
   await evaluate("document.querySelector('nav a[href=\"#marketplace\"]').click()");
   await until(()=>evaluate("document.querySelectorAll('#catalog-cards article').length === 20"));
   assert.match(await evaluate("document.querySelector('#catalog-count').textContent"), /106 matching resources/);
+  assert.equal(await evaluate("document.querySelectorAll('#catalog-cards article svg.catalog-icon[aria-hidden=true]').length"),20);
+  assert.ok(await evaluate("new Set(Array.from(document.querySelectorAll('#catalog-cards svg path'),p=>p.getAttribute('d'))).size > 3"));
+  assert.equal(await evaluate("document.querySelectorAll('#catalog-cards img, #catalog-cards svg image').length"),0);
   const first = await evaluate("document.querySelector('#catalog-cards article').dataset.entry");
   await evaluate("document.querySelector('#catalog-next').click()");
   assert.notEqual(await evaluate("document.querySelector('#catalog-cards article').dataset.entry"), first);

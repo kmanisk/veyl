@@ -1,5 +1,13 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Same-version dashboard checkpoint
+
+See STATUS.md for the compact dashboard, nine subsystem views and marketplace
+icons. Public release v0.2.5-beta remains immutable; development deployments
+retain this version until the operator authorizes a bump. The updater is
+isolated in `target/update-ui.RH8qSZQf/source`, pending independent security
+review after AGY quota exhaustion. Do not overwrite that candidate.
+
 ## v0.2.5-beta operator UI release checkpoint
 
 Source and verification receipts: `target/operator-ui.hRrNjrGW/source`.

@@ -1,5 +1,24 @@
 # Gate 3d status
 
+## 2026-11-25 — same-version dashboard refinement
+
+Operator authorized source push and local deployment without a version bump.
+The dashboard now renders structured diagnostic cards for all nine subsystems,
+with memory/swap/VRAM meters when telemetry exists, compact pressure rows,
+explicit unavailable states and expandable complete JSON. Header removes
+operations, client-mode and live-status text; theme and local trace use
+accessible icon controls. Automatic visibility-aware refresh, paired-local
+trace opt-in and expiry, and read-only probes remain unchanged. Marketplace
+uses bundled category SVG icons, not third-party images.
+
+Only dashboard assets and browser assertions are included in this checkpoint;
+backend permissions and service/job logic retain the accepted 0.2.5-beta code.
+The separate updater candidate remains at
+`target/update-ui.RH8qSZQf/source`: AGY hit its quota before independent
+security acceptance of the updater. Do not merge or install that mechanism
+until reviewed. No release tag, published assets or crate version are changed.
+UI validation receipt: `target/dashboard-only.fCGg9qGY/source/ui-validation.log`.
+
 ## 2026-11-25 — operator UI and explicit shared mode candidate
 
 Isolated worktree `target/operator-ui.hRrNjrGW/source` at release base

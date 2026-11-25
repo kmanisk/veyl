@@ -10,12 +10,17 @@
 </head>
 <body>
 <header class="masthead">
-  <div class="brand"><img src="/dashboard/icon.svg" alt="" width="30" height="30"> Veyl <small>operations</small></div>
-  <div id="header-status" class="header-status muted" hidden></div>
+  <div class="brand"><img src="/dashboard/icon.svg" alt="" width="30" height="30"> Veyl</div>
   <div class="header-controls" id="controls" hidden>
-    <div class="row" id="trace-controls" hidden><button id="trace-toggle" type="button">Enable local trace</button><span id="trace-state" class="muted"></span></div>
-    <button id="theme" type="button">Theme: system</button>
-    <span id="live-state" class="live-state" role="status">Live</span>
+    <div id="trace-controls" hidden>
+      <button id="trace-toggle" class="icon-button" type="button" aria-label="Enable local trace" title="Enable local trace" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v14H3z M7 9l3 3-3 3 M13 15h4"/></svg>
+      </button>
+      <span id="trace-state" class="sr-only" role="status"></span>
+    </div>
+    <button id="theme" class="icon-button" type="button" aria-label="Switch theme" title="Switch theme">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path id="theme-glyph" d="M20 15a9 9 0 0 1-11-11 9 9 0 1 0 11 11z"/></svg>
+    </button>
     <button id="logout" type="button">Sign out</button>
   </div>
 </header>
@@ -60,14 +65,13 @@
       </section>
       <section aria-labelledby="diagnostics" class="panel">
         <h2 id="diagnostics">System diagnostics</h2>
-        <p class="muted">Read-only Linux diagnostics. The selected subsystem loads automatically and refreshes while visible.</p>
-        <form id="diagnostics-form" class="row">
+        <form id="diagnostics-form" class="diagnostic-toolbar">
           <label for="diagnostics-section">Subsystem</label>
           <select id="diagnostics-section"><option>resources</option><option>gpu</option><option>storage</option><option>network</option><option>audio</option><option>bluetooth</option><option>desktop</option><option>sway</option><option>services</option></select>
           <span id="diagnostics-state" class="muted" role="status"></span>
         </form>
-        <dl id="diagnostics-summary" class="metrics"></dl>
-        <details><summary>Raw JSON</summary><pre id="diagnostics-output">Loading diagnostics…</pre></details>
+        <div id="diagnostics-summary" class="diagnostic-grid"></div>
+        <details class="diagnostic-raw"><summary>Raw JSON</summary><pre id="diagnostics-output">Loading diagnostics…</pre></details>
       </section>
       <section aria-labelledby="jobs" class="panel">
         <h2 id="jobs">Jobs</h2>

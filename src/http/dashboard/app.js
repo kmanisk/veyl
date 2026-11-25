@@ -41,6 +41,15 @@ function commandPreview(record) {
   if (Array.isArray(args.sections)) return args.sections.join(", ");
   return null;
 }
+function renderTraceControl(message="",busy=false) {
+  const control=byId("trace-toggle");
+  const label=message|| (traceEnabled?"Clear local trace":"Enable local trace");
+  control.title=label;
+  control.setAttribute("aria-label",label);
+  control.setAttribute("aria-pressed",String(traceEnabled));
+  control.disabled=busy;
+  byId("trace-state").textContent=message;
+}
 function updateTraceState(trace, requested) {
   clearTimeout(traceExpiryTimer);
   traceEnabled = trace.enabled === true && Number.isFinite(trace.remaining_ms) &&
@@ -49,30 +58,153 @@ function updateTraceState(trace, requested) {
   else traceExpiryTimer = setTimeout(() => {
     traceEnabled = false;
     clearTracePreviews();
-    byId("trace-toggle").textContent = "Enable local trace";
-    byId("trace-state").textContent = "Trace expired";
+    renderTraceControl("Trace expired");
   }, Math.max(0, trace.remaining_ms - (performance.now() - requested)));
 }
 byId("trace-controls").hidden = remote;
 byId("diagnostics-nav").hidden = remote;
-function diagnosticRows(section, value) {
-  if (!value || typeof value !== "object") return [["Status", "Unavailable"]];
-  const rows = [];
-  const label = key => key.replaceAll("_", " ");
-  for (const [key, item] of Object.entries(value)) {
-    if (key === "source") continue;
-    if ((key === "memory_total_kib" || key === "memory_available_kib") && typeof item === "number") {
-      rows.push([label(key).replace(" kib", ""), (item / 1048576).toFixed(2) + " GiB"]);
-    } else if (Array.isArray(item)) {
-      if (item.every(v => typeof v !== "object")) rows.push([label(key), item.join(" / ") || "None"]);
-      else rows.push([label(key), item.length + " entries · see Raw JSON"]);
-    } else if (item !== null && typeof item === "object") {
-      if (Array.isArray(item.items)) rows.push([label(key), item.available === false ? "Unavailable" : item.items.length + " entries · see Raw JSON"]);
-      else if (typeof item.available === "boolean") rows.push([label(key), item.available ? "Available · see Raw JSON" : "Unavailable"]);
-      else rows.push([label(key), Object.entries(item).filter(([,v]) => v !== null && typeof v !== "object").map(([k,v]) => label(k) + ": " + v).join(" · ") || "See Raw JSON"]);
-    } else rows.push([label(key), item == null ? "Unavailable" : String(item)]);
+const diagnosticNames = {resources:"Resources",gpu:"Graphics",storage:"Storage",network:"Network",audio:"Audio",bluetooth:"Bluetooth",desktop:"Display connectors",sway:"Sway",services:"Services"};
+const fieldNames = {cpu:"CPU",io:"I/O",mtu:"MTU",pci_address:"PCI address",vendor_id:"Vendor ID",device_id:"Device ID",rx_bytes:"Received (total)",tx_bytes:"Sent (total)",busy_percent:"GPU busy",capacity_percent:"Capacity",temperature_millicelsius:"Temperature",memory_available_kib:"Available RAM",memory_total_kib:"Total RAM",swap_free_kib:"Free swap",swap_total_kib:"Total swap",MainPID:"PID",MemoryCurrent:"Memory",TasksCurrent:"Tasks",NRestarts:"Restarts",UnitFileState:"Startup",ActiveState:"State",SubState:"Service state",LoadState:"Load state"};
+function diagLabel(key) { return fieldNames[key] || key.replace(/([a-z])([A-Z])/g,"$1 $2").replaceAll("_"," ").replace(/^./,c=>c.toUpperCase()); }
+function diagBytes(n) {
+  if (!Number.isFinite(n) || n < 0) return "Unavailable";
+  const units=["B","KiB","MiB","GiB","TiB"];
+  let i=0; while(n>=1024 && i<units.length-1){n/=1024;i++;}
+  return n.toFixed(i===0?0:2)+" "+units[i];
+}
+function diagDuration(n) {
+  if (!Number.isFinite(n) || n<0) return "Unavailable";
+  n=Math.floor(n);
+  return [Math.floor(n/86400)?Math.floor(n/86400)+"d":"",Math.floor(n%86400/3600)+"h",Math.floor(n%3600/60)+"m"].filter(Boolean).join(" ");
+}
+function diagValue(key,value) {
+  if(value===null || value===undefined || value==="") return "Unavailable";
+  if(typeof value==="boolean") return value?"Yes":"No";
+  if(key==="online" && (value===0||value===1)) return value?"Online":"Offline";
+  if(key==="temperature_millicelsius" && Number.isFinite(value)) return (value/1000).toFixed(1)+" °C";
+  if(key.endsWith("_kib") && Number.isFinite(value)) return diagBytes(value*1024);
+  if((key.endsWith("_bytes") || key==="MemoryCurrent") && value!=="" && Number.isFinite(Number(value))) return diagBytes(Number(value));
+  if(key.endsWith("_percent") && Number.isFinite(value)) return value+"%";
+  if(key==="uptime_seconds") return diagDuration(value);
+  if(key==="load_average" && Array.isArray(value)) return value.join(" / ");
+  if(key==="current_mode" && value && typeof value==="object" && Number.isFinite(value.width) && Number.isFinite(value.height)) return value.width+" × "+value.height+(Number.isFinite(value.refresh)?" · "+(value.refresh/1000).toFixed(2)+" Hz":"");
+  return String(value);
+}
+function diagCard(grid,title,tag) {
+  const card=add(grid,"article","");card.className="diag-card";
+  const header=add(card,"div","");header.className="diag-card-heading";
+  add(header,"h3",title);
+  if(tag) add(header,"span",tag).className="diag-tag";
+  return card;
+}
+function diagFields(card,record,exclude=[]) {
+  const list=add(card,"dl","");list.className="diag-fields";
+  function field(key,value,label,depth) {
+    if(value && typeof value==="object" && !Array.isArray(value) && key!=="current_mode" && depth<5) {
+      for(const [k,v] of Object.entries(value)) field(k,v,label+" / "+diagLabel(k),depth+1);
+      return;
+    }
+    const row=add(list,"div","");add(row,"dt",label);
+    const display=Array.isArray(value)?(value.length?value.map(x=>typeof x==="object"?JSON.stringify(x):String(x)).join(", "):"None"):diagValue(key,value);
+    add(row,"dd",display);
   }
-  return rows.length ? rows : [["Subsystem", section]];
+  for(const [key,value] of Object.entries(record||{})) {
+    if(["source","items","truncated","available","reason",...exclude].includes(key)) continue;
+    field(key,value,diagLabel(key),0);
+  }
+  if(!list.children.length) list.remove();
+}
+function diagMeter(card,label,used,total,format=diagBytes) {
+  if(!Number.isFinite(used)||!Number.isFinite(total)||total<=0||used<0||used>total) return;
+  const top=add(card,"div","");top.className="diag-meter-label";
+  add(top,"span",label);add(top,"strong",Math.round(used/total*100)+"%");
+  const meter=add(card,"progress","");meter.max=total;meter.value=used;meter.setAttribute("aria-label",label);
+  add(card,"p",format(used)+" / "+format(total)).className="diag-caption";
+}
+function diagInventory(grid,title,inventory,identify,decorate) {
+  if(!inventory || inventory.available===false) {
+    const card=diagCard(grid,title);add(card,"p",inventory?.reason||"Unavailable").className="diag-caption";return;
+  }
+  const items=Array.isArray(inventory.items)?inventory.items:[];
+  const group=add(grid,"section","");group.className="diag-group";
+  const heading=add(group,"h3",title+" · "+items.length+(inventory.truncated?"+":""));
+  heading.className="diag-group-title";
+  const inner=add(group,"div","");inner.className="diagnostic-grid";
+  if(!items.length){add(inner,"p","None detected").className="diag-caption";return;}
+  for(const item of items) {
+    const [name,tag,exclude]=identify(item);
+    const card=diagCard(inner,name,tag);
+    if(decorate) decorate(card,item);
+    diagFields(card,item,exclude);
+  }
+}
+function renderDiagnostics(section,v) {
+  const grid=byId("diagnostics-summary");grid.replaceChildren();
+  if(!v||v.available===false){add(diagCard(grid,diagnosticNames[section]),"p",v?.reason||"Unavailable");return;}
+  const identity=(key,tag)=>item=>[String(item[key]??"Unknown"),item[tag]===undefined||item[tag]===null?"":diagValue(tag,item[tag]),[key,tag]];
+  const inventory=(title,data,key,tag,decorate)=>diagInventory(grid,title,data,identity(key,tag),decorate);
+  const simple=(title,data)=>{const card=diagCard(grid,title);if(data&&typeof data==="object")diagFields(card,data);else add(card,"p",data??"Unavailable");return card;};
+  if(section==="resources"){
+    const cpu=diagCard(grid,"Processor");add(cpu,"strong",v.cpu_model??"Unavailable").className="diag-value";
+    diagFields(cpu,{logical_cpus:v.logical_cpus,load_average:v.load_average,architecture:v.architecture});
+    const memory=diagCard(grid,"Memory");add(memory,"strong",diagValue("memory_total_kib",v.memory_total_kib)).className="diag-value";
+    if(Number.isFinite(v.memory_total_kib)&&Number.isFinite(v.memory_available_kib)) diagMeter(memory,"Used",(v.memory_total_kib-v.memory_available_kib)*1024,v.memory_total_kib*1024);
+    diagFields(memory,{memory_available_kib:v.memory_available_kib});
+    const swap=diagCard(grid,"Swap");add(swap,"strong",diagValue("swap_total_kib",v.swap_total_kib)).className="diag-value";
+    if(Number.isFinite(v.swap_total_kib)&&Number.isFinite(v.swap_free_kib)) diagMeter(swap,"Used",(v.swap_total_kib-v.swap_free_kib)*1024,v.swap_total_kib*1024);
+    diagFields(swap,{swap_free_kib:v.swap_free_kib});
+    simple("System",{platform:v.platform,uptime_seconds:v.uptime_seconds});
+    if(v.pressure){
+      const card=diagCard(grid,"Resource pressure","10s average");card.classList.add("diag-wide");
+      for(const [key,raw] of Object.entries(v.pressure)){
+        const match=typeof raw==="string"?raw.match(/(?:^|\n)some\s+avg10=([\d.]+)/):null;
+        const full=typeof raw==="string"?raw.match(/(?:^|\n)full\s+avg10=([\d.]+)/):null;
+        const row=add(card,"div","");row.className="pressure-row";
+        add(row,"span",diagLabel(key));add(row,"strong",match?match[1]+"% stalled":"Unavailable");
+        if(full)add(row,"small","Full: "+full[1]+"%");
+      }
+      add(card,"p","Linux PSI: time stalled, not utilization. Full averages in Raw JSON.").className="diag-caption";
+    }
+    if(v.workspace_filesystem) simple("Workspace filesystem",v.workspace_filesystem);
+    inventory("Thermal sensors",v.thermal,"type","id");
+    inventory("Power supplies",v.power,"name","type",(c,x)=>{if(Number.isFinite(x.capacity_percent))diagMeter(c,"Charge",x.capacity_percent,100,n=>n+"%");});
+  }else if(section==="gpu"){
+    inventory("Graphics devices",v,"pci_address","runtime_status",(c,x)=>{if(Number.isFinite(x.busy_percent))diagMeter(c,"GPU busy",x.busy_percent,100,n=>n+"%");diagMeter(c,"VRAM",x.vram_used_bytes,x.vram_total_bytes);});
+  }else if(section==="storage"){
+    if(v.workspace_filesystem) {
+      const card=simple("Workspace filesystem",v.workspace_filesystem);
+      const {total_bytes,available_bytes}=v.workspace_filesystem;
+      if(Number.isFinite(total_bytes)&&Number.isFinite(available_bytes)) diagMeter(card,"Used",total_bytes-available_bytes,total_bytes);
+    }
+    inventory("Block devices",v.devices,"name","model");
+  }else if(section==="network"){
+    inventory("Network interfaces",v,"interface","state");
+  }else if(section==="audio"){
+    inventory("Sound cards",v,"card","id");
+    if(v.session?.available===false) simple("Audio session",v.session.reason||"Unavailable");
+    else {
+      inventory("Output devices",v.session?.sinks,"description","state");
+      inventory("Input devices",v.session?.sources,"description","state");
+    }
+  }else if(section==="bluetooth"){
+    inventory("Adapters",v,"adapter","driver");
+    const connected=diagCard(grid,"Connected devices");
+    if(v.session?.available===true){
+      const names=v.session.connected_names||[];
+      if(!names.length)add(connected,"p","No connected devices");
+      else for(const name of names)add(connected,"p",name).className="diag-device";
+    }else add(connected,"p",v.session?.reason||"Unavailable");
+  }else if(section==="desktop"){
+    inventory("Display connectors",v,"connector","status");
+  }else if(section==="sway"){
+    inventory("Outputs",v.outputs,"name","active");
+    inventory("Workspaces",v.workspaces,"name","focused");
+  }else if(section==="services"){
+    simple("Veyl gateway",v.veyl);
+    inventory("Failed user units",v.user_failed,"unit","sub");
+    inventory("Failed system units",v.system_failed,"unit","sub");
+  }
+  if(!grid.children.length)add(diagCard(grid,diagnosticNames[section]||section),"p","No data available");
 }
 async function loadDiagnostics() {
   if (remote || activeTab !== "diagnostics" || byId("dashboard").hidden || document.hidden) return;
@@ -84,7 +216,7 @@ async function loadDiagnostics() {
     const data = await request("diagnostics?section=" + encodeURIComponent(section));
     if (generation !== diagnosticsRequest || activeTab !== "diagnostics" || byId("dashboard").hidden) return;
     byId("diagnostics-output").textContent = JSON.stringify(data, null, 2);
-    summary("diagnostics-summary", diagnosticRows(section, data.sections?.[section]));
+    renderDiagnostics(section, data.sections?.[section]);
     byId("diagnostics-state").textContent = "Updated " + new Date().toLocaleTimeString();
     diagnosticsSample = performance.now();
   } catch (error) {
@@ -111,6 +243,7 @@ byId("trace-toggle").addEventListener("click", async () => {
   try {
     const state = await request("trace", {enabled: enable, confirm:true});
     traceEnabled = state.enabled;
+    renderTraceControl();
     if (activeTab === "jobs") await loadJobs(currentJobCursor, true);
     else await loadActivity();
   } catch(error) { notice.textContent=error.message; }
@@ -120,11 +253,17 @@ let theme = "system";
 try { const saved = localStorage.getItem("veyl-theme"); if (themeModes.includes(saved)) theme = saved; } catch {}
 function applyTheme() {
   document.documentElement.dataset.theme = theme;
-  byId("theme").textContent = "Theme: " + theme;
+  const dark=theme==="dark" || (theme==="system" && matchMedia("(prefers-color-scheme: dark)").matches);
+  byId("theme-glyph").setAttribute("d",dark?"M12 4V2 M12 22v-2 M4 12H2 M22 12h-2 M6.3 6.3 4.9 4.9 M19.1 19.1l-1.4-1.4 M6.3 17.7l-1.4 1.4 M19.1 4.9l-1.4 1.4 M17 12a5 5 0 1 1-10 0 5 5 0 0 1 10 0":"M20 15a9 9 0 0 1-11-11 9 9 0 1 0 11 11z");
+  const label="Switch to "+(dark?"light":"dark")+" theme";
+  byId("theme").title=label;
+  byId("theme").setAttribute("aria-label",label);
 }
 applyTheme();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{if(theme==="system")applyTheme();});
 byId("theme").addEventListener("click", () => {
-  theme = themeModes[(themeModes.indexOf(theme) + 1) % themeModes.length];
+  const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+  theme = dark ? "light" : "dark";
   try { localStorage.setItem("veyl-theme", theme); } catch {}
   applyTheme();
 });
@@ -208,7 +347,6 @@ function showPair() {
   jobRequest++;
   logRequest++;
   traceRequest++;
-  byId("header-status").hidden = true;
   byId("job-rows").replaceChildren();
   byId("logs").hidden = true;
   byId("audit-ledger").open = false;
@@ -217,6 +355,7 @@ function showPair() {
   clearInterval(liveTimer);
   clearTimeout(traceExpiryTimer);
   traceEnabled = false;
+  renderTraceControl();
   clearTracePreviews();
   csrf = undefined;
   if (remote) sessionStorage.removeItem(proofKey);
@@ -272,6 +411,29 @@ function openTab(id) {
   history.replaceState(null, "", "/dashboard#" + id);
   selectTab(id, true);
 }
+// Bundled decorative category icons; never load third-party image URLs.
+function catalogIcon(entry) {
+  const ns = "http://www.w3.org/2000/svg";
+  const key = [entry.category, entry.name, entry.id].join(" ").toLowerCase();
+  const shape = entry.type === "skill" ? "M4 4h7a3 3 0 0 1 3 3v13a4 4 0 0 0-4-2H4z M14 7a3 3 0 0 1 3-3h3v14h-2a4 4 0 0 0-4 2" :
+    /reverse|debug/.test(key) ? "M4 7h16 M7 4v6 M17 4v6 M6 14l3 3-3 3 M18 14l-3 3 3 3 M10 17h4" :
+    /browser|web|playwright/.test(key) ? "M3 5h18v14H3z M3 9h18 M6 7h1 M9 7h1 M12 7h1" :
+    /filesystem|file|storage/.test(key) ? "M3 7h7l2 2h9v11H3z M3 7V5h7l2 2h7" :
+    /database|memory|vector/.test(key) ? "M4 6c0-4 16-4 16 0s-16 4-16 0v12c0 4 16 4 16 0V6 M4 12c0 4 16 4 16 0" :
+    /git|github|version control/.test(key) ? "M7 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4 M7 7v10 M7 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4 M17 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4 M17 7v3c0 4-3 5-10 5" :
+    /search|research/.test(key) ? "M15 10a5 5 0 1 1-10 0 5 5 0 0 1 10 0 M14 14l6 6" :
+    /terminal|code|developer|programming/.test(key) ? "M3 5h18v14H3z M7 9l3 3-3 3 M13 15h4" :
+    "M9 3v5 M15 3v5 M7 8h10v3a5 5 0 0 1-10 0z M12 16v5";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.setAttribute("class", "catalog-icon");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", shape);
+  svg.append(path);
+  return svg;
+}
 function renderCatalog() {
   const query = byId("catalog-query").value.trim().toLowerCase();
   const status = byId("catalog-status").value;
@@ -293,10 +455,15 @@ function renderCatalog() {
     card.className = "catalog-card";
     card.dataset.entry = entry.id;
     const top = add(card, "div", "");
-    top.className = "row";
-    add(top, "span", entry.type).className = "catalog-kind";
-    add(top, "span", registeredIds.has(entry.id) ? "Matching registered ID — verify identity" : "Not registered under this ID").className = "catalog-meta";
-    add(card, "h3", entry.name);
+    top.className = "catalog-heading";
+    const mark = add(top, "div", "");
+    mark.className = "catalog-mark";
+    mark.append(catalogIcon(entry));
+    const heading = add(top, "div", "");
+    heading.className = "catalog-title";
+    add(heading, "span", entry.type).className = "catalog-kind";
+    add(heading, "h3", entry.name);
+    add(card, "span", registeredIds.has(entry.id) ? "Matching registered ID — verify identity" : "Not registered").className = "catalog-meta";
     add(card, "p", entry.description || "");
     add(card, "p", [entry.category,entry.maintainer,entry.version].filter(Boolean).join(" · ")).className = "catalog-meta";
     const footer = add(card, "div", "");
@@ -404,13 +571,6 @@ function renderStatus(state) {
     ["Read-only paths", ((paths.default_readonly || []).length + (paths.extra_readonly || []).length) + " rules"],
   ]);
   const modes = modeLabels;
-  const headerStatus = byId("header-status");
-  if (headerStatus) {
-    headerStatus.hidden = false;
-    headerStatus.replaceChildren();
-    add(add(headerStatus, "span", "Active calls: "), "strong", state.active_calls ?? 0).id = "header-active-count";
-    add(headerStatus, "span", modeSummary(state.clients)).id = "header-modes";
-  }
   const maskedBody = byId("protected-masked-rows");
   if (maskedBody && paths) {
     maskedBody.replaceChildren();
@@ -695,8 +855,6 @@ async function loadActivity() {
   const previews = new Map(trace.map(event => [event.call_id, commandPreview(event)]));
   if (generation !== activityRequest || byId("dashboard").hidden) return;
   byId("activity-active").textContent = data.active_calls + " active calls";
-  const headerCount = byId("header-active-count");
-  if (headerCount) headerCount.textContent = data.active_calls;
   byId("audit-empty").hidden = data.events.length !== 0;
   const body = byId("audit-rows");
   body.replaceChildren();
@@ -765,16 +923,14 @@ async function localTrace() {
     const trace = await request(traceEnabled ? "trace" : "trace?metadata=1");
     if (generation !== traceRequest || byId("dashboard").hidden) return [];
     updateTraceState(trace, requested);
-    byId("trace-toggle").textContent = traceEnabled ? "Clear trace" : "Enable local trace";
-    byId("trace-toggle").disabled = trace.busy;
-    byId("trace-state").textContent = traceEnabled ? "Trace active" : trace.busy ? "Trace in another session" : "";
+    renderTraceControl(trace.busy?"Trace in another session":traceEnabled?"Clear local trace":"Enable local trace",trace.busy);
     byId("job-trace-state").textContent = traceEnabled ? "Command previews from this local trace; historical jobs may not have captured arguments." : "Enable local trace to capture future job command arguments.";
     return traceEnabled ? trace.events : [];
   } catch (error) {
     if (generation === traceRequest) {
       traceEnabled = false;
       clearTracePreviews();
-      byId("trace-state").textContent = "Trace unavailable";
+      renderTraceControl("Trace unavailable");
     }
     return [];
   }
@@ -804,8 +960,7 @@ function startLive() {
         else if (tab === "jobs" && !byId("job-controls").hidden) await loadJobs(currentJobCursor, true);
         else if (diagnosticsDue) await loadDiagnostics();
       }
-      byId("live-state").textContent = "Live";
-    } catch (error) { byId("live-state").textContent = "Stale"; notice.textContent = error.message; }
+    } catch (error) { notice.textContent = error.message; }
     finally { liveBusy = false; }
   }, 1000);
 }
