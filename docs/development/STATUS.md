@@ -1,5 +1,42 @@
 # Gate 3d status
 
+## TUI preview and mandatory operator acceptance (2026-11-25)
+
+Candidate `target/dev-preview.oTcBcNyB/source`, based on 2ba71c1.
+All future changes require a runnable preview and personal operator acceptance
+before promotion. See AGENTS.md and PREVIEW.md in this candidate.
+
+TUI detail/log overlays preserve the list selection, records and filter;
+trace expiry restores the list without retaining raw details. Live refresh
+retains call/job identity where still present. Compact title and LIVE/STALE
+status, highlighted tabs, contextual shortcuts; client modes, listener, RSS
+and session count removed from masthead. Health identifies MCP sessions as
+recent sessions with 30-minute idle expiry, distinct from open connections.
+
+Checks: formatting, Clippy (warnings denied), debug monitor build, 9/9
+monitor unit tests, and real PTY regression (filtered third entry, detail
+scroll, Escape, same selection) passed. Initial PTY assertion raced the
+activity refresh; revised test waits for the filtered list before movement.
+Operator personally accepted the TUI and authorized merge/deployment.
+Final optimized monitor build, 9 unit tests, Clippy, formatting, preview
+HTTP contract and real PTY regression passed (tui-promotion-validation.log).
+Monitor SHA-256: 4916f91130b8d20c1f83813480d120108fbb7d0630ec645df2f7da072aebddd1.
+Promote only the monitor binary: the gateway and CLI are unchanged, so no
+service restart or client policy change is necessary. AGY independent review
+and browser auto-reload acceptance were not repeated in this checkpoint.
+
+## Development preview candidate (2026-11-25)
+
+Source-only, on-demand loopback dashboard preview at `localhost:7333` with
+visible-tab reload on source asset hash change. Clearly marked synthetic data,
+no production API access or mutation. See `docs/development/PREVIEW.md` for
+preview, test, build, authorized deployment and runtime identity gates.
+HTTP contract test passed; real browser auto-reload not yet independently
+verified. Production remains commit 2ba71c1, version 0.2.5-beta.
+Refreshed ChatGPT connector exposes 28 tools; live system_inspect returned all
+nine subsystems. NVIDIA busy/VRAM values remain unavailable. Updater review
+still pending. No version bump or publication.
+
 ## 2026-11-25 — same-version dashboard refinement
 
 Operator authorized source push and local deployment without a version bump.

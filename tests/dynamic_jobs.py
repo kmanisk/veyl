@@ -135,7 +135,7 @@ class DynamicJobs(unittest.TestCase):
                     result = predicate(screen)
                     if result:
                         return result
-            self.fail("Live monitor did not reach expected state")
+            self.fail("Live monitor did not reach expected state: " + repr(bytes(screen_data.rsplit(b"\x1b[H\x1b[2J", 1)[-1])[:6000]))
         try:
             os.write(write_fd, token)
             os.close(write_fd)
@@ -170,6 +170,16 @@ class DynamicJobs(unittest.TestCase):
             screen_until(lambda s: b"Veyl / jobs" in s and job_id in s and b"LOCAL TRACE ON" not in s and b"LIVE_PREVIEW" not in s)
             os.write(terminal, b"1")
             screen_until(lambda s: b"Run supervised command" in s and b"LIVE_PREVIEW" not in s)
+            for _ in range(3):
+                self.call("job_status", {"job_id": completed["job_id"]})
+            os.write(terminal, b"/job_status\r")
+            screen_until(lambda s: b"Veyl / activity" in s and b"/ job_status" in s and b"selected 1" in s and s.count(b"job_status") >= 4)
+            os.write(terminal, b"jj")
+            screen_until(lambda s: b"Veyl / activity" in s and b"/ job_status" in s and b"selected 3" in s)
+            os.write(terminal, b"\r")
+            screen_until(lambda s: b"Details & Parameters" in s and b"job_status" in s)
+            os.write(terminal, b"jjj\x1b")
+            screen_until(lambda s: b"Veyl / activity" in s and b"/ job_status" in s and b"selected 3" in s)
             os.write(terminal, b"q")
         finally:
             os.close(terminal)

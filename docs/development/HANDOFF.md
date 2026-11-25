@@ -1,5 +1,12 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Approved TUI and preview checkpoint
+
+The operator approved the compact TUI and selection fix. See STATUS.md and
+PREVIEW.md. All subsequent changes must be personally testable before
+promotion. Source preview is on-demand and does not connect to production
+APIs. Keep the version unchanged and the updater candidate isolated.
+
 ## Same-version dashboard checkpoint
 
 See STATUS.md for the compact dashboard, nine subsystem views and marketplace

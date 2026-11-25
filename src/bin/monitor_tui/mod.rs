@@ -247,6 +247,7 @@ fn mouse_event(bytes: &[u8]) -> Option<(usize, usize, usize)> {
     }
     Some((button, x, y))
 }
+#[derive(Default)]
 struct View {
     tab: usize,
     client: Option<String>,
@@ -254,6 +255,7 @@ struct View {
     value: Value,
     health: Value,
     selected: usize,
+    list_return: Option<(usize, Value)>,
     filter: String,
     editing_filter: bool,
     logs: Option<String>,
@@ -341,7 +343,7 @@ impl View {
             .as_ref()
             .is_some_and(|v| v.get("local_trace").is_some())
         {
-            self.details = None;
+            self.close_overlay();
         }
     }
 
@@ -353,23 +355,36 @@ impl View {
         }
     }
 
-    fn client_modes_summary(&self) -> String {
-        let clients = table_rows(&self.health, "clients");
-        if clients.is_empty() {
-            return "-".into();
-        }
-        clients
-            .iter()
-            .map(|c| {
-                format!(
-                    "{}: {}",
-                    strval(&c["id"]),
-                    strval(&c["mode"]).to_uppercase()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
+    // Overlay scrolling must never overwrite list selection or its record set.
+    fn enter_overlay(&mut self) {
+        self.list_return = Some((self.selected, self.value.clone()));
+        self.selected = 0;
     }
+
+    fn close_overlay(&mut self) {
+        self.details = None;
+        self.logs = None;
+        if let Some((selected, value)) = self.list_return.take() {
+            self.selected = selected;
+            self.value = value;
+        }
+    }
+
+    fn escape(&mut self) {
+        if self.details.is_some() || self.logs.is_some() {
+            self.close_overlay();
+        } else if self.confirm.is_some() {
+            self.confirm = None;
+        } else if self.editing_filter {
+            self.editing_filter = false;
+            self.filter.clear();
+            self.selected = 0;
+        } else if !self.filter.is_empty() {
+            self.filter.clear();
+            self.selected = 0;
+        }
+    }
+
     fn selected_record(&self) -> Option<Value> {
         match self.tab {
             2 => self.job_rows().get(self.selected).cloned(),
@@ -399,8 +414,8 @@ impl View {
                     value["local_trace"] = event.clone();
                 }
             }
+            self.enter_overlay();
             self.details = Some(value);
-            self.selected = 0;
         }
     }
     fn job_rows(&self) -> Vec<Value> {
@@ -454,11 +469,14 @@ impl View {
                         "",
                     ),
                     (
-                        format!("MCP sessions          {}", strval(&v["sessions"])),
+                        format!(
+                            "Recent MCP sessions   {} (30 min idle expiry)",
+                            strval(&v["sessions"])
+                        ),
                         "",
                     ),
                     (
-                        format!("TCP connections       {}", strval(&v["connections"])),
+                        format!("Open MCP connections  {}", strval(&v["connections"])),
                         "",
                     ),
                     (
@@ -492,7 +510,7 @@ impl View {
                 .map(|v| {
                     (
                         format!(
-                            "{:<18} {:<16} sessions={}  grants={}",
+                            "{:<18} {:<16} recent={}  grants={}",
                             strval(&v["id"]),
                             strval(&v["mode"]),
                             strval(&v["connections"]),
@@ -715,6 +733,7 @@ impl View {
         self.selected = 0;
         self.logs = None;
         self.details = None;
+        self.list_return = None;
         self.confirm = None;
         self.cursor.clear();
         self.filter.clear();
@@ -727,37 +746,29 @@ impl View {
         if h < 12 || w < 30 {
             row(&mut out, "Veyl - resize terminal; q quits", w, "\x1b[36m");
         } else {
-            row(
-                &mut out,
-                &format!(
-                    "Veyl Activity Monitor   {}   [ {} ]",
-                    strval(&self.health["version"]),
-                    if self.notice.is_empty() {
-                        "LIVE"
-                    } else {
-                        "STALE"
-                    }
-                ),
-                w,
-                "\x1b[1;36m",
-            );
-            let active_calls = self.health["active_calls"]
-                .as_u64()
-                .map_or("-".to_owned(), |n| n.to_string());
-            let modes_summary = self.client_modes_summary();
-            row(
-                &mut out,
-                &format!(
-                    "Calls: {} active | Clients: {} | MCP: {} | Sessions: {} | RSS: {} KiB",
-                    active_calls,
-                    modes_summary,
-                    strval(&self.health["listener"]),
-                    strval(&self.health["sessions"]),
-                    strval(&self.health["rss_kib"])
-                ),
-                w,
-                "\x1b[2m",
-            );
+            let label = if std::env::var_os("VEYL_TUI_PREVIEW").is_some() {
+                "Veyl / preview"
+            } else {
+                "Veyl"
+            };
+            let title = format!("{label}  {}", env!("CARGO_PKG_VERSION"));
+            let state = if self.notice.is_empty() {
+                "LIVE"
+            } else {
+                "STALE"
+            };
+            out.push_str("\x1b[1m");
+            out.push_str(&cell(&title, w.saturating_sub(state.len() + 2)));
+            out.push_str("\x1b[0m");
+            out.push_str(if self.notice.is_empty() {
+                "\x1b[32m"
+            } else {
+                "\x1b[33m"
+            });
+            out.push_str(&format!("  {state}\x1b[0m\r\n"));
+            out.push_str("\x1b[2m");
+            out.push_str(&"─".repeat(w));
+            out.push_str("\x1b[0m\r\n");
             let mut used = 0;
             for (position, tab) in TAB_ORDER.iter().enumerate() {
                 let label = format!(" {} {} ", position + 1, LABELS[*tab]);
@@ -765,7 +776,7 @@ impl View {
                     break;
                 }
                 out.push_str(if *tab == self.tab {
-                    "\x1b[1;4;33m"
+                    "\x1b[1;7m"
                 } else {
                     "\x1b[2m"
                 });
@@ -774,38 +785,38 @@ impl View {
                 used += label.len() + 1;
             }
             out.push_str("\r\n");
-            row(
-                &mut out,
-                &format!(
-                    "Veyl / {}   Client: {}   Filter: {}",
-                    if self.details.is_some() {
-                        "details"
-                    } else if self.logs.is_some() {
-                        "logs"
-                    } else if self.tab == 3 && self.audit_ledger {
-                        "audit ledger"
-                    } else if self.tab == 3 && self.show_funnel {
-                        "activity + Funnel"
-                    } else {
-                        VIEWS[self.tab]
-                    },
-                    if self.tab == 3 {
-                        "all"
-                    } else {
-                        self.client.as_deref().unwrap_or("-")
-                    },
-                    self.filter
-                ),
-                w,
-                "\x1b[1m",
-            );
+            let section = if self.details.is_some() {
+                "details"
+            } else if self.logs.is_some() {
+                "logs"
+            } else if self.tab == 3 && self.audit_ledger {
+                "audit ledger"
+            } else if self.tab == 3 && self.show_funnel {
+                "activity + Funnel"
+            } else {
+                VIEWS[self.tab]
+            };
+            let mut context = format!("Veyl / {section}");
+            if self.tab == 2 {
+                context.push_str(&format!("  |  {}", self.client.as_deref().unwrap_or("-")));
+            }
+            if !self.filter.is_empty() {
+                context.push_str(&format!("  / {}", self.filter));
+            }
+            if self.tab == 3 && self.details.is_none() {
+                let calls = self.health["active_calls"].as_u64().unwrap_or(0);
+                if calls > 0 {
+                    context.push_str(&format!("  |  {calls} running"));
+                }
+            }
+            row(&mut out, &context, w, "\x1b[1m");
             let heading = if self.details.is_some() {
                 "Details & Parameters (JSON) - Esc to close"
             } else if self.logs.is_some() {
                 "Job output"
             } else {
                 match self.tab {
-                    1 => "CLIENT             MODE             SESSIONS / GRANTS",
+                    1 => "CLIENT             MODE             RECENT SESSIONS / GRANTS",
                     2 => {
                         "JOB ID                            STATUS      EXIT   CREATED      JOB TIME   DIRECTORY                  COMMAND / PROFILE"
                     }
@@ -876,17 +887,25 @@ impl View {
             out.push_str("\x1b[0m\r\n");
             row(
                 &mut out,
-                "[Tab] View  [j/k] Move  [p] Client  [/] Filter  [Enter] Details  [l] Logs",
+                if self.details.is_some() || self.logs.is_some() {
+                    "[j/k] Scroll  [Esc] Back  [q] Quit"
+                } else {
+                    "[Tab] View  [j/k] Move  [Enter] Details  [/] Filter"
+                },
                 w,
                 "\x1b[39m",
             );
             // Last line intentionally has no newline (avoids terminal scrolling).
             out.push_str("\x1b[2m");
             out.push_str(&cell(
-                if self.tab == 3 {
-                    "[f] Funnel  [a] Audit ledger  [t] Trace  [r] Refresh  [q] Quit"
+                if self.details.is_some() || self.logs.is_some() {
+                    ""
+                } else if self.tab == 3 {
+                    "[f] Funnel  [a] Audit  [t] Trace  [r] Refresh  [q] Quit"
+                } else if self.tab == 2 {
+                    "[p] Client  [l] Logs  [n] Next  [x] Cancel  [t] Trace  [r] Refresh  [q] Quit"
                 } else {
-                    "[n] Next page  [Esc] Back  [x] Cancel  [t] Trace  [r] Refresh  [q] Quit"
+                    "[r] Refresh  [q] Quit"
                 },
                 w,
             ));
@@ -905,23 +924,8 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
     let mut v = View {
         tab: TAB_ORDER[0],
         client,
-        clients: vec![],
-        value: Value::Null,
-        health: Value::Null,
-        selected: 0,
-        filter: String::new(),
-        editing_filter: false,
-        logs: None,
-        details: None,
         detail_width: 80,
-        trace_enabled: false,
-        trace_rows: Value::Null,
-        trace_until: None,
-        show_funnel: false,
-        audit_ledger: false,
-        confirm: None,
-        notice: String::new(),
-        cursor: String::new(),
+        ..View::default()
     };
     let mut next = Instant::now();
     let mut redraw = true;
@@ -946,12 +950,9 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
         let keys = screen.input()?;
         if keys.is_empty() && !escape.is_empty() {
             escape.clear();
-            v.logs = None;
-            v.details = None;
-            v.confirm = None;
-            v.editing_filter = false;
-            v.filter.clear();
+            v.escape();
             next = Instant::now();
+            redraw = true;
         }
         for key in keys {
             redraw = true;
@@ -1148,8 +1149,9 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                         .and_then(|job| job["job_id"].as_str())
                         .filter(|id| clean_id(id))
                     {
-                        v.logs = Some(id.into());
-                        v.selected = 0;
+                        let id = id.to_owned();
+                        v.enter_overlay();
+                        v.logs = Some(id);
                         next = Instant::now();
                     }
                 }
@@ -1193,6 +1195,62 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn overlay_restores_selection_filter_and_list_after_scrolling() {
+        let value = serde_json::json!({"events":[
+            {"call_id":"a","tool":"read_file"},
+            {"call_id":"b","tool":"read_file"},
+            {"call_id":"c","tool":"read_file"}
+        ]});
+        let mut v = View {
+            tab: 3,
+            selected: 2,
+            filter: "read_file".into(),
+            value: value.clone(),
+            ..View::default()
+        };
+        let record = v.selected_record().unwrap();
+        v.enter_overlay();
+        v.details = Some(record.clone());
+        v.selected = 8;
+        v.escape();
+        assert_eq!(v.selected, 2);
+        assert_eq!(v.filter, "read_file");
+        assert_eq!(v.selected_record(), Some(record));
+        assert_eq!(v.value, value);
+        assert!(v.list_return.is_none());
+
+        v.tab = 2;
+        v.value = serde_json::json!({"jobs":[{"job_id":"a"},{"job_id":"b"},{"job_id":"c"}]});
+        v.filter.clear();
+        let original = v.value.clone();
+        v.enter_overlay();
+        v.logs = Some("c".into());
+        v.value = serde_json::json!({"stdout":"example"});
+        v.selected = 4;
+        v.escape();
+        assert_eq!(v.selected, 2);
+        assert_eq!(v.value, original);
+        assert_eq!(v.selected_record().unwrap()["job_id"], "c");
+        assert!(v.logs.is_none());
+    }
+
+    #[test]
+    fn trace_expiry_restores_selection_without_retaining_raw_details() {
+        let mut v = View {
+            tab: 3,
+            selected: 2,
+            value: serde_json::json!({"events":[]}),
+            ..View::default()
+        };
+        v.enter_overlay();
+        v.details = Some(serde_json::json!({"local_trace":{"arguments":"synthetic"}}));
+        v.trace_rows = serde_json::json!([{"arguments":"synthetic"}]);
+        v.clear_trace_preview();
+        assert!(v.details.is_none() && v.trace_rows.is_null() && v.list_return.is_none());
+        assert_eq!(v.selected, 2);
+    }
+
     #[test]
     fn terminal_text_cannot_inject_controls_and_fits_columns() {
         assert_eq!(cell("a\x1b[31m\n", 4), "a?[3");
