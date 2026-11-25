@@ -54,9 +54,7 @@ pub(crate) fn run(
 }
 
 fn check_no_control(value: &str, max_len: usize, field: &str) -> Result<String, String> {
-    if value.len() > max_len
-        || value.as_bytes().contains(&0)
-        || value.chars().any(char::is_control)
+    if value.len() > max_len || value.as_bytes().contains(&0) || value.chars().any(char::is_control)
     {
         return Err(format!("Invalid {field}"));
     }
@@ -76,8 +74,9 @@ fn search_marketplace(
     }
     let query = match args.get("query") {
         None => String::new(),
-        Some(v) => check_no_control(v.as_str().ok_or("Invalid query")?, 128, "query")?
-            .to_ascii_lowercase(),
+        Some(v) => {
+            check_no_control(v.as_str().ok_or("Invalid query")?, 128, "query")?.to_ascii_lowercase()
+        }
     };
     let category = match args.get("category") {
         None => None,
@@ -104,8 +103,8 @@ fn search_marketplace(
             .ok_or("Invalid limit")?,
     };
 
-    let doc: Value = serde_json::from_str(MARKETPLACE_JSON)
-        .map_err(|_| "Marketplace catalog unavailable")?;
+    let doc: Value =
+        serde_json::from_str(MARKETPLACE_JSON).map_err(|_| "Marketplace catalog unavailable")?;
     let entries = doc["entries"]
         .as_array()
         .ok_or("Invalid marketplace catalog")?;
@@ -136,14 +135,12 @@ fn search_marketplace(
             .collect::<Vec<_>>()
             .join(" ")
             .to_ascii_lowercase();
-            let cap_hit = entry["capabilities"]
-                .as_array()
-                .is_some_and(|arr| {
-                    arr.iter().any(|c| {
-                        c.as_str()
-                            .is_some_and(|s| s.to_ascii_lowercase().contains(&query))
-                    })
-                });
+            let cap_hit = entry["capabilities"].as_array().is_some_and(|arr| {
+                arr.iter().any(|c| {
+                    c.as_str()
+                        .is_some_and(|s| s.to_ascii_lowercase().contains(&query))
+                })
+            });
             if !hay.contains(&query) && !cap_hit {
                 continue;
             }
@@ -198,7 +195,9 @@ fn list_extensions(
         ),
     };
     if let Some(scope) = args.get("scope")
-        && !scope.as_str().is_some_and(|s| matches!(s, "user" | "project"))
+        && !scope
+            .as_str()
+            .is_some_and(|s| matches!(s, "user" | "project"))
     {
         return Err("Invalid scope".into());
     }
@@ -296,9 +295,9 @@ fn skills_validate(
             let key = format!("skill:{name}");
             match skills.read(name) {
                 Ok(_) => results.push(json!({"key": key, "valid": true, "source": "skills_dir"})),
-                Err(err) => {
-                    results.push(json!({"key": key, "valid": false, "source": "skills_dir", "error": err}))
-                }
+                Err(err) => results.push(
+                    json!({"key": key, "valid": false, "source": "skills_dir", "error": err}),
+                ),
             }
         }
     }
@@ -463,7 +462,11 @@ fn create_proposal(
                 .ok_or("Invalid selection")?;
             let mut items = Vec::with_capacity(arr.len());
             for item in arr {
-                let s = check_no_control(item.as_str().ok_or("Invalid selection entry")?, 128, "selection")?;
+                let s = check_no_control(
+                    item.as_str().ok_or("Invalid selection entry")?,
+                    128,
+                    "selection",
+                )?;
                 items.push(s);
             }
             Some(items)
@@ -474,7 +477,9 @@ fn create_proposal(
         Some(v) => {
             let s = v
                 .as_str()
-                .filter(|s| s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+                .filter(|s| {
+                    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+                })
                 .ok_or("Invalid provider_fingerprint")?;
             Some(s.to_owned())
         }
@@ -529,10 +534,7 @@ fn create_proposal(
         return Err("Pending operator review queue is full".into());
     }
 
-    let tmp_name = format!(
-        ".{id}.stage.{}",
-        std::process::id()
-    );
+    let tmp_name = format!(".{id}.stage.{}", std::process::id());
     let tmp_fd = fs::openat2(
         &dir,
         Path::new(&tmp_name),

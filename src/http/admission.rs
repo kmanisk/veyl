@@ -374,13 +374,25 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
                 .and_then(Value::as_u64)
                 .unwrap_or(crate::jobs::SHORT_RUNTIME_MAX),
             #[cfg(target_os = "linux")]
-            job_cpu_percent_limit: entry.get("job_cpu_percent_limit").and_then(Value::as_u64).unwrap_or(100),
+            job_cpu_percent_limit: entry
+                .get("job_cpu_percent_limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(100),
             #[cfg(target_os = "linux")]
-            job_memory_bytes_limit: entry.get("job_memory_bytes_limit").and_then(Value::as_u64).unwrap_or(256 * 1024 * 1024),
+            job_memory_bytes_limit: entry
+                .get("job_memory_bytes_limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(256 * 1024 * 1024),
             #[cfg(target_os = "linux")]
-            job_output_limit_bytes: entry.get("job_output_limit_bytes").and_then(Value::as_u64).unwrap_or(65_536) as usize,
+            job_output_limit_bytes: entry
+                .get("job_output_limit_bytes")
+                .and_then(Value::as_u64)
+                .unwrap_or(65_536) as usize,
             #[cfg(target_os = "linux")]
-            job_retention_count: entry.get("job_retention_count").and_then(Value::as_u64).map(|n| n as usize),
+            job_retention_count: entry
+                .get("job_retention_count")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize),
             #[cfg(target_os = "linux")]
             job_root: if has_job_grant {
                 Some(JobRoot::open(&configured_root)?)

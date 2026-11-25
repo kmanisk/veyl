@@ -62,6 +62,20 @@
           </table>
         </div>
         <p id="client-empty" hidden>No clients configured.</p>
+        <div class="section-card" id="client-grants-card">
+          <h3>Client tool grants</h3>
+          <p class="muted">Select a client and apply per-tool or bulk native tool grants. Existing YOLO presets remain active where configured.</p>
+          <div class="row">
+            <label for="grant-client">Client</label>
+            <select id="grant-client"></select>
+            <button id="grant-all-safe" type="button">Select all eligible</button>
+            <button id="grant-git-all" type="button">Toggle Git tools</button>
+            <button id="grant-ext-all" type="button">Toggle extension tools</button>
+            <button id="grant-proc-all" type="button">Toggle process tools</button>
+            <button id="grant-native-save" type="button">Apply native grants</button>
+          </div>
+          <div id="native-grant-grid" class="grant-grid"></div>
+        </div>
       </section>
       <section aria-labelledby="diagnostics" class="panel">
         <h2 id="diagnostics">System diagnostics</h2>
@@ -102,8 +116,31 @@
         <pre id="skill-document" hidden></pre>
       </section>
       <section aria-labelledby="marketplace" class="panel">
-        <div class="section-toolbar"><h2 id="marketplace">Integration marketplace</h2><button id="catalog-refresh" type="button">Reload catalog</button></div>
-        <p class="muted">Browse the bundled BridgeDev metadata snapshot. Listings do not establish installation, compatibility or connection. No packages are installed by browsing.</p>
+        <div class="section-toolbar">
+          <h2 id="marketplace">Integration marketplace</h2>
+          <button id="marketplace-recover" type="button">Recover interrupted</button>
+          <button id="catalog-refresh" type="button">Reload catalog</button>
+        </div>
+        <p class="muted">Install verified providers with pinned integrity digests into isolated runtime bundles, or browse the bundled metadata catalog. No lifecycle scripts are executed.</p>
+        <div id="marketplace-operations" class="ops-list" hidden></div>
+        <div class="section-card">
+          <h3>Verified one-click providers</h3>
+          <p class="muted">Curated recipes with pinned provenance digests and sandboxed runtime launch templates.</p>
+          <div id="verified-providers" class="catalog-grid"></div>
+          <details id="custom-package-install">
+            <summary>Install custom verified package, binary or skill</summary>
+            <form id="marketplace-custom-form" class="config-form">
+              <label>Provider ID <input name="id" required pattern="[a-z0-9_\-]{1,24}" placeholder="custom-provider"></label>
+              <label>Type <select name="kind"><option value="npm">Node package (npm)</option><option value="pypi">Python wheel (pypi)</option><option value="binary">Standalone ELF binary</option><option value="skill">Validated skill</option></select></label>
+              <label>Version <input name="version" placeholder="1.0.0"></label>
+              <label>Direct HTTPS URL or Registry URL <input name="url" type="url" placeholder="https://..."></label>
+              <label>Required SHA-256 hex or SHA-512 SRI <input name="digest" placeholder="sha256 hex or sha512-..."></label>
+              <label>Entrypoint / Archive member (optional) <input name="entrypoint" placeholder="dist/index.js or binary name"></label>
+              <label>Tool families (REA only, optional) <input name="tool_families" placeholder="artifact"></label>
+              <button type="submit">Download, verify and install</button>
+            </form>
+          </details>
+        </div>
         <div class="catalog-filters row">
           <input id="catalog-query" type="search" aria-label="Search integrations" placeholder="Search integrations…">
           <select id="catalog-category" aria-label="Category"></select>
@@ -142,8 +179,22 @@
         <div class="section-toolbar"><h2 id="servers">Configured providers &amp; upstreams</h2><button id="open-custom" type="button">Add custom</button><button id="open-marketplace" type="button">Browse marketplace</button></div>
         <p class="muted">Probe registered providers to inspect actual tools, then grant individual tools to a client.</p>
         <ul id="server-rows"></ul>
+        <div class="section-card" id="upstream-bulk-card">
+          <h3>Upstream tool grants matrix</h3>
+          <p class="muted">Probe a provider first to discover tools, then grant or revoke individual or all discovered tools per client.</p>
+          <div class="row">
+            <label for="bulk-grant-client">Client</label>
+            <select id="bulk-grant-client"></select>
+            <label for="bulk-grant-server">Server</label>
+            <select id="bulk-grant-server"></select>
+            <button id="bulk-upstream-all" type="button">Select all discovered</button>
+            <button id="bulk-upstream-none" type="button">Clear server grants</button>
+            <button id="bulk-upstream-save" type="button">Apply upstream grants</button>
+          </div>
+          <div id="upstream-grant-grid" class="grant-grid"></div>
+        </div>
         <details>
-          <summary>Manage client tool grants</summary>
+          <summary>Single upstream tool grant</summary>
           <form id="server-grant" class="config-form">
             <label>Client <select name="client" id="server-client" required></select></label>
             <label>Server <select name="id" id="server-grant-server" required></select></label>

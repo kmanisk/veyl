@@ -1263,3 +1263,10 @@ in this sandbox; direct IPv4 socket creation returned EPERM. See STATUS for the
 observed result. Preserve the existing dirty candidate, independent test pins,
 and production approval gate when continuing.
 
+# Marketplace installer acceptance handoff (2026-11-25)
+
+Candidate implemented cleanly on `0.3.0-beta` (from base `329b9d53ccdc86dd1ef3121a91d0bd031bdf6f95`):
+- One-click verified marketplace installer (`src/upstream/installer.rs`), `veyl marketplace` CLI, `/api/dashboard/marketplace/*` and `/api/dashboard/clients/grants` endpoints, Verified Providers UI grid, live progress/cancel controls, crash recovery (`recover`), automatic rollback on probe failure, and bulk/per-tool client & upstream grant controls in the web dashboard.
+- Independently verified across 28/28 locked suites (287/287 cases, 28/28 SHA-256 unchanged), 6/6 three-mode checks, all Rust/Clippy/fmt checks, Brave CDP UI tests, and `tests/marketplace_install.py` (adversarial archives, integrity failures, loopback registry closures, cancellation, rollback, crash recovery, and live `rea` 6.10.1 + `rust-anything` 4.1.0 E2E execution).
+
+

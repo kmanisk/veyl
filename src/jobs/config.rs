@@ -21,8 +21,12 @@ const MAX_ARG_BYTES: usize = 1024;
 const MAX_ARGV_BYTES: usize = 8192;
 pub(super) const MAX_OUTPUT: usize = 65_536;
 pub(super) const MAX_PROFILE_OUTPUT: usize = 16 * 1024 * 1024;
-pub(super) const fn default_cpu() -> u64 { 100 }
-pub(super) const fn default_memory() -> u64 { 256 * 1024 * 1024 }
+pub(super) const fn default_cpu() -> u64 {
+    100
+}
+pub(super) const fn default_memory() -> u64 {
+    256 * 1024 * 1024
+}
 pub(crate) const SHORT_RUNTIME_MAX: u64 = 300;
 pub(crate) const EXTENDED_RUNTIME_MAX: u64 = 86_400;
 const DEFAULT_OUTPUT: usize = 4096;
@@ -64,7 +68,8 @@ impl Profile {
     }
 
     pub fn check_limits(&self) -> io::Result<()> {
-        if (self.pty && !self.interactive) || !Path::new(&self.executable).is_absolute()
+        if (self.pty && !self.interactive)
+            || !Path::new(&self.executable).is_absolute()
             || self.executable.len() > MAX_ARG_BYTES
             || self.executable.contains('\0')
             || self.args.len() > MAX_ARGS
@@ -253,7 +258,8 @@ impl Profiles {
             return None;
         }
         self.0.iter().find_map(|(name, profile)| {
-            (!profile.interactive && profile.executable == executable
+            (!profile.interactive
+                && profile.executable == executable
                 && profile.args.len() == args.len() - 1
                 && profile
                     .args
@@ -340,7 +346,8 @@ mod runtime_tests {
     fn resource_budgets_validate_and_default() {
         let mut profile: Profile = serde_json::from_value(serde_json::json!({
             "executable": "/usr/bin/true", "args": [], "timeout_seconds": 1
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(profile.cpu_percent, 100);
         assert_eq!(profile.memory_bytes, 256 * 1024 * 1024);
         assert_eq!(profile.max_output_bytes, 4096);

@@ -67,7 +67,11 @@ fn validate_raw_path(raw: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn read_regular_beneath(dir: &OwnedFd, rel: &Path, limit: usize) -> Result<(Vec<u8>, bool), String> {
+fn read_regular_beneath(
+    dir: &OwnedFd,
+    rel: &Path,
+    limit: usize,
+) -> Result<(Vec<u8>, bool), String> {
     let handle = fs::openat2(
         dir,
         rel,
@@ -119,7 +123,8 @@ fn load_path_rules(
     let rel_target = if req.is_absolute() {
         let abs = req;
         let mode = client.mode;
-        if operator::policy_path(config, abs) && mode != mcp_gateway::security::policy::ExecutionMode::Full
+        if operator::policy_path(config, abs)
+            && mode != mcp_gateway::security::policy::ExecutionMode::Full
         {
             return Err("Protected path cannot be inspected".into());
         }
@@ -329,10 +334,10 @@ fn glob_match_bytes(pat: &[u8], text: &[u8]) -> bool {
     }
     #[derive(Clone, Copy)]
     enum Tok {
-        GlobStar,     // "**" or "**/" (0+ chars including '/')
-        GlobStarDir,  // "**/" (0+ dirs ending at '/' or empty)
-        Star,         // "*" (0+ non-'/' chars)
-        AnyNonSlash,  // "?"
+        GlobStar,    // "**" or "**/" (0+ chars including '/')
+        GlobStarDir, // "**/" (0+ dirs ending at '/' or empty)
+        Star,        // "*" (0+ non-'/' chars)
+        AnyNonSlash, // "?"
         Lit(u8),
     }
     let mut toks = Vec::with_capacity(pat.len());
@@ -505,7 +510,8 @@ fn scan_project_skills(
             let Ok(skill_dir) = open_beneath_dir(&base_fd, Path::new(&dir_name)) else {
                 continue;
             };
-            let Ok((bytes, _)) = read_regular_beneath(&skill_dir, Path::new("SKILL.md"), MAX_SKILL_BYTES)
+            let Ok((bytes, _)) =
+                read_regular_beneath(&skill_dir, Path::new("SKILL.md"), MAX_SKILL_BYTES)
             else {
                 continue;
             };
@@ -634,7 +640,10 @@ fn load_skill(
     client: &Client,
     reserved: &dyn Fn(&Path) -> bool,
 ) -> Result<Value, String> {
-    if args.keys().any(|k| !matches!(k.as_str(), "name" | "max_bytes")) {
+    if args
+        .keys()
+        .any(|k| !matches!(k.as_str(), "name" | "max_bytes"))
+    {
         return Err("Unexpected load_skill argument".into());
     }
     let name = args
@@ -725,10 +734,7 @@ fn remember(
     {
         return Err("Memory note must be non-empty UTF-8 (<= 2000 bytes)".into());
     }
-    let single_line = trimmed
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let single_line = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
 
     let root = client
         .mutation_root
@@ -739,10 +745,18 @@ fn remember(
     if reserved(&mem_dir_abs) || operator::policy_path(config, &mem_dir_abs) {
         return Err("Memory path conflicts with protected state".into());
     }
-    if settings.skills.as_ref().is_some_and(|s| mem_dir_abs.starts_with(s.path())) {
+    if settings
+        .skills
+        .as_ref()
+        .is_some_and(|s| mem_dir_abs.starts_with(s.path()))
+    {
         return Err("Memory path conflicts with skills directory".into());
     }
-    match fs::mkdirat(root.directory(), mem_dir_rel, Mode::from_bits_truncate(0o750)) {
+    match fs::mkdirat(
+        root.directory(),
+        mem_dir_rel,
+        Mode::from_bits_truncate(0o750),
+    ) {
         Ok(()) | Err(rustix::io::Errno::EXIST) => {}
         Err(_) => return Err("Unable to initialize workspace memory directory".into()),
     }
@@ -761,7 +775,8 @@ fn remember(
     ) {
         Ok(handle) => {
             let stat = fs::fstat(&handle).map_err(|_| "Unable to stat MEMORY.md")?;
-            if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink != 1 {
+            if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink != 1
+            {
                 return Err("MEMORY.md must be a regular unaliased file".into());
             }
             let file = reopen_regular(&handle, OFlags::RDONLY | OFlags::NONBLOCK)
@@ -820,7 +835,14 @@ fn remember(
             return Err("Failed writing staged memory file".into());
         }
     }
-    if fs::renameat(&mem_dir, Path::new(&tmp_name), &mem_dir, Path::new("MEMORY.md")).is_err() {
+    if fs::renameat(
+        &mem_dir,
+        Path::new(&tmp_name),
+        &mem_dir,
+        Path::new("MEMORY.md"),
+    )
+    .is_err()
+    {
         let _ = fs::unlinkat(&mem_dir, Path::new(&tmp_name), fs::AtFlags::empty());
         return Err("Failed publishing MEMORY.md".into());
     }
@@ -886,7 +908,11 @@ fn generated_marker(path: &Path) -> Option<String> {
     None
 }
 
-fn run_readonly_cmd(bin: &str, args: &[&str], dest_home: &Path) -> Option<(Option<i32>, String, String)> {
+fn run_readonly_cmd(
+    bin: &str,
+    args: &[&str],
+    dest_home: &Path,
+) -> Option<(Option<i32>, String, String)> {
     let mut cmd = Command::new(bin);
     cmd.args(args)
         .env_clear()
@@ -895,7 +921,8 @@ fn run_readonly_cmd(bin: &str, args: &[&str], dest_home: &Path) -> Option<(Optio
         .env("HOME", dest_home)
         .current_dir("/");
     let (status, stdout, stderr) =
-        crate::linux_command::capture_with_input(&mut cmd, &[], 16_384, Duration::from_secs(3)).ok()?;
+        crate::linux_command::capture_with_input(&mut cmd, &[], 16_384, Duration::from_secs(3))
+            .ok()?;
     Some((
         status.code(),
         String::from_utf8_lossy(&stdout).trim().to_owned(),
@@ -1087,7 +1114,13 @@ fn chezmoi_inspect(
             &dest_dir,
         )
         .and_then(|(c, out, _)| {
-            (c == Some(0)).then(|| if out.is_empty() { "in_sync".to_owned() } else { out })
+            (c == Some(0)).then(|| {
+                if out.is_empty() {
+                    "in_sync".to_owned()
+                } else {
+                    out
+                }
+            })
         });
         return Ok(json!({
             "requestedPath": requested,

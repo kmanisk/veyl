@@ -52,7 +52,11 @@ impl Jobs {
             {
                 return Err(io::Error::from(ErrorKind::Unsupported));
             }
-            Some(super::session::Binding::new(policy.session.ok_or_else(invalid)?, root, profile.pty))
+            Some(super::session::Binding::new(
+                policy.session.ok_or_else(invalid)?,
+                root,
+                profile.pty,
+            ))
         } else {
             None
         };
@@ -145,8 +149,13 @@ impl Jobs {
         }
 
         let job_id = random_hex()?;
-        let mut worktree = worktree_repo.map(|repo| super::worktree::Worktree::create(repo, &job_id)).transpose()?;
-        let worktree_root = worktree.as_ref().map(|wt| JobRoot::open(&wt.path).map_err(io::Error::other)).transpose()?;
+        let mut worktree = worktree_repo
+            .map(|repo| super::worktree::Worktree::create(repo, &job_id))
+            .transpose()?;
+        let worktree_root = worktree
+            .as_ref()
+            .map(|wt| JobRoot::open(&wt.path).map_err(io::Error::other))
+            .transpose()?;
         let execution_root = worktree_root.as_ref().map_or(root, JobRoot::identity);
         let receipt = Receipt {
             job_id,
@@ -201,7 +210,9 @@ impl Jobs {
             id
         };
         job.save(&receipt)?;
-        if let Some(wt) = &mut worktree { wt.disarm(); }
+        if let Some(wt) = &mut worktree {
+            wt.disarm();
+        }
 
         let launch = Launch {
             store: self.store.path().to_owned(),

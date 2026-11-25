@@ -114,7 +114,10 @@ impl Store {
     }
 
     pub(super) fn input_key(&self, receipt: &Receipt) -> [u8; 32] {
-        hmac(&self.key, format!("veyl/stdin/v1/{}/{}", receipt.job_id, receipt.launch_nonce).as_bytes())
+        hmac(
+            &self.key,
+            format!("veyl/stdin/v1/{}/{}", receipt.job_id, receipt.launch_nonce).as_bytes(),
+        )
     }
 
     pub fn lock(&self, create: bool) -> io::Result<File> {
@@ -224,7 +227,15 @@ impl Store {
         for entry in Dir::read_from(&job.directory)? {
             let entry = entry?;
             let name = entry.file_name().to_str().map_err(|_| invalid())?;
-            if !matches!(name, "." | ".." | ".lease" | "receipt.json" | ".receipt.tmp" | "stdout.log" | "stderr.log") {
+            if !matches!(
+                name,
+                "." | ".."
+                    | ".lease"
+                    | "receipt.json"
+                    | ".receipt.tmp"
+                    | "stdout.log"
+                    | "stderr.log"
+            ) {
                 return Err(invalid());
             }
             if !matches!(name, "." | "..") {
@@ -244,7 +255,13 @@ impl Store {
             }
         }
         job.check_binding()?;
-        for name in [".receipt.tmp", "receipt.json", "stdout.log", "stderr.log", ".lease"] {
+        for name in [
+            ".receipt.tmp",
+            "receipt.json",
+            "stdout.log",
+            "stderr.log",
+            ".lease",
+        ] {
             match fs::unlinkat(&job.directory, name, AtFlags::empty()) {
                 Ok(()) | Err(Errno::NOENT) => (),
                 Err(error) => return Err(error.into()),
@@ -256,7 +273,6 @@ impl Store {
         fs::fsync(&self.directory)?;
         Ok(())
     }
-
 }
 
 pub(super) struct JobDir<'a> {

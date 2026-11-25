@@ -105,7 +105,9 @@ fn validate(tool: &str, value: &Value) -> Result<(), &'static str> {
         let files = value.as_array().ok_or("expected files array")?;
         if files.len() > 64
             || (tool == "git_restore" && files.is_empty())
-            || files.iter().any(|v| !v.as_str().is_some_and(pathspec_valid))
+            || files
+                .iter()
+                .any(|v| !v.as_str().is_some_and(pathspec_valid))
         {
             return Err("invalid files");
         }
@@ -113,14 +115,20 @@ fn validate(tool: &str, value: &Value) -> Result<(), &'static str> {
         return Err("files required");
     }
     for key in ["name", "branch", "source", "ref"] {
-        if args.get(key).is_some_and(|v| !v.as_str().is_some_and(ref_valid)) {
+        if args
+            .get(key)
+            .is_some_and(|v| !v.as_str().is_some_and(ref_valid))
+        {
             return Err("invalid ref");
         }
     }
     if tool == "git_checkout" && !args.contains_key("branch") {
         return Err("branch required");
     }
-    if args.get("remote").is_some_and(|v| !v.as_str().is_some_and(remote_valid)) {
+    if args
+        .get("remote")
+        .is_some_and(|v| !v.as_str().is_some_and(remote_valid))
+    {
         return Err("invalid remote");
     }
     if let Some(value) = args.get("action") {
@@ -178,12 +186,7 @@ fn is_readonly_op(tool: Tool, args: &Map<String, Value>) -> bool {
     }
 }
 
-fn is_protected(
-    path: &Path,
-    config: &Path,
-    settings: &Configuration,
-    readonly: bool,
-) -> bool {
+fn is_protected(path: &Path, config: &Path, settings: &Configuration, readonly: bool) -> bool {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     if is_mandatory(config, settings, path)
         || settings
@@ -195,9 +198,11 @@ fn is_protected(
             .selected(Kind::Optional)
             .iter()
             .any(|rule| path.starts_with(&rule.path))
-        || home
-            .as_ref()
-            .is_some_and(|home| OPTIONAL_DEFAULTS.iter().any(|dir| path.starts_with(home.join(dir))))
+        || home.as_ref().is_some_and(|home| {
+            OPTIONAL_DEFAULTS
+                .iter()
+                .any(|dir| path.starts_with(home.join(dir)))
+        })
     {
         return true;
     }
@@ -207,9 +212,11 @@ fn is_protected(
             .selected(Kind::ReadOnly)
             .iter()
             .any(|rule| path.starts_with(&rule.path))
-            || home
-                .as_ref()
-                .is_some_and(|home| READONLY_DEFAULTS.iter().any(|dir| path.starts_with(home.join(dir)))))
+            || home.as_ref().is_some_and(|home| {
+                READONLY_DEFAULTS
+                    .iter()
+                    .any(|dir| path.starts_with(home.join(dir)))
+            }))
     {
         return true;
     }
@@ -382,7 +389,8 @@ fn execute(
             },
             identity,
         };
-        let add_bytes = serde_json::to_vec(&add_spec).map_err(|_| "Cannot encode git add request")?;
+        let add_bytes =
+            serde_json::to_vec(&add_spec).map_err(|_| "Cannot encode git add request")?;
         let exe = std::env::current_exe().map_err(|_| "Gateway executable unavailable")?;
         let mut add_cmd = Command::new(exe);
         add_cmd.env_clear().arg("--git-tool-worker");
@@ -402,7 +410,11 @@ fn execute(
             let msg = add_reply["stderr"]
                 .as_str()
                 .filter(|s| !s.trim().is_empty())
-                .or_else(|| add_reply["stdout"].as_str().filter(|s| !s.trim().is_empty()))
+                .or_else(|| {
+                    add_reply["stdout"]
+                        .as_str()
+                        .filter(|s| !s.trim().is_empty())
+                })
                 .unwrap_or("git add failed");
             return Err(msg.trim().to_owned());
         }
@@ -433,8 +445,7 @@ fn execute(
     if !status.success() {
         return Err("Git operation refused by confinement worker".into());
     }
-    let reply: Value =
-        serde_json::from_slice(&stdout).map_err(|_| "Invalid git worker reply")?;
+    let reply: Value = serde_json::from_slice(&stdout).map_err(|_| "Invalid git worker reply")?;
     let exit_code = reply["exit_code"].as_i64().unwrap_or(1);
     let out = reply["stdout"].as_str().unwrap_or("").trim();
     let err = reply["stderr"].as_str().unwrap_or("").trim();
@@ -453,17 +464,57 @@ fn execute(
 
 enum Meta {
     Status(PathBuf),
-    Diff { path: PathBuf, staged: bool, file: Option<String> },
-    Log { path: PathBuf, count: u64 },
-    Add { path: PathBuf, files: Vec<String> },
-    Commit { path: PathBuf, message: String },
-    Branch { path: PathBuf, action: String, name: Option<String> },
-    Checkout { path: PathBuf, branch: String },
-    Restore { path: PathBuf, files: Vec<String>, source: String },
-    Stash { path: PathBuf, action: String },
-    Reset { path: PathBuf, mode: String, git_ref: String },
-    Pull { path: PathBuf, remote: String, branch: Option<String> },
-    Push { path: PathBuf, remote: String, branch: Option<String>, set_upstream: bool },
+    Diff {
+        path: PathBuf,
+        staged: bool,
+        file: Option<String>,
+    },
+    Log {
+        path: PathBuf,
+        count: u64,
+    },
+    Add {
+        path: PathBuf,
+        files: Vec<String>,
+    },
+    Commit {
+        path: PathBuf,
+        message: String,
+    },
+    Branch {
+        path: PathBuf,
+        action: String,
+        name: Option<String>,
+    },
+    Checkout {
+        path: PathBuf,
+        branch: String,
+    },
+    Restore {
+        path: PathBuf,
+        files: Vec<String>,
+        source: String,
+    },
+    Stash {
+        path: PathBuf,
+        action: String,
+    },
+    Reset {
+        path: PathBuf,
+        mode: String,
+        git_ref: String,
+    },
+    Pull {
+        path: PathBuf,
+        remote: String,
+        branch: Option<String>,
+    },
+    Push {
+        path: PathBuf,
+        remote: String,
+        branch: Option<String>,
+        set_upstream: bool,
+    },
 }
 
 fn build_argv(
@@ -485,7 +536,11 @@ fn build_argv(
         Tool::GitDiff => {
             let staged = args.get("staged").and_then(Value::as_bool).unwrap_or(false);
             let file = args.get("file").and_then(Value::as_str).map(str::to_owned);
-            let mut argv = vec!["diff".into(), "--no-ext-diff".into(), "--no-textconv".into()];
+            let mut argv = vec![
+                "diff".into(),
+                "--no-ext-diff".into(),
+                "--no-textconv".into(),
+            ];
             if staged {
                 argv.push("--staged".into());
             }
@@ -506,7 +561,12 @@ fn build_argv(
         Tool::GitLog => {
             let count = args.get("count").and_then(Value::as_u64).unwrap_or(10);
             Ok((
-                vec!["log".into(), "--oneline".into(), "-n".into(), count.to_string()],
+                vec![
+                    "log".into(),
+                    "--oneline".into(),
+                    "-n".into(),
+                    count.to_string(),
+                ],
                 false,
                 Meta::Log {
                     path: repo.to_path_buf(),
@@ -548,7 +608,10 @@ fn build_argv(
         }
         Tool::GitCommit => {
             let message = args["message"].as_str().unwrap().to_owned();
-            let stage_all = args.get("stage_all").and_then(Value::as_bool).unwrap_or(true);
+            let stage_all = args
+                .get("stage_all")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
             let argv = vec!["commit".into(), "-m".into(), message.clone()];
             Ok((
                 argv,
@@ -607,7 +670,12 @@ fn build_argv(
                 .and_then(Value::as_str)
                 .unwrap_or("HEAD")
                 .to_owned();
-            let mut argv = vec!["restore".into(), "--source".into(), source.clone(), "--".into()];
+            let mut argv = vec![
+                "restore".into(),
+                "--source".into(),
+                source.clone(),
+                "--".into(),
+            ];
             argv.extend(files.iter().cloned());
             Ok((
                 argv,
@@ -741,22 +809,43 @@ fn format_result(_tool: Tool, meta: Meta, out: &str, err: &str) -> Value {
             json!({ "path": path, "count": count, "commits": commits })
         }
         Meta::Add { path, files } => json!({ "path": path, "files": files, "output": out }),
-        Meta::Commit { path, message } => json!({ "path": path, "message": message, "output": out }),
+        Meta::Commit { path, message } => {
+            json!({ "path": path, "message": message, "output": out })
+        }
         Meta::Branch { path, action, name } => {
             json!({ "path": path, "action": action, "name": name, "output": text })
         }
-        Meta::Checkout { path, branch } => json!({ "path": path, "branch": branch, "output": text }),
-        Meta::Restore { path, files, source } => {
+        Meta::Checkout { path, branch } => {
+            json!({ "path": path, "branch": branch, "output": text })
+        }
+        Meta::Restore {
+            path,
+            files,
+            source,
+        } => {
             json!({ "path": path, "files": files, "source": source, "output": if text.is_empty() { "Restored" } else { text } })
         }
         Meta::Stash { path, action } => json!({ "path": path, "action": action, "output": text }),
-        Meta::Reset { path, mode, git_ref } => {
+        Meta::Reset {
+            path,
+            mode,
+            git_ref,
+        } => {
             json!({ "path": path, "mode": mode, "ref": git_ref, "output": text })
         }
-        Meta::Pull { path, remote, branch } => {
+        Meta::Pull {
+            path,
+            remote,
+            branch,
+        } => {
             json!({ "path": path, "remote": remote, "branch": branch, "output": text })
         }
-        Meta::Push { path, remote, branch, set_upstream } => json!({
+        Meta::Push {
+            path,
+            remote,
+            branch,
+            set_upstream,
+        } => json!({
             "path": path, "remote": remote, "branch": branch, "set_upstream": set_upstream, "output": text
         }),
     }
@@ -781,7 +870,16 @@ mod tests {
 
     #[test]
     fn pathspec_rejects_traversal_and_option_injection() {
-        for value in ["", "../a", "a/../b", "/tmp/x", "--all", ":(top)secret", "a\0b", "a\nb"] {
+        for value in [
+            "",
+            "../a",
+            "a/../b",
+            "/tmp/x",
+            "--all",
+            ":(top)secret",
+            "a\0b",
+            "a\nb",
+        ] {
             assert!(!pathspec_valid(value), "{value:?}");
         }
         assert!(!pathspec_valid(&"x".repeat(1025)));
@@ -790,7 +888,10 @@ mod tests {
 
     #[test]
     fn refs_and_remotes_reject_injection() {
-        for value in ["", "-x", "a..b", "a@{b", "a b", "a\0b", "a~b", "a^b", "a:b", "a*b", "a?b", "a[b", "a\\b", "é"] {
+        for value in [
+            "", "-x", "a..b", "a@{b", "a b", "a\0b", "a~b", "a^b", "a:b", "a*b", "a?b", "a[b",
+            "a\\b", "é",
+        ] {
             assert!(!ref_valid(value), "{value:?}");
         }
         assert!(!ref_valid(&"x".repeat(129)));

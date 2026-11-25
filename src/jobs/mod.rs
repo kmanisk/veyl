@@ -10,8 +10,8 @@ mod receipt;
 mod recovery;
 mod resources;
 mod runner;
-mod session;
 mod sandbox;
+mod session;
 mod store;
 mod worktree;
 

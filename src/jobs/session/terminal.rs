@@ -24,16 +24,36 @@ impl Terminal {
         unlockpt(&master)?;
         let slave = File::from(ioctl_tiocgptpeer(&master, flags)?);
         rustix::fs::fchmod(&slave, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)?;
-        tcsetwinsize(&master, Winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 })?;
+        tcsetwinsize(
+            &master,
+            Winsize {
+                ws_row: 24,
+                ws_col: 80,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            },
+        )?;
         logs::nonblocking(&master)?;
-        command.stdin(Stdio::from(slave.try_clone()?))
+        command
+            .stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave));
-        Ok(Self { master: File::from(master), pending: None })
+        Ok(Self {
+            master: File::from(master),
+            pending: None,
+        })
     }
 
     pub(super) fn resize(&self, rows: u16, cols: u16) -> io::Result<()> {
-        tcsetwinsize(&self.master, Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 })?;
+        tcsetwinsize(
+            &self.master,
+            Winsize {
+                ws_row: rows,
+                ws_col: cols,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            },
+        )?;
         Ok(())
     }
 
@@ -57,7 +77,11 @@ impl Terminal {
                         self.pending = None;
                     }
                 }
-                Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) => (),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) => {}
                 Err(e) => return Err(e),
             }
         }

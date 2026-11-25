@@ -16,8 +16,14 @@ mcp-gateway mcp-servers disable example --config "$config"
 mcp-gateway mcp-servers remove example --config "$config"
 ```
 
-The dashboard exposes the same registration, probe, disable, removal and
-grant operations after pairing and confirmation. The health check runs
+The dashboard exposes registration, one-click verified marketplace
+installation (`POST /api/dashboard/marketplace/{install,configure,uninstall,cancel,recover}`),
+probe, disable, removal, and bulk/per-tool grant operations after pairing and confirmation.
+Verified marketplace packages (`rea`, `rust-anything`, pure-JS npm tarballs without lifecycle hooks,
+pure-Python wheels, standalone ELF binaries, and guidance-only skills) are staged cleanly under
+`<state_root>/upstream-bundles/<id>` after cryptographic digest verification, probed inside Bubblewrap,
+and rolled back automatically on failure or cancellation. Manual custom `mcp-servers add-stdio`,
+`add-bundle`, and `add-http` remain unchanged.
 initialization and tool discovery on demand. It does not invoke a tool.
 Discovery advertises `example__lookup`, with the provider ID as the prefix.
 Grant changes apply to the next admitted request, including an existing MCP

@@ -605,7 +605,8 @@ fn sweep(dirs: &[PathBuf]) -> Result<(), String> {
             let e = e.map_err(|_| "Cannot list install directory")?;
             let name = e.file_name();
             if name.to_string_lossy().starts_with(".veyl-update-") {
-                let m = std::fs::symlink_metadata(e.path()).map_err(|_| "Cannot inspect orphan stage")?;
+                let m = std::fs::symlink_metadata(e.path())
+                    .map_err(|_| "Cannot inspect orphan stage")?;
                 if m.is_dir() {
                     clean_private_dir(dir, &name)?;
                 }
@@ -719,7 +720,10 @@ fn recover(home: &Path) -> Result<(), String> {
         crate::service_cli::update_stop()?;
     }
     for dir in &j.dirs {
-        clean_private_dir(dir, std::ffi::OsStr::new(&format!(".veyl-update-recover-{}", j.nonce)))?;
+        clean_private_dir(
+            dir,
+            std::ffi::OsStr::new(&format!(".veyl-update-recover-{}", j.nonce)),
+        )?;
         let mut stage =
             PrivateStage::create(dir.join(format!(".veyl-update-recover-{}", j.nonce)))?;
         let dest_fd = open_operator_dir(dir).map_err(|_| "Cannot open install directory")?;
@@ -1045,12 +1049,22 @@ mod tests {
     use super::*;
     use std::{fs, os::unix::fs::DirBuilderExt};
     fn fixture() -> (PathBuf, PathBuf, OwnedFd, Journal) {
-        let home = std::env::temp_dir().join(format!("veyl-recovery-test-{}", crate::http::operator::revision().unwrap()));
+        let home = std::env::temp_dir().join(format!(
+            "veyl-recovery-test-{}",
+            crate::http::operator::revision().unwrap()
+        ));
         fs::DirBuilder::new().mode(0o700).create(&home).unwrap();
         fs::create_dir_all(home.join(".local/bin")).unwrap();
         let dir = home.join(".local/bin");
         let (root, fd) = rollback_root(&home, true).unwrap().unwrap();
-        let j = Journal { nonce: "abcdef".into(), phase: "staging".into(), dirs: vec![dir], backup_dir: root.join("abcdef"), service_executable: None, service_active: false };
+        let j = Journal {
+            nonce: "abcdef".into(),
+            phase: "staging".into(),
+            dirs: vec![dir],
+            backup_dir: root.join("abcdef"),
+            service_executable: None,
+            service_active: false,
+        };
         (home, root, fd, j)
     }
     fn replacing_fixture() -> (PathBuf, PathBuf, OwnedFd, Journal) {
@@ -1062,7 +1076,13 @@ mod tests {
             {"destination": j.dirs[0].join("veyl-monitor"), "backup": null, "original_mode": null, "original_sha256": null},
             {"destination": j.dirs[0].join("mcp-gateway"), "backup": null, "original_mode": null, "original_sha256": null}
         ]);
-        backup.write("manifest.json", &serde_json::to_vec(&entries).unwrap(), 0o600).unwrap();
+        backup
+            .write(
+                "manifest.json",
+                &serde_json::to_vec(&entries).unwrap(),
+                0o600,
+            )
+            .unwrap();
         backup.retain = true;
         write_new(&j.dirs[0].join("veyl"), b"updated", 0o755).unwrap();
         write_new(&j.dirs[0].join("veyl-monitor"), b"new", 0o755).unwrap();
@@ -1077,23 +1097,34 @@ mod tests {
     fn interrupted_staging_is_cleaned_before_next_transaction() {
         let (home, root, fd, j) = fixture();
         let mut backup = PrivateStage::create(j.backup_dir.clone()).unwrap();
-        backup.write("partial", b"old", 0o600).unwrap(); backup.retain = true;
+        backup.write("partial", b"old", 0o600).unwrap();
+        backup.retain = true;
         let mut stage = PrivateStage::create(j.dirs[0].join(".veyl-update-abcdef")).unwrap();
-        stage.write("partial", b"new", 0o600).unwrap(); stage.retain = true;
+        stage.write("partial", b"new", 0o600).unwrap();
+        stage.retain = true;
         write_journal(&fd, &j).unwrap();
         let old = read_journal(&home, &root).unwrap().unwrap();
-        clean_staging(&old, &root, true).unwrap(); clear_journal(&fd).unwrap();
-        assert!(!j.backup_dir.exists()); assert!(!j.dirs[0].join(".veyl-update-abcdef").exists()); assert!(!root.join("active.json").exists());
+        clean_staging(&old, &root, true).unwrap();
+        clear_journal(&fd).unwrap();
+        assert!(!j.backup_dir.exists());
+        assert!(!j.dirs[0].join(".veyl-update-abcdef").exists());
+        assert!(!root.join("active.json").exists());
         fs::remove_dir_all(home).unwrap();
     }
     #[test]
     fn recover_restores_and_removes_new_files() {
         let (home, root, _fd, j) = replacing_fixture();
         recover(&home).unwrap();
-        assert_eq!(read_owned(&j.dirs[0].join("veyl"), LOCAL_LIMIT).unwrap().unwrap(), (b"original".to_vec(), 0o750));
+        assert_eq!(
+            read_owned(&j.dirs[0].join("veyl"), LOCAL_LIMIT)
+                .unwrap()
+                .unwrap(),
+            (b"original".to_vec(), 0o750)
+        );
         assert!(!j.dirs[0].join("veyl-monitor").exists());
         assert!(!j.dirs[0].join(".veyl-update-abcdef").exists());
-        assert!(!root.join("active.json").exists()); assert!(j.backup_dir.exists());
+        assert!(!root.join("active.json").exists());
+        assert!(j.backup_dir.exists());
         fs::remove_dir_all(home).unwrap();
     }
     #[test]

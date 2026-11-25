@@ -61,6 +61,7 @@ pub(crate) fn normalize(mut args: Vec<OsString>) -> Result<Vec<OsString>, String
                 | "serve"
                 | "skills"
                 | "mcp-servers"
+                | "marketplace"
                 | "service"
                 | "connect"
                 | "diagnostics"
@@ -137,14 +138,20 @@ pub(crate) fn diagnostics(args: &[OsString]) -> Result<(), String> {
     if enable {
         tools.push("system_inspect".into());
     }
-    if let Some(denials) = entry.get_mut("deny_tools").and_then(serde_json::Value::as_array_mut) {
+    if let Some(denials) = entry
+        .get_mut("deny_tools")
+        .and_then(serde_json::Value::as_array_mut)
+    {
         denials.retain(|tool| tool.as_str() != Some("system_inspect"));
     }
     if !enable {
         if entry.get("deny_tools").is_none() {
             entry["deny_tools"] = serde_json::json!([]);
         }
-        entry["deny_tools"].as_array_mut().ok_or("Invalid tool denials")?.push("system_inspect".into());
+        entry["deny_tools"]
+            .as_array_mut()
+            .ok_or("Invalid tool denials")?
+            .push("system_inspect".into());
     }
     if *entry == before && pending.is_none() {
         println!("client={client} system_inspect={enable}");
@@ -187,7 +194,8 @@ pub(crate) fn init(args: &[OsString]) -> Result<(), String> {
     use sha2::{Digest, Sha256};
     use std::ffi::OsStr;
 
-    const HELP: &str = "usage: veyl init --root EXISTING_WORKSPACE [--tailscale | --tailscale-host HOST] [--yolo]";
+    const HELP: &str =
+        "usage: veyl init --root EXISTING_WORKSPACE [--tailscale | --tailscale-host HOST] [--yolo]";
     if args == ["--help"] {
         println!("{HELP}");
         return Ok(());

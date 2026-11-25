@@ -219,8 +219,13 @@ fn parse(args: &[OsString], legacy: bool) -> Result<(Operation, PathBuf, Option<
             Operation::Select(mode) if client.is_none() => Operation::SelectAll(mode),
             _ => return Err("--all requires a mode selection without a client ID".into()),
         }
-    } else { operation };
-    let full = matches!(operation, Operation::Select(Mode::Full) | Operation::SelectAll(Mode::Full));
+    } else {
+        operation
+    };
+    let full = matches!(
+        operation,
+        Operation::Select(Mode::Full) | Operation::SelectAll(Mode::Full)
+    );
     if full && !confirm {
         return Err("FULL requires --confirm-full".into());
     }
@@ -293,12 +298,43 @@ mod tests {
 
     #[test]
     fn all_is_explicit_and_full_still_requires_confirmation() {
-        assert!(matches!(parse(&args(&["yolo", "--all", "--config", "/tmp/config"]), false).unwrap().0, Operation::SelectAll(Mode::BroadYolo)));
-        assert!(parse(&args(&["yolo", "dev", "--all", "--config", "/tmp/config"]), false).is_err());
-        assert!(parse(&args(&["enable", "--all", "--config", "/tmp/config"]), false).is_err());
+        assert!(matches!(
+            parse(&args(&["yolo", "--all", "--config", "/tmp/config"]), false)
+                .unwrap()
+                .0,
+            Operation::SelectAll(Mode::BroadYolo)
+        ));
+        assert!(
+            parse(
+                &args(&["yolo", "dev", "--all", "--config", "/tmp/config"]),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                &args(&["enable", "--all", "--config", "/tmp/config"]),
+                false
+            )
+            .is_err()
+        );
         assert!(parse(&args(&["full", "--all", "--config", "/tmp/config"]), false).is_err());
-        assert!(matches!(parse(&args(&["full", "--all", "--confirm-full", "--config", "/tmp/config"]), false).unwrap().0, Operation::SelectAll(Mode::Full)));
-        assert!(parse(&args(&["set", "--mode", "yolo", "--all", "--config", "/tmp/config"]), true).is_err());
+        assert!(matches!(
+            parse(
+                &args(&["full", "--all", "--confirm-full", "--config", "/tmp/config"]),
+                false
+            )
+            .unwrap()
+            .0,
+            Operation::SelectAll(Mode::Full)
+        ));
+        assert!(
+            parse(
+                &args(&["set", "--mode", "yolo", "--all", "--config", "/tmp/config"]),
+                true
+            )
+            .is_err()
+        );
     }
 
     #[test]

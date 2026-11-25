@@ -107,8 +107,16 @@ dialog::backdrop { background:#0006; }
 .catalog-title { min-width:0; }
 .catalog-mark { flex:none; width:2.65rem; height:2.65rem; display:grid; place-items:center; border:1px solid var(--stroke); background:var(--base); border-radius:.45rem; color:var(--accent); }
 .catalog-icon { width:1.5rem; height:1.5rem; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
-.catalog-card .catalog-footer { display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:.4rem; }
+.catalog-card .catalog-footer { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:.4rem; }
+.catalog-actions { display:flex; flex-wrap:wrap; gap:.35rem; }
 .catalog-footer button { margin:0; padding:.45rem .6rem; }
+.grant-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(14rem,1fr)); gap:.35rem .75rem; margin-top:.75rem; }
+.grant-grid label { display:flex; align-items:center; gap:.45rem; font-size:.86rem; padding:.25rem .4rem; border:1px solid var(--stroke); background:var(--base); }
+.grant-grid input[type="checkbox"] { width:auto; margin:0; }
+.ops-list { display:grid; gap:.5rem; margin:.75rem 0; }
+.op-row { display:flex; flex-wrap:wrap; align-items:center; gap:.65rem; padding:.7rem .9rem; border:1px solid var(--stroke); background:var(--surface); }
+.op-row progress { width:10rem; height:.7rem; }
+.verified-badge { font-size:.78rem; padding:.1rem .4rem; border:1px solid var(--accent); color:var(--accent); border-radius:3px; }
 @media(max-width:560px) { .catalog-card .catalog-footer { grid-template-columns:1fr 1fr; } .catalog-footer .catalog-meta { grid-column:1/-1; } }
 .catalog-pagination { justify-content:flex-end; margin-top:1rem; }
 .provider-health[data-health="ready"] { color:var(--success); }

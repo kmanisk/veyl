@@ -52,8 +52,16 @@ enum Outcome {
 
 impl Outcome {
     const ALL: [Self; 10] = [
-        Self::Current, Self::Accepted, Self::Consumed, Self::OutOfOrder,
-        Self::Backpressure, Self::Closed, Self::Hangup, Self::Revoked, Self::NotPty, Self::ResizeFailed,
+        Self::Current,
+        Self::Accepted,
+        Self::Consumed,
+        Self::OutOfOrder,
+        Self::Backpressure,
+        Self::Closed,
+        Self::Hangup,
+        Self::Revoked,
+        Self::NotPty,
+        Self::ResizeFailed,
     ];
 
     fn label(&self) -> &'static str {
@@ -142,9 +150,14 @@ pub(super) fn exchange(
             return Err(io::Error::from(ErrorKind::PermissionDenied));
         }
         if *outcome == Outcome::NotPty {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "Session is not a PTY"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Session is not a PTY",
+            ));
         }
-        if *outcome == Outcome::ResizeFailed { return Err(io::Error::other("PTY resize failed")); }
+        if *outcome == Outcome::ResizeFailed {
+            return Err(io::Error::other("PTY resize failed"));
+        }
         Ok(json!({
             "status": outcome.label(),
             "next_sequence": number(&reply[SEQUENCE..SEQUENCE + 8]),
@@ -165,7 +178,9 @@ pub(super) fn exchange(
         Operation::Query => Ok(current),
         Operation::Write(sequence, data) => transfer(1, sequence, data),
         Operation::Eof(sequence) => transfer(2, sequence, &[]),
-        Operation::Resize(rows, cols) => transfer(3, 0, &[rows.to_be_bytes(), cols.to_be_bytes()].concat()),
+        Operation::Resize(rows, cols) => {
+            transfer(3, 0, &[rows.to_be_bytes(), cols.to_be_bytes()].concat())
+        }
     }
 }
 
@@ -191,7 +206,14 @@ impl Channel {
         let socket = UnixDatagram::bind_addr(&session_address(&key)?)?;
         socket.set_nonblocking(true)?;
         let pty = matches!(stdin, Input::Pty(_));
-        Ok(Self { socket, key, stdin: Some(stdin), next: 0, pty, size: pty.then_some((24, 80)) })
+        Ok(Self {
+            socket,
+            key,
+            stdin: Some(stdin),
+            next: 0,
+            pty,
+            size: pty.then_some((24, 80)),
+        })
     }
 
     pub(in crate::jobs) fn drain_terminal(&mut self, log: &mut logs::Log) -> io::Result<bool> {
@@ -212,26 +234,29 @@ impl Channel {
         let mut packet = [0; HEADER + MAX_INPUT + 1];
         let (len, sender) = match self.socket.recv_from(&mut packet) {
             Ok(message) => message,
-            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {
+            Err(error)
+                if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) =>
+            {
                 return Ok(());
             }
             Err(error) => return Err(error),
         };
-        if !(HEADER..=HEADER + MAX_INPUT).contains(&len)
-            || !authentic(&self.key, &packet[..len])
-        {
+        if !(HEADER..=HEADER + MAX_INPUT).contains(&len) || !authentic(&self.key, &packet[..len]) {
             return Ok(());
         }
         let correlation = &packet[TAG..TAG + CORRELATION];
         // Also bind the reply address to the unique authenticated exchange.
-        if sender.as_abstract_name() != address("veyl.stdin.reply.", correlation)?.as_abstract_name()
+        if sender.as_abstract_name()
+            != address("veyl.stdin.reply.", correlation)?.as_abstract_name()
         {
             return Ok(());
         }
         let sequence = number(&packet[SEQUENCE..DEADLINE]);
         let deadline = number(&packet[DEADLINE..EXPIRATION]);
         let expires_at = number(&packet[EXPIRATION..REVISION]);
-        let revision = packet[REVISION..HEADER - 1].try_into().expect("revision field size");
+        let revision = packet[REVISION..HEADER - 1]
+            .try_into()
+            .expect("revision field size");
         let outcome = if let Ok(_policy) = PolicyFile::input_snapshot(config, revision)
             && millis() < deadline
             && now() < expires_at
@@ -263,12 +288,19 @@ impl Channel {
             return Outcome::Current;
         }
         if kind == 3 && data.len() == 4 {
-            if !self.pty { return Outcome::NotPty; }
+            if !self.pty {
+                return Outcome::NotPty;
+            }
             let rows = u16::from_be_bytes([data[0], data[1]]);
             let cols = u16::from_be_bytes([data[2], data[3]]);
-            if !(1..=512).contains(&rows) || !(1..=512).contains(&cols) { return Outcome::ResizeFailed; }
+            if !(1..=512).contains(&rows) || !(1..=512).contains(&cols) {
+                return Outcome::ResizeFailed;
+            }
             return match &self.stdin {
-                Some(Input::Pty(terminal)) if terminal.resize(rows, cols).is_ok() => { self.size = Some((rows, cols)); Outcome::Accepted },
+                Some(Input::Pty(terminal)) if terminal.resize(rows, cols).is_ok() => {
+                    self.size = Some((rows, cols));
+                    Outcome::Accepted
+                }
                 _ => Outcome::ResizeFailed,
             };
         }
@@ -290,7 +322,11 @@ impl Channel {
             let terminal = matches!(stdin, Input::Pty(_));
             self.stdin = None;
             self.next += 1;
-            return if terminal { Outcome::Hangup } else { Outcome::Accepted };
+            return if terminal {
+                Outcome::Hangup
+            } else {
+                Outcome::Accepted
+            };
         }
         if kind != 1 || data.is_empty() {
             return Outcome::Closed;
@@ -310,7 +346,9 @@ impl Channel {
                 self.next += 1;
                 Outcome::Accepted
             }
-            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {
+            Err(error)
+                if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) =>
+            {
                 Outcome::Backpressure
             }
             _ => {
@@ -340,10 +378,18 @@ mod tests {
             reply[TAG..SEQUENCE].copy_from_slice(&message[TAG..SEQUENCE]);
             peer.send_to_addr(&reply, &sender)?;
             peer.set_read_timeout(Some(Duration::from_millis(180)))?;
-            assert_eq!(peer.recv(&mut message).unwrap_err().kind(), ErrorKind::WouldBlock);
+            assert_eq!(
+                peer.recv(&mut message).unwrap_err().kind(),
+                ErrorKind::WouldBlock
+            );
             Ok(())
         });
-        let result = exchange(&key, &[0; 32], now() + 5, Operation::Write(0, b"private input"));
+        let result = exchange(
+            &key,
+            &[0; 32],
+            now() + 5,
+            Operation::Write(0, b"private input"),
+        );
         impostor.join().expect("impostor test thread")?;
         assert!(result.is_err());
         Ok(())

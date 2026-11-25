@@ -57,7 +57,11 @@ pub(crate) fn capture_with_input(
                                 stdin = None;
                             }
                         }
-                        Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) => (),
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                            ) => {}
                         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => stdin = None,
                         Err(e) => return Err(e),
                     }
@@ -65,25 +69,65 @@ pub(crate) fn capture_with_input(
                     stdin = None;
                 }
             }
-            let drain = |slot: &mut Option<std::process::ChildStdout>, out: &mut Vec<u8>, total: usize| -> io::Result<bool> {
-                let Some(reader) = slot.as_mut() else { return Ok(false); };
+            let drain = |slot: &mut Option<std::process::ChildStdout>,
+                         out: &mut Vec<u8>,
+                         total: usize|
+             -> io::Result<bool> {
+                let Some(reader) = slot.as_mut() else {
+                    return Ok(false);
+                };
                 let mut buffer = [0; 4096];
                 match reader.read(&mut buffer) {
-                    Ok(0) => { *slot = None; Ok(true) }
-                    Ok(n) if total.saturating_add(n) > limit => Err(io::Error::other("Command output exceeded limit")),
-                    Ok(n) => { out.extend_from_slice(&buffer[..n]); Ok(true) }
-                    Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) => Ok(false),
+                    Ok(0) => {
+                        *slot = None;
+                        Ok(true)
+                    }
+                    Ok(n) if total.saturating_add(n) > limit => {
+                        Err(io::Error::other("Command output exceeded limit"))
+                    }
+                    Ok(n) => {
+                        out.extend_from_slice(&buffer[..n]);
+                        Ok(true)
+                    }
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) =>
+                    {
+                        Ok(false)
+                    }
                     Err(e) => Err(e),
                 }
             };
-            let drain_err = |slot: &mut Option<std::process::ChildStderr>, out: &mut Vec<u8>, total: usize| -> io::Result<bool> {
-                let Some(reader) = slot.as_mut() else { return Ok(false); };
+            let drain_err = |slot: &mut Option<std::process::ChildStderr>,
+                             out: &mut Vec<u8>,
+                             total: usize|
+             -> io::Result<bool> {
+                let Some(reader) = slot.as_mut() else {
+                    return Ok(false);
+                };
                 let mut buffer = [0; 4096];
                 match reader.read(&mut buffer) {
-                    Ok(0) => { *slot = None; Ok(true) }
-                    Ok(n) if total.saturating_add(n) > limit => Err(io::Error::other("Command output exceeded limit")),
-                    Ok(n) => { out.extend_from_slice(&buffer[..n]); Ok(true) }
-                    Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) => Ok(false),
+                    Ok(0) => {
+                        *slot = None;
+                        Ok(true)
+                    }
+                    Ok(n) if total.saturating_add(n) > limit => {
+                        Err(io::Error::other("Command output exceeded limit"))
+                    }
+                    Ok(n) => {
+                        out.extend_from_slice(&buffer[..n]);
+                        Ok(true)
+                    }
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) =>
+                    {
+                        Ok(false)
+                    }
                     Err(e) => Err(e),
                 }
             };
@@ -195,4 +239,3 @@ pub(crate) fn capture(
     }
     result
 }
-

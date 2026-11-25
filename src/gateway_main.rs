@@ -32,9 +32,9 @@ mod tailnet;
 mod tools;
 mod transport;
 #[cfg(target_os = "linux")]
-mod upstream;
-#[cfg(target_os = "linux")]
 mod update_cli;
+#[cfg(target_os = "linux")]
+mod upstream;
 
 use std::io;
 use std::path::PathBuf;
@@ -65,7 +65,7 @@ Daily use
   mode enable|disable [CLIENT]                   Enable or disable a client
 
 Administration
-  diagnostics, skills, mcp-servers, audit, state, serve, protected-paths
+  diagnostics, skills, mcp-servers, marketplace, audit, state, serve, protected-paths
 
 Advanced transport
   --root DIR                                     MCP over stdio
@@ -82,8 +82,34 @@ fn main() {
     if args.len() == 2 && args[0] == "help" && args[1] == "tui" {
         args[1] = "monitor".into();
     }
-    let public_command = |arg: &std::ffi::OsString| matches!(arg.to_str(),
-        Some("init" | "setup" | "connect" | "run" | "portable" | "update" | "ui" | "dashboard" | "monitor" | "service" | "mode" | "diagnostics" | "audit" | "skills" | "mcp-servers" | "state" | "serve" | "protected-paths" | "yolo" | "http"));
+    let public_command = |arg: &std::ffi::OsString| {
+        matches!(
+            arg.to_str(),
+            Some(
+                "init"
+                    | "setup"
+                    | "connect"
+                    | "run"
+                    | "portable"
+                    | "update"
+                    | "ui"
+                    | "dashboard"
+                    | "monitor"
+                    | "service"
+                    | "mode"
+                    | "diagnostics"
+                    | "audit"
+                    | "skills"
+                    | "mcp-servers"
+                    | "marketplace"
+                    | "state"
+                    | "serve"
+                    | "protected-paths"
+                    | "yolo"
+                    | "http"
+            )
+        )
+    };
     if args.len() == 2 && args[0] == "help" && public_command(&args[1]) {
         args.swap(0, 1);
         args[1] = "--help".into();
@@ -108,14 +134,29 @@ fn main() {
 }
 
 fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
-    let invoked_as_veyl = std::env::args_os().next()
-        .is_some_and(|p| std::path::Path::new(&p).file_name().is_some_and(|n| n == "veyl"));
-    if args == ["help"] || args == ["--help"] || args == ["-h"] || (args.is_empty() && invoked_as_veyl) {
+    let invoked_as_veyl = std::env::args_os().next().is_some_and(|p| {
+        std::path::Path::new(&p)
+            .file_name()
+            .is_some_and(|n| n == "veyl")
+    });
+    if args == ["help"]
+        || args == ["--help"]
+        || args == ["-h"]
+        || (args.is_empty() && invoked_as_veyl)
+    {
         println!("{HELP}");
         return Ok(());
     }
     if args == ["version"] || args == ["--version"] || args == ["-V"] {
-        println!("{} {}", if invoked_as_veyl { "veyl" } else { env!("CARGO_BIN_NAME") }, env!("CARGO_PKG_VERSION"));
+        println!(
+            "{} {}",
+            if invoked_as_veyl {
+                "veyl"
+            } else {
+                env!("CARGO_BIN_NAME")
+            },
+            env!("CARGO_PKG_VERSION")
+        );
         return Ok(());
     }
     if args == ["http", "--help"] {
@@ -129,7 +170,10 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     if args == ["run", "--help"] || args == ["portable", "--help"] {
-        println!("Usage: veyl {} [--config PATH] [--listen 127.0.0.1:PORT]\nRun in the foreground; portable first stops and disables the matching Veyl user service.", args[0].to_string_lossy());
+        println!(
+            "Usage: veyl {} [--config PATH] [--listen 127.0.0.1:PORT]\nRun in the foreground; portable first stops and disables the matching Veyl user service.",
+            args[0].to_string_lossy()
+        );
         return Ok(());
     }
     #[cfg(target_os = "linux")]
@@ -225,9 +269,15 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
         return upstream::admin::run(&args[1..]);
     }
     #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "marketplace") {
+        return upstream::installer::run(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "monitor") {
         if args.len() == 2 && args[1] == "--help" {
-            println!("Usage: veyl monitor [--client ID] [--view health|clients|jobs|logs|audit|skills|upstreams|integrations] [--job ID]\nPairs automatically. Without --view, opens the interactive terminal monitor.");
+            println!(
+                "Usage: veyl monitor [--client ID] [--view health|clients|jobs|logs|audit|skills|upstreams|integrations] [--job ID]\nPairs automatically. Without --view, opens the interactive terminal monitor."
+            );
             return Ok(());
         }
         let exe = std::env::current_exe()
@@ -256,7 +306,11 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
     let mut args = args.into_iter();
     let root = match (args.next(), args.next(), args.next()) {
         (Some(option), Some(root), None) if option == "--root" => PathBuf::from(root),
-        _ => return Err("Invalid command or arguments. Use veyl --help for available commands.".to_string()),
+        _ => {
+            return Err(
+                "Invalid command or arguments. Use veyl --help for available commands.".to_string(),
+            );
+        }
     };
 
     let files = FileAccess::new(&root)?;

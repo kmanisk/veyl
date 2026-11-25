@@ -100,9 +100,11 @@ impl Jobs {
                 };
                 self.owned_tool(tool, id, owner, args)
             }
-            Tool::ProcessStart | Tool::ProcessInput | Tool::ProcessResize | Tool::ShellStatus | Tool::ShellReset => {
-                self.session_call(tool, args, owner, root, policy)
-            }
+            Tool::ProcessStart
+            | Tool::ProcessInput
+            | Tool::ProcessResize
+            | Tool::ShellStatus
+            | Tool::ShellReset => self.session_call(tool, args, owner, root, policy),
             Tool::ExecCommand | Tool::TaskRun => {
                 self.dynamic_command(tool, owner, root, args, policy)
             }
@@ -388,7 +390,15 @@ impl Jobs {
             !matches!(
                 key.as_str(),
                 "command" | "argv" | "cwd" | "timeout_seconds" | "request_id"
-            ) && !(task && matches!(key.as_str(), "wait_seconds" | "ephemeral_worktree" | "cpu_percent" | "memory_bytes" | "max_output_bytes"))
+            ) && !(task
+                && matches!(
+                    key.as_str(),
+                    "wait_seconds"
+                        | "ephemeral_worktree"
+                        | "cpu_percent"
+                        | "memory_bytes"
+                        | "max_output_bytes"
+                ))
         }) {
             return Err(argument_error("Unexpected command argument"));
         }
@@ -397,7 +407,9 @@ impl Jobs {
         }
         let ephemeral = match args.get("ephemeral_worktree") {
             None => false,
-            Some(value) => value.as_bool().ok_or_else(|| argument_error("Invalid ephemeral_worktree"))?,
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| argument_error("Invalid ephemeral_worktree"))?,
         };
         let req = request_id(args)?;
         let number = |key: &str, default: u64, min: u64, max: u64| -> io::Result<u64> {
@@ -477,9 +489,36 @@ impl Jobs {
             args: argv,
             timeout_seconds: timeout,
             extended_runtime: task && timeout > SHORT_RUNTIME_MAX,
-            max_output_bytes: if task { number("max_output_bytes", (MAX_OUTPUT as u64).min(policy.job_output_limit_bytes as u64), 1, policy.job_output_limit_bytes as u64)? as usize } else { MAX_OUTPUT },
-            cpu_percent: if task { number("cpu_percent", 100.min(policy.job_cpu_percent_limit), 10, policy.job_cpu_percent_limit)? } else { super::config::default_cpu() },
-            memory_bytes: if task { number("memory_bytes", super::config::default_memory().min(policy.job_memory_bytes_limit), 16 * 1024 * 1024, policy.job_memory_bytes_limit)? } else { super::config::default_memory() },
+            max_output_bytes: if task {
+                number(
+                    "max_output_bytes",
+                    (MAX_OUTPUT as u64).min(policy.job_output_limit_bytes as u64),
+                    1,
+                    policy.job_output_limit_bytes as u64,
+                )? as usize
+            } else {
+                MAX_OUTPUT
+            },
+            cpu_percent: if task {
+                number(
+                    "cpu_percent",
+                    100.min(policy.job_cpu_percent_limit),
+                    10,
+                    policy.job_cpu_percent_limit,
+                )?
+            } else {
+                super::config::default_cpu()
+            },
+            memory_bytes: if task {
+                number(
+                    "memory_bytes",
+                    super::config::default_memory().min(policy.job_memory_bytes_limit),
+                    16 * 1024 * 1024,
+                    policy.job_memory_bytes_limit,
+                )?
+            } else {
+                super::config::default_memory()
+            },
         };
         profile.validate()?;
         // Revalidate original approved handles before resolving a nested cwd.
@@ -490,12 +529,24 @@ impl Jobs {
         let canonical = resolve_cwd(root, cwd, policy)?;
         let repo = if ephemeral {
             let repo = super::worktree::repository(&canonical)?;
-            let allowed = canonical == repo || repo.starts_with(root.path())
-                || policy.workspace_mounts.unwrap_or_default().iter().any(|mount| repo.starts_with(mount.path()))
-                || policy.full || policy.broad.is_some_and(|broad| !broad.is_masked(&repo));
-            if !allowed { return Err(argument_error("Git repository is outside the permitted scope")); }
+            let allowed = canonical == repo
+                || repo.starts_with(root.path())
+                || policy
+                    .workspace_mounts
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|mount| repo.starts_with(mount.path()))
+                || policy.full
+                || policy.broad.is_some_and(|broad| !broad.is_masked(&repo));
+            if !allowed {
+                return Err(argument_error(
+                    "Git repository is outside the permitted scope",
+                ));
+            }
             Some(repo)
-        } else { None };
+        } else {
+            None
+        };
         let effective_root = JobRoot::open(&canonical).map_err(io::Error::other)?;
         if canonical == root.path() && effective_root.identity() != root.identity() {
             return Err(invalid());
@@ -504,7 +555,9 @@ impl Jobs {
         if let Some(approved) = policy.workspace_mounts {
             for source in std::iter::once(root).chain(approved.iter()) {
                 if source.path() == canonical
-                    || repo.as_ref().is_some_and(|repo| repo.starts_with(source.path()))
+                    || repo
+                        .as_ref()
+                        .is_some_and(|repo| repo.starts_with(source.path()))
                     || mounts
                         .iter()
                         .any(|item: &JobRoot| item.path() == source.path())

@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use mcp_gateway::security::linux_fs::open_absolute_dir;
@@ -18,7 +19,7 @@ const LOCAL: ResolveFlags = ResolveFlags::BENEATH
     .union(ResolveFlags::NO_XDEV)
     .union(ResolveFlags::NO_SYMLINKS)
     .union(ResolveFlags::NO_MAGICLINKS);
-const MAX_ENTRIES: usize = 32_768;
+const MAX_ENTRIES: usize = 131_072;
 const MAX_DEPTH: usize = 16;
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
@@ -93,6 +94,14 @@ pub(crate) struct Layout {
 
 impl Layout {
     pub(crate) fn inspect(path: &Path) -> Result<Self, String> {
+        Self::inspect_mode(path, false)
+    }
+
+    pub(crate) fn inspect_bundle(path: &Path) -> Result<Self, String> {
+        Self::inspect_mode(path, true)
+    }
+
+    fn inspect_mode(path: &Path, bundle_root: bool) -> Result<Self, String> {
         validate_path(path)?;
         let uid = rustix::process::geteuid();
         if uid.is_root() {
@@ -106,12 +115,13 @@ impl Layout {
             let mut inventory = Inventory {
                 uid: Some(uid.as_raw()),
                 masked: false,
+                bundle_root,
                 remaining: MAX_ENTRIES,
                 files: 0,
                 hardlinks: 0,
                 objects: None,
             };
-            match inventory.directory(&root, 0) {
+            match inventory.directory(&root, 0, &[]) {
                 Ok(()) => {
                     let current = open_absolute_dir(path)
                         .map_err(|_| "State root changed during inspection")?;
@@ -221,6 +231,7 @@ fn same_identity(first: impl AsFd, second: impl AsFd) -> io::Result<bool> {
 struct Inventory {
     uid: Option<u32>,
     masked: bool,
+    bundle_root: bool,
     remaining: usize,
     files: usize,
     hardlinks: usize,
@@ -228,7 +239,7 @@ struct Inventory {
 }
 
 impl Inventory {
-    fn directory(&mut self, dir: &OwnedFd, depth: usize) -> Result<(), String> {
+    fn directory(&mut self, dir: &OwnedFd, depth: usize, path: &[OsString]) -> Result<(), String> {
         let invalid = |_| "Cannot inspect state without following links or crossing mountpoints";
         let before = fs::fstat(dir).map_err(invalid)?;
         if self
@@ -279,9 +290,22 @@ impl Inventory {
                         Mode::empty(),
                     )
                     .map_err(invalid)?;
-                    self.directory(&child, depth + 1)?;
+                    let mut child_path = path.to_vec();
+                    child_path.push(OsString::from(name.to_string_lossy().into_owned()));
+                    self.directory(&child, depth + 1, &child_path)?;
                 }
-                FileType::RegularFile if self.uid.is_none() || metadata.st_mode & 0o7177 == 0 => {
+                FileType::RegularFile
+                    if self.uid.is_none()
+                        || metadata.st_mode & 0o7177 == 0
+                        || (((self.bundle_root && path.len() == 1 && path[0] == "bin")
+                            || (!self.bundle_root
+                                && path.len() == 3
+                                && path[0] == "upstream-bundles"
+                                && path[2] == "bin"))
+                            && metadata.st_mode & 0o7077 == 0
+                            && metadata.st_nlink == 1
+                            && verified_elf(dir, name, &child)) =>
+                {
                     if let Some(objects) = &mut self.objects {
                         objects.insert([metadata.st_dev, metadata.st_ino]);
                     }
@@ -340,12 +364,15 @@ fn protected_inventory(
     let mut inventory = Inventory {
         uid: None,
         masked,
+        bundle_root: false,
         remaining: MAX_ENTRIES,
         files: 0,
         hardlinks: 0,
         objects: collect_objects.then(BTreeSet::new),
     };
-    inventory.directory(&root, 0).map_err(io::Error::other)?;
+    inventory
+        .directory(&root, 0, &[])
+        .map_err(io::Error::other)?;
     if !same_identity(&root, open_absolute_dir(path)?)? {
         return Err(io::Error::other(
             "Protected directory changed during admission",
@@ -367,4 +394,66 @@ pub(crate) fn protected_objects(path: &Path, masked: bool) -> io::Result<BTreeSe
 
 fn changed(stat: &Stat) -> (i64, i64) {
     (stat.st_ctime, stat.st_ctime_nsec as i64)
+}
+
+fn verified_elf(dir: &OwnedFd, name: &std::ffi::CStr, expected: &OwnedFd) -> bool {
+    let Ok(fd) = fs::openat2(
+        dir,
+        name,
+        OFlags::RDONLY | OFlags::CLOEXEC,
+        Mode::empty(),
+        LOCAL,
+    ) else {
+        return false;
+    };
+    if !same_identity(expected, &fd).unwrap_or(false) {
+        return false;
+    }
+    let mut magic = [0; 4];
+    std::fs::File::from(fd).read_exact(&mut magic).is_ok() && magic == *b"\x7fELF"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn executable_files_are_confined_to_bundle_bin() {
+        let root = std::env::temp_dir().join(format!("veyl-state-test-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let bundles = root.join("upstream-bundles");
+        let bin = bundles.join("demo/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for dir in [&bundles, &bundles.join("demo"), &bin] {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let inspect = || {
+            let fd = open_absolute_dir(&root).unwrap();
+            Inventory {
+                uid: Some(rustix::process::geteuid().as_raw()),
+                masked: false,
+                bundle_root: false,
+                remaining: MAX_ENTRIES,
+                files: 0,
+                hardlinks: 0,
+                objects: None,
+            }
+            .directory(&fd, 0, &[])
+        };
+        for file in [root.join("bad.sh"), bundles.join("bad.sh")] {
+            std::fs::write(&file, b"\x7fELF").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(inspect().is_err());
+            std::fs::remove_file(file).unwrap();
+        }
+        let executable = bin.join("app");
+        std::fs::write(&executable, b"\x7fELF").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(inspect().is_ok());
+        std::fs::write(&executable, b"#!/bin/sh").unwrap();
+        assert!(inspect().is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

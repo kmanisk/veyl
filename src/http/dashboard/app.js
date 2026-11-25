@@ -401,6 +401,9 @@ let catalogPage = 0;
 const catalogPageSize = 20;
 let registeredIds = new Set();
 const probedTools = new Map();
+let lastStatus = null;
+let marketplaceState = { recipes: [], installedById: new Map(), operations: [] };
+let marketplacePollDue = false;
 const catalogFields = {
   "catalog-category": entry => [entry.category],
   "catalog-type": entry => [entry.type],
@@ -469,8 +472,10 @@ function renderCatalog() {
     const footer = add(card, "div", "");
     footer.className = "row catalog-footer";
     add(footer, "span", "Source checked " + (entry.verified_at || "Unknown")).className = "catalog-meta";
-    button(footer, "Details", async () => showDetails(entry));
-    if (entry.type === "mcp") button(footer, "Configure", async () => {
+    const actions = add(footer, "div", "");
+    actions.className = "catalog-actions";
+    button(actions, "Details", async () => showDetails(entry));
+    if (entry.type === "mcp") button(actions, "Configure", async () => {
       const form = byId("server-add");
       form.reset();
       const id = entry.id.replace(/[^a-z0-9_-]/g,"").slice(0,24);
@@ -481,12 +486,129 @@ function renderCatalog() {
       if (entry.id === "rea") form.elements.namedItem("argv").value = '["mcp"]';
       openTab("custom");
     });
-    else if (entry.type === "skill") button(footer, "Import local skill", async () => openTab("skills"));
+    else if (entry.type === "skill") button(actions, "Import local skill", async () => openTab("skills"));
+    const shortId = entry.id.replace(/[^a-z0-9_-]/g,"").slice(0,24);
+    const receipt = marketplaceState.installedById.get(entry.id) || marketplaceState.installedById.get(shortId);
+    if (receipt) {
+      button(actions, "Update", () => runMarketplaceInstall({ id: entry.id, update: true }));
+      button(actions, "Uninstall", () => runMarketplaceUninstall(receipt.id));
+    } else if (entry.type === "mcp" || entry.type === "skill") {
+      button(actions, "Install", () => runMarketplaceInstall({ id: entry.id }));
+    }
   }
   if (!matches.length) add(grid,"p","No matching resources.");
   byId("catalog-page").textContent = (catalogPage + 1) + " / " + pages;
   byId("catalog-prev").disabled = catalogPage === 0;
   byId("catalog-next").disabled = catalogPage + 1 >= pages;
+}
+
+async function runMarketplaceInstall(payload) {
+  const action = payload.update ? "update" : "install";
+  if (!window.confirm("Confirm marketplace " + action + " for " + payload.id + "?")) return;
+  const result = await request("marketplace/install", { ...payload, confirm: true });
+  marketplacePollDue = true;
+  notice.textContent = "Started " + action + " (" + result.op_id + ")";
+  await loadMarketplaceState();
+}
+
+async function runMarketplaceUninstall(id) {
+  if (!window.confirm("Uninstall " + id + " and remove its bundle and client grants?")) return;
+  await request("marketplace/uninstall", { id, confirm: true });
+  notice.textContent = "Uninstalled " + id;
+  await refresh();
+}
+
+async function configureVerifiedProvider(id, current) {
+  if (id === "rea") {
+    const families = window.prompt(
+      "REA tool families (comma-separated, e.g. artifact or direct,enhanced,artifact):",
+      current?.tool_families || "artifact"
+    );
+    if (families === null) return;
+    await request("marketplace/configure", { id, tool_families: families.trim(), confirm: true });
+  } else {
+    const toggle = !(current?.enabled ?? true);
+    if (!window.confirm((toggle ? "Enable " : "Disable ") + id + "?")) return;
+    await request("marketplace/configure", { id, enabled: toggle, confirm: true });
+  }
+  await refresh();
+}
+
+function renderMarketplaceState() {
+  const opsEl = byId("marketplace-operations");
+  if (opsEl) {
+    opsEl.replaceChildren();
+    const visible = marketplaceState.operations.filter(op => !op.done || Date.now() / 1000 - (op.updated_at || 0) < 30);
+    opsEl.hidden = visible.length === 0;
+    marketplacePollDue = marketplaceState.operations.some(op => !op.done);
+    for (const op of visible) {
+      const row = add(opsEl, "div", "");
+      row.className = "op-row";
+      add(row, "strong", op.id + " (" + op.kind + ")");
+      add(row, "span", op.phase).className = "status-pill";
+      if (!op.done && Number.isFinite(op.percent)) {
+        const bar = document.createElement("progress");
+        bar.max = 100;
+        bar.value = op.percent;
+        row.append(bar);
+      }
+      add(row, "span", op.message || "");
+      if (!op.done) {
+        button(row, "Cancel", async () => {
+          if (!window.confirm("Cancel active operation " + op.op_id + "?")) return;
+          await request("marketplace/cancel", { op_id: op.op_id, confirm: true });
+          await loadMarketplaceState();
+        });
+      }
+    }
+  }
+  const grid = byId("verified-providers");
+  if (!grid) return;
+  grid.replaceChildren();
+  for (const recipe of marketplaceState.recipes) {
+    const card = add(grid, "article", "");
+    card.className = "catalog-card";
+    card.dataset.recipe = recipe.id;
+    const top = add(card, "div", "");
+    top.className = "catalog-heading";
+    const heading = add(top, "div", "");
+    heading.className = "catalog-title";
+    add(heading, "span", "Verified " + recipe.type).className = "verified-badge";
+    add(heading, "h3", recipe.name || recipe.id);
+    const receipt = marketplaceState.installedById.get(recipe.id);
+    add(card, "span", receipt ? "Installed v" + receipt.version + (receipt.enabled ? " · Active" : " · Disabled") : "Not installed · v" + recipe.version).className = "catalog-meta";
+    if (recipe.summary) add(card, "p", recipe.summary);
+    const footer = add(card, "div", "");
+    footer.className = "catalog-actions";
+    button(footer, "Details", async () => showDetails({ ...recipe, installed: receipt || null }));
+    if (receipt) {
+      button(footer, "Update", () => runMarketplaceInstall({ id: recipe.id, update: true }));
+      button(footer, "Configure", () => configureVerifiedProvider(recipe.id, receipt));
+      button(footer, "Uninstall", () => runMarketplaceUninstall(recipe.id));
+    } else {
+      button(footer, "Install", () => runMarketplaceInstall({ id: recipe.id }));
+    }
+  }
+}
+
+async function loadMarketplaceState() {
+  const wasPolling = marketplacePollDue;
+  const data = await request("marketplace/state");
+  const byIdMap = new Map();
+  if (Array.isArray(data.installed)) {
+    for (const item of data.installed) byIdMap.set(item.id, item);
+  }
+  marketplaceState = {
+    recipes: Array.isArray(data.recipes) ? data.recipes : [],
+    installedById: byIdMap,
+    operations: Array.isArray(data.operations) ? data.operations : [],
+  };
+  renderMarketplaceState();
+  if (wasPolling && !marketplacePollDue) {
+    await refresh();
+    return;
+  }
+  if (catalogLoaded) renderCatalog();
 }
 async function loadCatalog(force = false) {
   if (catalogLoaded && !force) return;
@@ -609,6 +731,63 @@ function renderStatus(state) {
     ].filter(Boolean).join(" · ")
   ]));
   byId("client-empty").hidden = state.clients.length !== 0;
+  renderNativeGrants(state);
+}
+
+function renderNativeGrants(state) {
+  const select = byId("grant-client");
+  const grid = byId("native-grant-grid");
+  if (!select || !grid) return;
+  const previous = select.value;
+  select.replaceChildren();
+  for (const c of state.clients) add(select, "option", c.id).value = c.id;
+  if (state.clients.some(c => c.id === previous)) select.value = previous;
+  const client = state.clients.find(c => c.id === select.value);
+  grid.replaceChildren();
+  if (!client || !Array.isArray(state.all_tools)) return;
+  const granted = new Set(client.grants || []);
+  for (const t of state.all_tools) {
+    const name = typeof t === "string" ? t : t.name;
+    const preset = typeof t === "object" && t.yolo_preset && client.mode === "yolo" && client.native_tool_preset;
+    const label = add(grid, "label", "");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = name;
+    cb.checked = granted.has(name) || !!preset;
+    if (typeof t === "object") {
+      cb.dataset.git = t.git ? "1" : "0";
+      cb.dataset.ext = t.extension ? "1" : "0";
+      cb.dataset.proc = t.process ? "1" : "0";
+    }
+    label.append(cb, " " + name + (preset ? " (preset)" : ""));
+  }
+}
+
+function renderUpstreamBulkGrid() {
+  const clientSel = byId("bulk-grant-client");
+  const serverSel = byId("bulk-grant-server");
+  const grid = byId("upstream-grant-grid");
+  if (!clientSel || !serverSel || !grid || !lastStatus) return;
+  grid.replaceChildren();
+  const client = lastStatus.clients.find(c => c.id === clientSel.value);
+  const serverId = serverSel.value;
+  if (!client || !serverId) return;
+  const discovered = probedTools.get(serverId) || [];
+  const current = (client.upstream_tools && client.upstream_tools[serverId]) || [];
+  const union = [...new Set([...discovered, ...current])].sort();
+  if (!union.length) {
+    add(grid, "span", "No discovered tools cached yet. Click 'Probe health and tools' on " + serverId + ".").className = "muted";
+    return;
+  }
+  const activeSet = new Set(current);
+  for (const toolName of union) {
+    const label = add(grid, "label", "");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = toolName;
+    cb.checked = activeSet.has(toolName) || client.upstream_tools === null && (client.upstreams || []).includes(serverId);
+    label.append(cb, " " + toolName);
+  }
 }
 
 async function refresh() {
@@ -620,6 +799,7 @@ async function refresh() {
   if (location.pathname === "/dashboard/login") history.replaceState(null, "", "/dashboard");
   byId("controls").hidden = false;
   notice.textContent = "";
+  lastStatus = state;
   renderStatus(state);
   const select = byId("job-client");
   const selected = select.value;
@@ -631,7 +811,14 @@ async function refresh() {
   serverClient.replaceChildren();
   for (const client of state.clients) add(serverClient, "option", client.id).value = client.id;
   if (state.clients.some(client => client.id === previousServerClient)) serverClient.value = previousServerClient;
-  const tasks = [loadServers(), loadIntegrations(), loadCatalog()];
+  const bulkClient = byId("bulk-grant-client");
+  if (bulkClient) {
+    const prevBulk = bulkClient.value;
+    bulkClient.replaceChildren();
+    for (const client of state.clients) add(bulkClient, "option", client.id).value = client.id;
+    if (state.clients.some(client => client.id === prevBulk)) bulkClient.value = prevBulk;
+  }
+  const tasks = [loadServers(), loadIntegrations(), loadCatalog(), loadMarketplaceState()];
   byId("job-controls").hidden = !state.jobs_configured;
   if (state.jobs_configured) {
     tasks.push(loadJobs());
@@ -776,6 +963,7 @@ async function editServer(action, fields) {
     }
     probedTools.set(fields.id, result.health === "ready" ? result.tools : []);
     updateProbedTools();
+    renderUpstreamBulkGrid();
     showDetails(result);
     return;
   }
@@ -786,27 +974,109 @@ async function loadServers() {
   const { servers } = await request("servers");
   const list = byId("server-rows");
   const select = byId("server-grant-server");
+  const bulkSelect = byId("bulk-grant-server");
+  const prevBulkServer = bulkSelect ? bulkSelect.value : "";
   list.replaceChildren();
   select.replaceChildren();
+  if (bulkSelect) bulkSelect.replaceChildren();
   probedTools.clear();
   registeredIds = new Set(servers.map(server => server.id));
   if (catalogLoaded) renderCatalog();
   if (!servers.length) add(list, "li", "No upstream servers configured.");
   for (const server of servers) {
     add(select, "option", server.id).value = server.id;
+    if (bulkSelect) add(bulkSelect, "option", server.id).value = server.id;
     const row = add(list, "li", "");
     row.dataset.server = server.id;
-    add(row, "strong", server.id + " · " + server.transport);
+    const receipt = marketplaceState.installedById.get(server.id);
+    add(row, "strong", server.id + " · " + server.transport + (receipt ? " · Marketplace v" + receipt.version : ""));
     const health = add(row, "output", server.enabled ? "Registered · health unchecked" : "Disabled");
     health.className = "provider-health";
     health.dataset.health = server.enabled ? "unchecked" : "disabled";
-    button(row, "Details", async () => showDetails({...server, probed_tools: probedTools.get(server.id) || null}));
+    button(row, "Details", async () => showDetails({...server, receipt: receipt || null, probed_tools: probedTools.get(server.id) || null}));
     if (server.enabled) button(row, "Probe health and tools", () => editServer("probe", { id: server.id }));
-    button(row, server.enabled ? "Disable" : "Enable", () => editServer(server.enabled ? "disable" : "enable", { id: server.id }));
-    button(row, "Remove", () => editServer("remove", { id: server.id }));
+    if (receipt) {
+      button(row, "Update", () => runMarketplaceInstall({ id: server.id, update: true }));
+      button(row, "Configure", () => configureVerifiedProvider(server.id, receipt));
+      button(row, "Uninstall", () => runMarketplaceUninstall(server.id));
+    } else {
+      button(row, server.enabled ? "Disable" : "Enable", () => editServer(server.enabled ? "disable" : "enable", { id: server.id }));
+      button(row, "Remove", () => editServer("remove", { id: server.id }));
+    }
   }
+  if (bulkSelect && servers.some(s => s.id === prevBulkServer)) bulkSelect.value = prevBulkServer;
   updateProbedTools();
+  renderUpstreamBulkGrid();
 }
+
+byId("marketplace-custom-form")?.addEventListener("submit", async event => {
+  event.preventDefault();
+  const fields = Object.fromEntries(new FormData(event.currentTarget));
+  const payload = { id: fields.id.trim(), kind: fields.kind };
+  if (fields.version?.trim()) payload.version = fields.version.trim();
+  if (fields.url?.trim()) payload.url = fields.url.trim();
+  const d = fields.digest?.trim() || "";
+  if (d.startsWith("sha512-")) payload.sha512 = d;
+  else if (d) payload.sha256 = d;
+  if (fields.entrypoint?.trim()) {
+    if (fields.kind === "binary") payload.binary_member = fields.entrypoint.trim();
+    else payload.entrypoint = fields.entrypoint.trim();
+  }
+  if (fields.tool_families?.trim()) payload.tool_families = fields.tool_families.trim();
+  runMarketplaceInstall(payload).catch(error => notice.textContent = error.message);
+});
+byId("marketplace-recover")?.addEventListener("click", async () => {
+  if (!window.confirm("Recover any interrupted marketplace installations?")) return;
+  await request("marketplace/recover", { confirm: true });
+  await refresh();
+});
+byId("grant-client")?.addEventListener("change", () => lastStatus && renderNativeGrants(lastStatus));
+byId("grant-all-safe")?.addEventListener("click", () => {
+  for (const cb of byId("native-grant-grid").querySelectorAll('input[type="checkbox"]')) cb.checked = true;
+});
+byId("grant-git-all")?.addEventListener("click", () => {
+  const cbs = [...byId("native-grant-grid").querySelectorAll('input[data-git="1"]')];
+  const anyUnchecked = cbs.some(cb => !cb.checked);
+  for (const cb of cbs) cb.checked = anyUnchecked;
+});
+byId("grant-ext-all")?.addEventListener("click", () => {
+  const cbs = [...byId("native-grant-grid").querySelectorAll('input[data-ext="1"]')];
+  const anyUnchecked = cbs.some(cb => !cb.checked);
+  for (const cb of cbs) cb.checked = anyUnchecked;
+});
+byId("grant-proc-all")?.addEventListener("click", () => {
+  const cbs = [...byId("native-grant-grid").querySelectorAll('input[data-proc="1"]')];
+  const anyUnchecked = cbs.some(cb => !cb.checked);
+  for (const cb of cbs) cb.checked = anyUnchecked;
+});
+byId("grant-native-save")?.addEventListener("click", async () => {
+  const client = byId("grant-client").value;
+  if (!client || !window.confirm("Save native tool grants for " + client + "?")) return;
+  const tools = [...byId("native-grant-grid").querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
+  await request("clients/grants", { client, tools, confirm: true });
+  notice.textContent = "Updated native grants for " + client;
+  await refresh();
+});
+byId("bulk-grant-client")?.addEventListener("change", renderUpstreamBulkGrid);
+byId("bulk-grant-server")?.addEventListener("change", renderUpstreamBulkGrid);
+byId("bulk-upstream-all")?.addEventListener("click", () => {
+  for (const cb of byId("upstream-grant-grid").querySelectorAll('input[type="checkbox"]')) cb.checked = true;
+});
+byId("bulk-upstream-none")?.addEventListener("click", () => {
+  for (const cb of byId("upstream-grant-grid").querySelectorAll('input[type="checkbox"]')) cb.checked = false;
+});
+byId("bulk-upstream-save")?.addEventListener("click", async () => {
+  const client = byId("bulk-grant-client").value;
+  const server = byId("bulk-grant-server").value;
+  if (!client || !server || !window.confirm("Apply upstream tool grants for " + client + " on " + server + "?")) return;
+  const selected = [...byId("upstream-grant-grid").querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
+  const current = lastStatus?.clients.find(c => c.id === client);
+  const map = { ...(current?.upstream_tools || {}) };
+  map[server] = selected;
+  await request("clients/grants", { client, allowed_server_tools: map, confirm: true });
+  notice.textContent = "Updated upstream grants for " + client + " (" + server + ")";
+  await refresh();
+});
 
 byId("server-transport").addEventListener("change", event => {
   const stdio = event.target.value === "add-stdio";
@@ -946,13 +1216,15 @@ function startLive() {
     const tab = activeTab;
     const statusDue = now - lastSlowRefresh >= 5000;
     const diagnosticsDue = tab === "diagnostics" && !diagnosticsBusy && now - diagnosticsSample >= 10000;
-    if (!statusDue && !diagnosticsDue && tab !== "audit" && tab !== "jobs") return;
+    if (!statusDue && !diagnosticsDue && !marketplacePollDue && tab !== "audit" && tab !== "jobs") return;
     liveBusy = true;
     try {
+      if (marketplacePollDue) await loadMarketplaceState();
       if (statusDue) {
         lastSlowRefresh = now;
         const state = await request("status");
         if (byId("dashboard").hidden) return;
+        lastStatus = state;
         renderStatus(state);
       }
       if (tab === activeTab) {

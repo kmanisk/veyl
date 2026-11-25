@@ -36,6 +36,7 @@ pub(super) struct Admin {
     cpu_sample: Mutex<Option<(Instant, u64)>>,
     pub(super) trace: Arc<std::sync::Mutex<super::trace::Trace>>,
     pub(super) activity: Arc<super::activity::Activity>,
+    pub(super) installer: Arc<crate::upstream::installer::MarketplaceManager>,
 }
 
 struct AdminSession {
@@ -59,6 +60,7 @@ impl Admin {
             cpu_sample: Mutex::new(None),
             trace: Arc::default(),
             activity: Arc::default(),
+            installer: Arc::default(),
         }
     }
 }
@@ -409,6 +411,126 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             "application/json; charset=utf-8",
         );
     }
+    if method == Method::GET && path == "/api/dashboard/marketplace/state" {
+        let installer = Arc::clone(&admin.installer);
+        let config = admin.config.clone();
+        return match tokio::task::spawn_blocking(move || installer.state(&config)).await {
+            Ok(Ok(val)) => ok(val),
+            Ok(Err(err)) => json_response(Status::BAD_REQUEST, json!({"error": err}), None),
+            Err(_) => unavailable(),
+        };
+    }
+    if method == Method::POST && path == "/api/dashboard/marketplace/install" {
+        let Ok(body) = body(request).await else {
+            return bad();
+        };
+        if body["confirm"] != true {
+            return forbidden();
+        }
+        let Ok(req) = serde_json::from_value::<crate::upstream::installer::InstallRequest>(body)
+        else {
+            return bad();
+        };
+        return match admin.installer.start_async(admin.config.clone(), req) {
+            Ok(op_id) => ok(json!({"accepted": true, "op_id": op_id})),
+            Err(err) => json_response(Status::BAD_REQUEST, json!({"error": err}), None),
+        };
+    }
+    if method == Method::POST && path == "/api/dashboard/marketplace/configure" {
+        let Ok(body) = body(request).await else {
+            return bad();
+        };
+        if body["confirm"] != true {
+            return forbidden();
+        }
+        let Some(id) = body["id"].as_str().map(str::to_owned) else {
+            return bad();
+        };
+        let families = body
+            .get("tool_families")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let enabled = body.get("enabled").and_then(Value::as_bool);
+        let config = admin.config.clone();
+        return match tokio::task::spawn_blocking(move || {
+            crate::upstream::installer::configure(&config, &id, families.as_deref(), enabled)
+        })
+        .await
+        {
+            Ok(Ok(val)) => ok(val),
+            Ok(Err(err)) => json_response(Status::BAD_REQUEST, json!({"error": err}), None),
+            Err(_) => unavailable(),
+        };
+    }
+    if method == Method::POST && path == "/api/dashboard/marketplace/uninstall" {
+        let Ok(body) = body(request).await else {
+            return bad();
+        };
+        if body["confirm"] != true {
+            return forbidden();
+        }
+        let Some(id) = body["id"].as_str().map(str::to_owned) else {
+            return bad();
+        };
+        let config = admin.config.clone();
+        return match tokio::task::spawn_blocking(move || {
+            crate::upstream::installer::uninstall(&config, &id)
+        })
+        .await
+        {
+            Ok(Ok(val)) => ok(val),
+            Ok(Err(err)) => json_response(Status::BAD_REQUEST, json!({"error": err}), None),
+            Err(_) => unavailable(),
+        };
+    }
+    if method == Method::POST && path == "/api/dashboard/marketplace/cancel" {
+        let Ok(body) = body(request).await else {
+            return bad();
+        };
+        if body["confirm"] != true {
+            return forbidden();
+        }
+        let Some(op_id) = body["op_id"].as_str() else {
+            return bad();
+        };
+        return match admin.installer.cancel(op_id) {
+            Ok(cancelled) => ok(json!({"cancelled": cancelled, "op_id": op_id})),
+            Err(err) => json_response(Status::BAD_REQUEST, json!({"error": err}), None),
+        };
+    }
+    if method == Method::POST && path == "/api/dashboard/marketplace/recover" {
+        let Ok(body) = body(request).await else {
+            return bad();
+        };
+        if body["confirm"] != true {
+            return forbidden();
+        }
+        let installer = Arc::clone(&admin.installer);
+        let config = admin.config.clone();
+        return match tokio::task::spawn_blocking(move || installer.state(&config)).await {
+            Ok(Ok(val)) => ok(val),
+            Ok(Err(err)) => json_response(Status::BAD_REQUEST, json!({"error": err}), None),
+            Err(_) => unavailable(),
+        };
+    }
+    if method == Method::POST && path == "/api/dashboard/clients/grants" {
+        let Ok(body) = body(request).await else {
+            return bad();
+        };
+        if body["confirm"] != true {
+            return forbidden();
+        }
+        let config = admin.config.clone();
+        return match tokio::task::spawn_blocking(move || {
+            crate::upstream::installer::update_client_grants(&config, &body)
+        })
+        .await
+        {
+            Ok(Ok(val)) => ok(val),
+            Ok(Err(err)) => json_response(Status::BAD_REQUEST, json!({"error": err}), None),
+            Err(_) => unavailable(),
+        };
+    }
     if method == Method::GET && path == "/api/dashboard/requests" {
         return match crate::tools::extensions::list_requests(&admin.config) {
             Ok(list) => ok(json!({"requests": list, "count": list.len()})),
@@ -703,8 +825,20 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
         use crate::protected_paths::{Kind, OPTIONAL_DEFAULTS, READONLY_DEFAULTS};
         let protected = |kind| settings.protected_paths.selected(kind).iter()
             .map(|rule| &rule.path).collect::<Vec<_>>();
+        let all_tools: Vec<_> = Tool::ALL
+            .into_iter()
+            .map(|t| {
+                json!({
+                    "name": t.name(),
+                    "yolo_preset": t.in_yolo_preset(settings.jobs.is_some(), settings.skills.is_some()),
+                    "git": t.is_git(),
+                    "extension": t.is_extension(),
+                    "process": t.process_control(),
+                })
+            })
+            .collect();
         Ok(json!({
-            "clients": clients, "sessions": connected, "connections": active_tcp, "active_calls": active_calls, "active_tools": active_tools, "cpu_percent": cpu_percent, "rss_kib": rss_kib,
+            "clients": clients, "all_tools": all_tools, "sessions": connected, "connections": active_tcp, "active_calls": active_calls, "active_tools": active_tools, "cpu_percent": cpu_percent, "rss_kib": rss_kib,
             "csrf": csrf, "listener": listener.to_string(), "audit": audit,
             "jobs_configured": jobs_configured, "job_state_dir": settings.job_state_path(), "audit_log": settings.audit_log,
             "version": env!("CARGO_PKG_VERSION"), "skills_configured": settings.skills.is_some(),

@@ -116,6 +116,37 @@ impl Skills {
         Ok(rustix::fs::fsync(self.root.directory())?)
     }
 
+    pub(crate) fn upsert(&self, name: &str, document: &str) -> std::io::Result<()> {
+        if self.present(name)? {
+            use mcp_gateway::security::linux_fs::{open_beneath_dir, publish_new};
+            use rustix::fs::{self, AtFlags};
+            use std::ffi::OsStr;
+            let dir = open_beneath_dir(self.root.directory(), Path::new(name))?;
+            let _ = fs::unlinkat(&dir, "SKILL.md", AtFlags::empty());
+            publish_new(&dir, OsStr::new("SKILL.md"), document.as_bytes())?;
+            fs::fsync(&dir)?;
+            return Ok(());
+        }
+        self.import(name, document)
+    }
+
+    pub(crate) fn remove(&self, name: &str) -> std::io::Result<()> {
+        use mcp_gateway::security::linux_fs::open_beneath_dir;
+        use rustix::fs::{self, AtFlags};
+        if !valid_name(name) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid skill name",
+            ));
+        }
+        let dir = open_beneath_dir(self.root.directory(), Path::new(name))?;
+        let _ = fs::unlinkat(&dir, "SKILL.md", AtFlags::empty());
+        drop(dir);
+        fs::unlinkat(self.root.directory(), name, AtFlags::REMOVEDIR)?;
+        fs::fsync(self.root.directory())?;
+        Ok(())
+    }
+
     pub(crate) fn import(&self, name: &str, document: &str) -> std::io::Result<()> {
         use mcp_gateway::security::linux_fs::{open_beneath_dir, publish_new};
         use rustix::fs::{self, AtFlags, Mode, RenameFlags};

@@ -1,6 +1,7 @@
 //! Operator-configured MCP upstreams. Upstreams never inherit client credentials.
 pub(crate) mod admin;
 mod http;
+pub(crate) mod installer;
 mod stdio;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -302,7 +303,11 @@ impl Catalog {
         // time for its language runtime. Keep ordinary providers and discovery
         // at their existing limits, and stay below the HTTP request deadline.
         let bundled = matches!(&server.transport, Transport::Stdio { bundle: true, .. });
-        let budget = if bundled { Duration::from_secs(4) } else { Duration::from_millis(1700) };
+        let budget = if bundled {
+            Duration::from_secs(4)
+        } else {
+            Duration::from_millis(1700)
+        };
         let overall = if bundled && requested.contains("__") {
             Instant::now() + budget
         } else {
@@ -337,9 +342,15 @@ impl Catalog {
             return Ok(json!({"id":id,"health":"disabled","tools":[]}));
         }
         let _slot = Slot::acquire().map_err(|_| "Upstream capacity reached")?;
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let bundled = matches!(&server.transport, Transport::Stdio { bundle: true, .. });
+        let budget = if bundled {
+            Duration::from_secs(4)
+        } else {
+            Duration::from_millis(1700)
+        };
+        let deadline = Instant::now() + budget;
         Ok(
-            match with_link(config, id, server, deadline, Link::discover) {
+            match with_link_budget(config, id, server, deadline, budget, Link::discover) {
                 Ok(discovered) => {
                     json!({"id":id,"health":"ready","tools":discovered.keys().collect::<Vec<_>>()})
                 }

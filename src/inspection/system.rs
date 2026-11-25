@@ -352,8 +352,16 @@ pub(super) fn inspect(
                 "gpu" => gpu(),
                 "storage" => storage(root),
                 "network" => network(),
-                "audio" => { let mut v=audio();v["session"]=live::audio();v },
-                "bluetooth" => { let mut v=bluetooth();v["session"]=live::bluetooth();v },
+                "audio" => {
+                    let mut v = audio();
+                    v["session"] = live::audio();
+                    v
+                }
+                "bluetooth" => {
+                    let mut v = bluetooth();
+                    v["session"] = live::bluetooth();
+                    v
+                }
                 "desktop" => desktop(),
                 "sway" => live::sway(),
                 "services" => live::services(),
@@ -394,7 +402,10 @@ mod tests {
         assert!(result["sections"]["gpu"]["nvidia_telemetry"].is_object());
         assert!(result["sections"]["storage"]["devices"]["items"].is_array());
         assert!(result["sections"]["network"]["items"].is_array());
-        if let Some(first) = result["sections"]["network"]["items"].as_array().and_then(|a| a.first()) {
+        if let Some(first) = result["sections"]["network"]["items"]
+            .as_array()
+            .and_then(|a| a.first())
+        {
             assert!(first["rx_bytes_per_sec"].as_u64().is_some());
             assert!(first["tx_bytes_per_sec"].as_u64().is_some());
         }

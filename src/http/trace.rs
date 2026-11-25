@@ -78,8 +78,11 @@ impl Trace {
         self.expire_at(Instant::now());
         let enabled = self.owner.as_deref() == Some(owner);
         let remaining_ms = if enabled {
-            self.until.map(|until| until.saturating_duration_since(Instant::now()).as_millis() as u64)
-        } else { None };
+            self.until
+                .map(|until| until.saturating_duration_since(Instant::now()).as_millis() as u64)
+        } else {
+            None
+        };
         json!({"enabled":enabled,"busy":self.owner.is_some() && !enabled,
             "remaining_ms":remaining_ms,
             "events":if enabled && include_events { self.events.iter().cloned().collect::<Vec<_>>() } else { Vec::new() }})
@@ -96,13 +99,30 @@ impl Trace {
         // File-tool content and responses stay outside the raw trace
         // contract. An explicitly enabled local trace may show a bounded
         // target path, never file contents, patch text, or search terms.
-        if matches!(name, "read_file" | "write_file" | "apply_patch" | "edit_file" | "file_info" | "list_directory" | "directory_tree" | "create_directory" | "git_inspect" | "project_context") {
-            let Some(path) = payload["params"]["arguments"]["path"].as_str()
-                .filter(|path| !path.is_empty() && path.len() <= 1024) else { return false };
+        if matches!(
+            name,
+            "read_file"
+                | "write_file"
+                | "apply_patch"
+                | "edit_file"
+                | "file_info"
+                | "list_directory"
+                | "directory_tree"
+                | "create_directory"
+                | "git_inspect"
+                | "project_context"
+        ) {
+            let Some(path) = payload["params"]["arguments"]["path"]
+                .as_str()
+                .filter(|path| !path.is_empty() && path.len() <= 1024)
+            else {
+                return false;
+            };
             if self.events.len() >= LIMIT {
                 self.events.pop_front();
             }
-            self.events.push_back(json!({"call_id":id,"source":"local_target_trace",
+            self.events
+                .push_back(json!({"call_id":id,"source":"local_target_trace",
                 "time":super::unix_seconds(),"client":client,"tool":name,
                 "phase":"running","target_preview":path}));
             return true;
@@ -153,12 +173,17 @@ impl Trace {
         // Only correlate successful launch receipts. Never use a user-supplied
         // job_id or a job status/log response as a launch correlation key.
         if !failure
-            && event["tool"].as_str().is_some_and(|tool| matches!(tool,
-                "exec_command" | "task_run" | "run_command" | "start_job" | "job_start"))
+            && event["tool"].as_str().is_some_and(|tool| {
+                matches!(
+                    tool,
+                    "exec_command" | "task_run" | "run_command" | "start_job" | "job_start"
+                )
+            })
             && let Some(text) = response.and_then(|v| v["result"]["content"][0]["text"].as_str())
             && text.len() <= 512 * 1024
             && let Ok(receipt) = serde_json::from_str::<Value>(text)
-            && let Some(job_id) = receipt["job_id"].as_str()
+            && let Some(job_id) = receipt["job_id"]
+                .as_str()
                 .filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
         {
             event["job_id"] = json!(job_id);
@@ -235,15 +260,29 @@ mod tests {
         assert!(!t.begin("call-1", "dev", &payload));
         assert!(t.set("local", true));
         assert!(t.begin("call-1", "dev", &payload));
-        t.finish("call-1", Instant::now(), Some(&json!({"result":"SECRET_RESPONSE"})));
+        t.finish(
+            "call-1",
+            Instant::now(),
+            Some(&json!({"result":"SECRET_RESPONSE"})),
+        );
         let record = &t.view("local", true)["events"][0];
         assert_eq!(record["target_preview"], "src/main.rs");
         assert!(record.get("arguments").is_none());
         assert!(record.get("response").is_none());
         assert!(!record.to_string().contains("SECRET"));
-        assert!(t.view("other", true)["events"].as_array().unwrap().is_empty());
+        assert!(
+            t.view("other", true)["events"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         assert!(t.set("local", false));
-        assert!(t.view("local", true)["events"].as_array().unwrap().is_empty());
+        assert!(
+            t.view("local", true)["events"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -255,16 +294,38 @@ mod tests {
         assert!(trace.begin("call-1", "client", &payload()));
         trace.finish("call-1", Instant::now(), Some(&response));
         assert_eq!(trace.view("local", true)["events"][0]["job_id"], id);
-        assert!(trace.begin("call-2", "client", &json!({"method":"tools/call","params":{"name":"job_status","arguments":{"job_id":id}}})));
+        assert!(trace.begin(
+            "call-2",
+            "client",
+            &json!({"method":"tools/call","params":{"name":"job_status","arguments":{"job_id":id}}})
+        ));
         trace.finish("call-2", Instant::now(), Some(&response));
-        assert!(trace.view("local", true)["events"][1].get("job_id").is_none());
+        assert!(
+            trace.view("local", true)["events"][1]
+                .get("job_id")
+                .is_none()
+        );
         assert!(trace.begin("call-3", "client", &payload()));
         let denied = json!({"result":{"isError":true,"content":[{"text":json!({"job_id":id}).to_string()}]}});
         trace.finish("call-3", Instant::now(), Some(&denied));
-        assert!(trace.view("local", true)["events"][2].get("job_id").is_none());
-        assert!(trace.view("other", true)["events"].as_array().unwrap().is_empty());
+        assert!(
+            trace.view("local", true)["events"][2]
+                .get("job_id")
+                .is_none()
+        );
+        assert!(
+            trace.view("other", true)["events"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         assert!(trace.set("local", false));
-        assert!(trace.view("local", true)["events"].as_array().unwrap().is_empty());
+        assert!(
+            trace.view("local", true)["events"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

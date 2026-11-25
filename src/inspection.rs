@@ -21,18 +21,18 @@ use crate::tools::{
     MutationRoot,
     registry::{Tool, tool_text},
 };
-#[path = "inspection/system.rs"]
-mod system_details;
 #[path = "inspection/context.rs"]
 mod context;
 #[path = "inspection/extra.rs"]
 mod extra;
+#[path = "inspection/system.rs"]
+mod system_details;
 pub(crate) use extra::{
     list_project_skill_summaries as extra_project_skill_summaries,
     validate_project_skills as extra_validate_project_skills,
 };
-pub(crate) fn local_diagnostics(section: &str) -> Result<Value,String> {
-    system_details::inspect(json!({"sections":[section]}).as_object().unwrap(),None)
+pub(crate) fn local_diagnostics(section: &str) -> Result<Value, String> {
+    system_details::inspect(json!({"sections":[section]}).as_object().unwrap(), None)
 }
 
 const MAX_ENTRIES: usize = 16_384;
@@ -149,7 +149,14 @@ fn inspect(
                         .any(|dir| full.starts_with(home.join(dir)))
                 })
         };
-        return extra::run(tool, Some(&Value::Object(args.clone())), config, settings, client, &reserved);
+        return extra::run(
+            tool,
+            Some(&Value::Object(args.clone())),
+            config,
+            settings,
+            client,
+            &reserved,
+        );
     }
     let root = client
         .mutation_root
@@ -243,7 +250,13 @@ fn inspect(
     let directory = open_beneath_dir(root.directory(), relative)
         .map_err(|_| "Directory unavailable or outside workspace")?;
     if matches!(tool, Tool::ProjectContext | Tool::SystemContext) {
-        return context::inspect(&directory, relative, args, tool == Tool::SystemContext, &reserved);
+        return context::inspect(
+            &directory,
+            relative,
+            args,
+            tool == Tool::SystemContext,
+            &reserved,
+        );
     }
     let mut walk = Walk {
         reserved: &reserved,

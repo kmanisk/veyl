@@ -76,10 +76,23 @@ DIAGNOSTICS = {
 def fixture(path, query):
     if path == "status":
         return {"version":"development preview","listener":"Preview only","sessions":3,"connections":1,"active_calls":0,"rss_kib":5120,"cpu_percent":0.2,"audit":"Sample",
+                "all_tools":["system_info","read_file"],
                 "csrf":"preview-only","jobs_configured":True,"skills_configured":True,
                 "configuration":{"authorization":"Sample","broad_state_layout":"Sample","configured_job_profiles":True,"configured_skills_store":True},
                 "protected_paths":{"state_directory":"Preview state","skills_directory":"Preview skills","default_masked":[".ssh",".gnupg"],"default_readonly":[".config/systemd",".local/bin"],"extra_masked":[],"extra_readonly":[]},
                 "clients":[{"id":name,"mode":mode,"connections":1,"grants":["system_info","read_file"],"skills":[],"upstreams":[]} for name,mode in (("chatgpt","yolo"),("codex","standard"),("agy","standard"))]}
+    if path == "marketplace/state":
+        return {"recipes":[
+                    {"id":"rea","version":"6.10.1","type":"npm"},
+                    {"id":"rust-anything","version":"4.1.0","type":"binary"},
+                    {"id":"@modelcontextprotocol/server-filesystem","type":"npm"},
+                    {"id":"mcp-server-git","type":"pypi"},
+                    {"id":"skill-skill-creator","type":"skill"}],
+                "installed":[{"id":"rea","version":"6.10.1","enabled":True,
+                              "tools":["artifact_inspect"],"tool_families":["artifact"]}],
+                "operations":[{"op_id":"preview-operation","id":"rust-anything",
+                               "phase":"downloading","bytes_downloaded":524288,
+                               "total_bytes":1048576,"percent":50}]}
     if path == "diagnostics":
         section=query.get("section",["resources"])[0]
         if section not in DIAGNOSTICS:

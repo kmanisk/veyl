@@ -67,7 +67,14 @@ impl Scopes {
         }
     }
 
-    pub fn command(&self, id: &str, mode: &str, timeout_seconds: u64, cpu_percent: u64, memory_bytes: u64) -> Command {
+    pub fn command(
+        &self,
+        id: &str,
+        mode: &str,
+        timeout_seconds: u64,
+        cpu_percent: u64,
+        memory_bytes: u64,
+    ) -> Command {
         let mut command = Command::new(SYSTEMD_RUN);
         command
             .env_clear()

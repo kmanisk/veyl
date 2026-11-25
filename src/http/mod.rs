@@ -1240,7 +1240,7 @@ fn privileged_tool(
                             workspace_mounts: (!full
                                 && broad.is_none()
                                 && (settings.managed || client.mode.audit_mode().is_some()))
-                                .then_some(&client.job_extra_roots),
+                            .then_some(&client.job_extra_roots),
                         },
                     ),
                     Err(reason) => tool_text(true, &format!("Broad job denied: {reason}")),
@@ -1368,9 +1368,11 @@ fn permit_tool(
     if !client.tools.contains(&tool) || !authorized(client, tool.action(), state, audited, now) {
         return Err(DENIED);
     }
-    if matches!(tool, Tool::ProcessInput | Tool::ProcessResize | Tool::ShellStatus | Tool::ShellReset)
-        && (!client.tools.contains(&Tool::ProcessStart)
-            || !authorized(client, Action::ProcessStart, state, audited, now))
+    if matches!(
+        tool,
+        Tool::ProcessInput | Tool::ProcessResize | Tool::ShellStatus | Tool::ShellReset
+    ) && (!client.tools.contains(&Tool::ProcessStart)
+        || !authorized(client, Action::ProcessStart, state, audited, now))
     {
         return Err(DENIED);
     }

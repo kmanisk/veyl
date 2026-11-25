@@ -2093,3 +2093,21 @@ previously recorded Broad YOLO preflight failure; it does not establish a
 mutation regression. No isolation or host settings were changed. No new
 personal preview is available for the unimplemented feature.
 
+# Verified marketplace installer & grant controls (2026-11-25)
+
+Independently implemented and verified on `0.3.0-beta` candidate from base `329b9d53ccdc86dd1ef3121a91d0bd031bdf6f95`:
+
+- **Verified installer engine (`src/upstream/installer.rs`)**:
+  - Built-in pinned recipes for `rea` (`rea-agents@6.10.1`, npm tarball SRI `sha512-3AWrfFEX...`, bundled dependencies, `/usr/bin/env REA_MCP_TOOL_FAMILIES=artifact /usr/bin/node /upstream/bundle/scripts/rea.mjs mcp`), `rust-anything` (`v4.1.0`, official GitHub release asset SHA-256 `12c2426d...`, ELF verification staged into `upstream-bundles/rust-anything/bin/rust-anything`), reviewed pure-JS npm packages, pure-Python `.whl` packages, standalone ELF binaries, and guidance-only skills (`skills.rs` `upsert`/`remove`).
+  - Zero global host-install copying, zero npm install lifecycle script execution, zero `setup.py` execution; external HTTPS enforcement plus isolated `127.0.0.1` loopback mock support for offline tests; pure-Rust USTAR/PAX/GNU tar parser + zero-write Python ZIP reader + `openat2` extraction with traversal/symlink/hardlink/size/count/bomb rejection.
+  - Async operation progress, live PID cancellation, transactional `.journal-*` crash recovery, and automatic probe-failure rollback preserving prior working bundles and `clients.json` configuration.
+  - `src/state_cli.rs` preserves `0o7177 == 0` across gateway state and permits `0o7077 == 0` verified ELF binaries strictly inside `upstream-bundles/<id>/bin/`, keeping Broad YOLO admission intact (`MAX_ENTRIES=131072`).
+- **Dashboard & grant controls**:
+  - Added `/api/dashboard/marketplace/{state,install,configure,uninstall,cancel,recover}`, `/api/dashboard/clients/grants`, `all_tools` status metadata, `veyl marketplace` CLI, Verified Providers card grid, progress/cancel bar, Configured Providers bulk/per-tool grant matrix, and Client native tool bulk/per-tool grant editor while preserving `marketplace.json` (`106` entries), `dashboard_tabs.mjs` contracts, and manual Custom MCP.
+- **Verification**:
+  - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `node --check src/http/dashboard/app.js`, and all Rust tests (`67+67+10+3+11+6+4`) PASS.
+  - 28/28 locked acceptance suites (`287/287` cases, `28/28` SHA-256 unchanged) + `locked_three_modes.py` (`6/6`) PASS against release binary without `test-hooks`.
+  - All 18 Python/Brave CDP/shell suites (`test_dashboard_preview.py`, `onboarding_browser.py`, `marketplace_install.py` `4/4` including real `rea` 6.10.1 & `rust-anything` 4.1.0 + Brave CDP UI checks, `systemd_lifecycle.sh`, `updater_lifecycle.sh`, plus `linux_features.py`, `process_sessions.py`, `product_features.py`, `runtime_bundles.py`, etc.) PASS.
+  - Offline RustSec audit: `0` vulnerabilities / `0` informational across `47` advisories and `86` package versions.
+
+

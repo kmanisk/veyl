@@ -199,7 +199,8 @@ pub(crate) struct PolicyFile {
 
 impl PolicyFile {
     pub(crate) fn lock(path: &Path, exclusive: bool) -> Result<Self, String> {
-        Self::open(path, exclusive, false).map_err(|_| "Private authorization storage unavailable".into())
+        Self::open(path, exclusive, false)
+            .map_err(|_| "Private authorization storage unavailable".into())
     }
 
     pub(crate) fn input_snapshot(path: &Path, digest: &[u8; 32]) -> io::Result<Self> {
@@ -548,11 +549,18 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
     for entry in entries {
         for (key, min, max) in [
             ("job_cpu_percent_limit", 10, 1600),
-            ("job_memory_bytes_limit", 16 * 1024 * 1024, 16_u64 * 1024 * 1024 * 1024),
+            (
+                "job_memory_bytes_limit",
+                16 * 1024 * 1024,
+                16_u64 * 1024 * 1024 * 1024,
+            ),
             ("job_output_limit_bytes", 1, 16 * 1024 * 1024),
             ("job_retention_count", 1, 1024),
         ] {
-            if entry.get(key).is_some_and(|v| !v.as_u64().is_some_and(|n| (min..=max).contains(&n))) {
+            if entry
+                .get(key)
+                .is_some_and(|v| !v.as_u64().is_some_and(|n| (min..=max).contains(&n)))
+            {
                 return Err(format!("Invalid {key}"));
             }
         }

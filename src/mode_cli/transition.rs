@@ -398,12 +398,16 @@ pub(super) fn apply_all(path: &Path, selected: Mode) -> Result<(), String> {
     if selected == Mode::BroadYolo {
         let plan = crate::jobs::broad::Broad::prepare(path, &settings)?;
         for client in settings.clients.iter().filter(|c| !c.is_disabled()) {
-            plan.probe(&client.root).map_err(|_| "YOLO isolation is unavailable for an enabled client")?;
+            plan.probe(&client.root)
+                .map_err(|_| "YOLO isolation is unavailable for an enabled client")?;
         }
     }
     let mut changes = Vec::new();
-    for (entry, client) in document["clients"].as_array_mut().ok_or("Invalid clients")?
-        .iter_mut().zip(&settings.clients)
+    for (entry, client) in document["clients"]
+        .as_array_mut()
+        .ok_or("Invalid clients")?
+        .iter_mut()
+        .zip(&settings.clients)
     {
         if client.is_disabled() && !recovery {
             continue;
@@ -415,8 +419,16 @@ pub(super) fn apply_all(path: &Path, selected: Mode) -> Result<(), String> {
         }
         let change = ModeChange::new(
             &client.id,
-            if client.native_tool_preset { "yolo_native" } else { previous.label() },
-            if preset { "yolo_native" } else { selected.label() },
+            if client.native_tool_preset {
+                "yolo_native"
+            } else {
+                previous.label()
+            },
+            if preset {
+                "yolo_native"
+            } else {
+                selected.label()
+            },
         )?;
         entry["mode"] = if preset { "yolo" } else { selected.label() }.into();
         let object = entry.as_object_mut().ok_or("Invalid client")?;

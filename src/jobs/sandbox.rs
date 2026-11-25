@@ -387,7 +387,7 @@ pub(crate) fn upstream_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
             &state,
             &Path::new("upstream-bundles").join(id),
         )?;
-        let layout = crate::state_cli::Layout::inspect(path).map_err(io::Error::other)?;
+        let layout = crate::state_cli::Layout::inspect_bundle(path).map_err(io::Error::other)?;
         layout.validate_links().map_err(io::Error::other)?;
         let handle = layout.into_root();
         let (a, b) = (fd_fs::fstat(&anchored)?, fd_fs::fstat(&handle)?);
@@ -412,6 +412,7 @@ pub(crate) fn upstream_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
         "HOME",
         "/tmp",
     ]);
+    let has_bundle = bundle.is_some();
     if let Some(bundle) = bundle {
         sandbox.pass("--ro-bind-fd", bundle)?;
         sandbox.command.arg("/upstream/bundle");
@@ -434,6 +435,7 @@ pub(crate) fn upstream_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
         && let Some(script) = args.first_mut()
         && Path::new(script).is_absolute()
         && Path::new(script).extension() == Some(OsStr::new("py"))
+        && !(has_bundle && Path::new(script).starts_with("/upstream/bundle"))
     {
         sandbox.pass("--ro-bind-fd", open_source(Path::new(script))?)?;
         sandbox.command.arg("/upstream/server.py");

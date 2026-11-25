@@ -32,7 +32,10 @@ impl Jobs {
 
     pub(super) fn reconcile(&self, job: &JobDir<'_>, receipt: &mut Receipt) -> io::Result<()> {
         if !receipt.state.active() {
-            if receipt.state != State::Uncertain && receipt.ephemeral_worktree && receipt.worktree_cleaned != Some(true) {
+            if receipt.state != State::Uncertain
+                && receipt.ephemeral_worktree
+                && receipt.worktree_cleaned != Some(true)
+            {
                 let repo = receipt.worktree_repo.as_deref().ok_or_else(invalid)?;
                 let path = receipt.worktree_path.as_deref().ok_or_else(invalid)?;
                 super::worktree::remove(repo, path)?;

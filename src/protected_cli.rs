@@ -13,7 +13,8 @@ use crate::protected_paths::{
     Kind, OPTIONAL_DEFAULTS, READONLY_DEFAULTS, Rule, check_conflicts, validate_path,
 };
 
-const USAGE: &str = "usage: veyl protected-paths list [--mandatory|--optional|--readonly] --config PATH
+const USAGE: &str =
+    "usage: veyl protected-paths list [--mandatory|--optional|--readonly] --config PATH
        veyl protected-paths <add|remove|validate> [--optional|--readonly] PATH --config PATH";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {

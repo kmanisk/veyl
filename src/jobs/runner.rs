@@ -16,8 +16,12 @@ use super::config::{Profile, RootIdentity, restrict_child_privileges};
 use super::logs::{Log, nonblocking};
 use super::process::{self, Identity, OwnedProcess, TERM_GRACE, TICK};
 use super::receipt::{Receipt, State};
+use super::session::{
+    Binding,
+    channel::{Channel, Input},
+    terminal::{SETSID, Terminal},
+};
 use super::store::{JobDir, Store};
-use super::session::{Binding, channel::{Channel, Input}, terminal::{SETSID, Terminal}};
 use super::{invalid, record};
 
 pub(super) const WIRE_LIMIT: u64 = 65_536;
@@ -99,7 +103,14 @@ pub(crate) fn run_worker() -> io::Result<()> {
         if receipt.cancel_requested {
             return finish(&job, &mut audit, receipt, State::Cancelled);
         }
-        if launch.scoped && super::resources::verify(&launch.job_id, launch.profile.cpu_percent, launch.profile.memory_bytes).is_err() {
+        if launch.scoped
+            && super::resources::verify(
+                &launch.job_id,
+                launch.profile.cpu_percent,
+                launch.profile.memory_bytes,
+            )
+            .is_err()
+        {
             return finish(&job, &mut audit, receipt, State::Failed);
         }
 
@@ -119,7 +130,9 @@ pub(crate) fn run_worker() -> io::Result<()> {
         let pty_args;
         let (executable, args) = if launch.profile.pty {
             pty_args = ["--ctty", "--wait", "--", &launch.profile.executable]
-                .into_iter().map(str::to_owned).chain(launch.profile.args.iter().cloned())
+                .into_iter()
+                .map(str::to_owned)
+                .chain(launch.profile.args.iter().cloned())
                 .collect::<Vec<_>>();
             (SETSID, &pty_args)
         } else {
@@ -171,7 +184,11 @@ pub(crate) fn run_worker() -> io::Result<()> {
             }
         } else {
             command
-                .stdin(if launch.session.is_some() { Stdio::piped() } else { Stdio::null() })
+                .stdin(if launch.session.is_some() {
+                    Stdio::piped()
+                } else {
+                    Stdio::null()
+                })
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
             None
@@ -183,7 +200,9 @@ pub(crate) fn run_worker() -> io::Result<()> {
         let pid = child.id();
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
-        let stdin = terminal.map(Input::Pty).or_else(|| child.stdin.take().map(Input::Pipe));
+        let stdin = terminal
+            .map(Input::Pty)
+            .or_else(|| child.stdin.take().map(Input::Pipe));
         let process = OwnedProcess::new(child);
         let channel = match stdin {
             Some(stdin) => Some(Channel::open(store.input_key(&receipt), stdin)?),
@@ -192,7 +211,11 @@ pub(crate) fn run_worker() -> io::Result<()> {
         receipt.child = Some(Identity::capture(pid)?);
         receipt.state = State::Running;
         job.save(&receipt)?;
-        (stdout, stderr, (process, stdout_pipe, stderr_pipe, start, channel))
+        (
+            stdout,
+            stderr,
+            (process, stdout_pipe, stderr_pipe, start, channel),
+        )
     };
 
     let (mut process, mut stdout, mut stderr, start, channel) = spawned;
@@ -203,7 +226,12 @@ pub(crate) fn run_worker() -> io::Result<()> {
         (&mut stdout_log, &mut stdout),
         (&mut stderr_log, &mut stderr),
         start + Duration::from_secs(launch.profile.timeout_seconds),
-        channel.zip(launch.session.as_ref().map(|session| session.config.as_path())),
+        channel.zip(
+            launch
+                .session
+                .as_ref()
+                .map(|session| session.config.as_path()),
+        ),
     );
     let supervision_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     drop(process);
@@ -252,7 +280,11 @@ fn supervise(
         let stdout_progress = if let Some(pipe) = stdout {
             stdout_log.drain(pipe)?
         } else {
-            input.as_mut().ok_or_else(invalid)?.0.drain_terminal(stdout_log)?
+            input
+                .as_mut()
+                .ok_or_else(invalid)?
+                .0
+                .drain_terminal(stdout_log)?
         };
         let stderr_progress = if let Some(pipe) = stderr {
             stderr_log.drain(pipe)?
@@ -281,7 +313,9 @@ fn supervise(
                 stop = Some((state, now + TERM_GRACE));
             }
         }
-        if stop.is_none() && let Some((channel, config)) = &mut input {
+        if stop.is_none()
+            && let Some((channel, config)) = &mut input
+        {
             channel.step(config)?;
         }
         if let Some((state, kill_at)) = stop

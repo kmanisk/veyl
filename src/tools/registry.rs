@@ -358,7 +358,11 @@ impl Tool {
     pub(crate) fn process_control(self) -> bool {
         matches!(
             self,
-            Self::ProcessStart | Self::ProcessInput | Self::ProcessResize | Self::ShellStatus | Self::ShellReset
+            Self::ProcessStart
+                | Self::ProcessInput
+                | Self::ProcessResize
+                | Self::ShellStatus
+                | Self::ShellReset
         )
     }
 
@@ -528,7 +532,11 @@ impl Tool {
                     self,
                     Self::ExtensionsProposeAdd | Self::McpProposeAdd | Self::SkillsProposeAdd
                 );
-                let required = if is_add { json!(["source"]) } else { json!(["name"]) };
+                let required = if is_add {
+                    json!(["source"])
+                } else {
+                    json!(["name"])
+                };
                 json!({
                     "name": self.name(),
                     "description": "Create an inert operator-review request. Does not download, install, approve, sign, enable, or execute code.",
@@ -947,13 +955,18 @@ impl Tool {
                 false,
             ),
             Self::ProcessResize => (
-                self.name(), "Resize an owned PTY session.",
+                self.name(),
+                "Resize an owned PTY session.",
                 json!({"job_id": id, "rows": {"type":"integer", "minimum":1, "maximum":512}, "cols": {"type":"integer", "minimum":1, "maximum":512}}),
-                json!(["job_id", "rows", "cols"]), false,
+                json!(["job_id", "rows", "cols"]),
+                false,
             ),
             Self::ShellStatus => (
-                self.name(), "Inspect owned persistent process sessions.",
-                json!({"job_id": id}), json!([]), true,
+                self.name(),
+                "Inspect owned persistent process sessions.",
+                json!({"job_id": id}),
+                json!([]),
+                true,
             ),
             Self::ShellReset => (
                 self.name(),
