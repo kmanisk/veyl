@@ -13,6 +13,7 @@ mod runner;
 mod sandbox;
 mod session;
 mod store;
+mod upstream_workspace;
 mod worktree;
 
 use std::collections::HashSet;

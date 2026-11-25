@@ -398,6 +398,14 @@ pub(crate) fn upstream_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
     } else {
         (None, args)
     };
+    let (workspace, args) = if args.first().is_some_and(|v| v == "--workspace-input") {
+        if bundle.is_none() || args.len() < 7 {
+            return Err(unsupported());
+        }
+        (Some(&args[1..6]), &args[6..])
+    } else {
+        (None, args)
+    };
     let (program, args) = args.split_first().ok_or_else(unsupported)?;
     let program = Path::new(program);
     let canonical = program.canonicalize()?;
@@ -416,6 +424,9 @@ pub(crate) fn upstream_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
     if let Some(bundle) = bundle {
         sandbox.pass("--ro-bind-fd", bundle)?;
         sandbox.command.arg("/upstream/bundle");
+    }
+    if let Some(workspace) = workspace {
+        super::upstream_workspace::mount(&mut sandbox, workspace)?;
     }
     let executable = if canonical.starts_with(BIN) {
         canonical.as_os_str()

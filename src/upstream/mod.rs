@@ -3,6 +3,7 @@ pub(crate) mod admin;
 mod http;
 pub(crate) mod installer;
 mod stdio;
+mod workspace;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -26,6 +27,7 @@ static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) struct Grants {
     pub servers: BTreeSet<String>,
     pub tools: Option<BTreeMap<String, BTreeSet<String>>>,
+    workspaces: BTreeMap<String, workspace::Grant>,
 }
 
 impl Grants {
@@ -52,7 +54,69 @@ impl Grants {
         if servers.iter().any(|id| !catalog.0.contains_key(id)) {
             return Err("Unknown upstream server in client grant".into());
         }
-        Ok(Self { servers, tools })
+        let mut workspaces = BTreeMap::new();
+        if let Some(raw) = entry.get("upstream_workspace_roots") {
+            let map = raw
+                .as_object()
+                .ok_or("Expected upstream_workspace_roots object")?;
+            for (id, path) in map {
+                if !matches!(id.as_str(), "rea" | "rust-anything")
+                    || !servers.contains(id)
+                    || tools.is_none()
+                    || !catalog.0.get(id).is_some_and(|s| {
+                        matches!(&s.transport, Transport::Stdio { bundle: true, .. })
+                    })
+                {
+                    return Err("Workspace access requires a supported, bundled and explicitly granted provider".into());
+                }
+                workspaces.insert(id.clone(), workspace::Grant::parse(path)?);
+            }
+        }
+        Ok(Self {
+            servers,
+            tools,
+            workspaces,
+        })
+    }
+
+    pub(crate) fn validate_workspaces(
+        &self,
+        config: &Path,
+        settings: &crate::http::admission::Configuration,
+        client: &crate::http::admission::Client,
+    ) -> Result<(), String> {
+        for grant in self.workspaces.values() {
+            grant.validate(config, settings, client)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn scoped_call(&self, payload: &Value) -> bool {
+        if payload["method"] != "tools/call" {
+            return false;
+        }
+        let params = &payload["params"];
+        let Some(requested) = params["name"].as_str() else {
+            return false;
+        };
+        let (requested, args) = if requested == "mcp_servers_call" {
+            let call = &params["arguments"];
+            let Some(name) = call["name"].as_str() else {
+                return false;
+            };
+            (name, &call["arguments"])
+        } else {
+            (requested, &params["arguments"])
+        };
+        let Some((id, name)) = requested.split_once("__") else {
+            return false;
+        };
+        if !self.allows(id, name) || !args.is_object() || args.to_string().len() > MAX_FRAME / 2 {
+            return false;
+        }
+        self.workspaces
+            .get(id)
+            .is_some_and(|grant| matches!(grant.prepare(id, name, &mut args.clone()), Ok(Some(_))))
     }
 
     pub fn allows(&self, id: &str, tool: &str) -> bool {
@@ -158,6 +222,11 @@ impl Catalog {
                 "private_ca": private_ca,
             }),
         };
+        let mut canonical = canonical;
+        if let Some(grant) = grants.workspaces.get(id) {
+            canonical["workspace_root"] = json!(grant.root);
+            canonical["workspace_identity"] = json!(grant.identity);
+        }
         let provider_fingerprint =
             format!("{:x}", Sha256::digest(canonical.to_string().as_bytes()));
         let mut granted_tools: Vec<&str> = grants
@@ -188,6 +257,7 @@ impl Catalog {
                 },
                 "credentials": matches!(server.transport, Transport::Http { use_token: true, .. }),
                 "granted_tools": granted_tools,
+                "workspace_root": canonical.get("workspace_root"),
             },
         }))
     }
@@ -313,16 +383,41 @@ impl Catalog {
         } else {
             overall
         };
-        let result = with_link_budget(config, &id, server, overall, budget, |link| {
-            if !link.discover()?.contains_key(name) {
-                return Err(io::Error::other("Tool not discovered"));
-            }
-            let result = link.request("tools/call", json!({"name":name,"arguments":args}))?;
-            if !result.get("content").is_some_and(Value::is_array) {
-                return Err(io::Error::other("Invalid upstream tool result"));
-            }
-            Ok(result)
-        });
+        let mut translated = args.clone();
+        let result = (|| {
+            let workspace = grants
+                .workspaces
+                .get(&id)
+                .map(|grant| grant.prepare(&id, name, &mut translated))
+                .transpose()
+                .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason))?
+                .flatten();
+            let (overall, budget) = if workspace.is_some() {
+                let budget = Duration::from_secs(8);
+                (Instant::now() + budget, budget)
+            } else {
+                (overall, budget)
+            };
+            with_link_budget(
+                config,
+                &id,
+                server,
+                overall,
+                budget,
+                workspace.as_ref(),
+                |link| {
+                    if !link.discover()?.contains_key(name) {
+                        return Err(io::Error::other("Tool not discovered"));
+                    }
+                    let result =
+                        link.request("tools/call", json!({"name":name,"arguments":translated}))?;
+                    if !result.get("content").is_some_and(Value::is_array) {
+                        return Err(io::Error::other("Invalid upstream tool result"));
+                    }
+                    Ok(result)
+                },
+            )
+        })();
         if !audit(
             &public,
             false,
@@ -332,6 +427,9 @@ impl Catalog {
         }
         result.map_err(|error| match error.kind() {
             io::ErrorKind::TimedOut => "Upstream call timed out",
+            io::ErrorKind::PermissionDenied => {
+                "Upstream input outside granted workspace or invalid"
+            }
             _ => "Upstream rejected the call or became unavailable",
         })
     }
@@ -350,7 +448,7 @@ impl Catalog {
         };
         let deadline = Instant::now() + budget;
         Ok(
-            match with_link_budget(config, id, server, deadline, budget, Link::discover) {
+            match with_link_budget(config, id, server, deadline, budget, None, Link::discover) {
                 Ok(discovered) => {
                     json!({"id":id,"health":"ready","tools":discovered.keys().collect::<Vec<_>>()})
                 }
@@ -548,7 +646,15 @@ fn with_link<T>(
     overall: Instant,
     f: impl FnOnce(&mut Link) -> io::Result<T>,
 ) -> io::Result<T> {
-    with_link_budget(config, id, server, overall, Duration::from_millis(1700), f)
+    with_link_budget(
+        config,
+        id,
+        server,
+        overall,
+        Duration::from_millis(1700),
+        None,
+        f,
+    )
 }
 
 fn with_link_budget<T>(
@@ -557,6 +663,7 @@ fn with_link_budget<T>(
     server: &Server,
     overall: Instant,
     budget: Duration,
+    workspace: Option<&workspace::Input>,
     f: impl FnOnce(&mut Link) -> io::Result<T>,
 ) -> io::Result<T> {
     let deadline = overall.min(Instant::now() + budget);
@@ -580,7 +687,12 @@ fn with_link_budget<T>(
             } else {
                 None
             };
-            Connection::Stdio(stdio::Process::start(command, args, root.as_deref())?)
+            Connection::Stdio(stdio::Process::start(
+                command,
+                args,
+                root.as_deref(),
+                workspace,
+            )?)
         }
         Transport::Http {
             uri,

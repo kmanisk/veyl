@@ -1,5 +1,17 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Next gate: personal preview and exact-candidate operator approval
+
+Corrected candidate `upstream-workspace.Dx2gWMVJ/source`, base `79f5d79`, passed direct BridgeDev verification: 168 Rust cases, 287 locked cases, six three-mode cases, 17 focused release regressions, and both real-provider/boundary acceptance cases (using a separately corrected non-locked fixture). See STATUS.md for receipts, fixture corrections and exact release checksums. Use `../release-bin/` for isolated preview; verify manifests. The operator may personally run `MCP_GATEWAY_BIN="$PWD/../release-bin/mcp-gateway" python3 -B tests/upstream_workspace_jobs.py -v` or the separate `python3 -B ../bridge-acceptance.py -v` real-provider acceptance fixture. Explicit personal approval of this exact candidate is required for deployment and promotion. Do not alter production or begin TimeShift/Nightshift before the approval gate.
+
+## Previous gate: AGY re-verification of job-enabled upstream workspace correction (historical)
+
+HOLD: no deployment or promotion. Same candidate and base. Missing JobClient schema field fixed; focused release tests 17/17 and unchanged real-provider 81-tool test_01 on debug passed. Verify fresh manifests and corrected release binaries in `../release-bin/`. AGY's unchanged test_02 reached line 338 but its mock attempts UTF-8 decoding of a binary .pyc; confirm and fix its fixture within AGY's own independent non-locked harness. Re-run both job-enabled cases, the locked battery and Rust tests on the exact corrected candidate. See current STATUS.md. Retain operator approval gate; do not start TimeShift or Nightshift.
+
+## Previous gate: AGY upstream workspace acceptance (pre-fix)
+
+Use the isolated `upstream-workspace.Dx2gWMVJ/source` candidate at base `79f5d79`; preserve the dirty source and verify the adjacent candidate manifests before building. See [UPSTREAM_WORKSPACE.md](UPSTREAM_WORKSPACE.md) and STATUS.md. Local focused tests passed 14/14. AGY must independently test real pinned REA and Rust Anything against disposable approved workspace files, protected state and mount aliases, stale root identity, file/tree limits, revocation, cross-client and timeout cases, then run the full locked battery and verify release binaries. Do not alter the locked tests or production; request exact-candidate operator approval before any promotion. No TimeShift or Nightshift changes are part of this checkpoint.
+
 ## 0.3.0-beta accepted for production promotion (2026-11-25)
 
 Candidate `~/.local/share/veyl-development/candidates/timeshift.o89oyRsF/source` (`candidate/0.3.0-beta`, version `0.3.0-beta`) passed independent AGY acceptance: 158/158 Rust tests, 287/287 locked cases across 28/28 unchanged pins + 6/6 three-mode cases, all 17 Python/JS/shell suites, Brave CDP browser checks, real REA + Rust Anything runtime bundle execution, delegated systemd & updater E2E suites, and offline RustSec advisory evaluation (47 advisories, 0 matches). Approximate BridgeDev parity is an 86% functional-domain estimate (6 of 7 domains implemented); TimeShift (`rewind`) and autonomous Nightshift remain unimplemented. Canonical `~/Projects/veyl` `main` push and crates.io publication require explicit separate authorization.

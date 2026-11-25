@@ -540,6 +540,10 @@ fn path_field(field: &str) -> PathBuf {
     )
 }
 
+pub(crate) fn check_workspace_mount(path: &Path) -> io::Result<()> {
+    no_mount_alias(path, &mounts()?)
+}
+
 fn no_mount_alias(path: &Path, mounts: &[Mount]) -> io::Result<()> {
     let fd = rustix::fs::open(
         path,

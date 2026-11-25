@@ -470,6 +470,11 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
     #[cfg(target_os = "linux")]
     {
         settings.skills = crate::skills::Skills::load(path, &document, &settings)?;
+        for client in &settings.clients {
+            client
+                .upstreams
+                .validate_workspaces(path, &settings, client)?;
+        }
         if let Some(funnel) = settings
             .tailnet
             .as_ref()

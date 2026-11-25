@@ -520,6 +520,7 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "skills",
         "allowed_servers",
         "allowed_server_tools",
+        "upstream_workspace_roots",
         "job_runtime_limit_seconds",
         "job_cpu_percent_limit",
         "job_memory_bytes_limit",

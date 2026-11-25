@@ -21,11 +21,21 @@ impl Process {
         command: &str,
         args: &[String],
         bundle: Option<&std::path::Path>,
+        workspace: Option<&super::workspace::Input>,
     ) -> io::Result<Self> {
         let mut worker = Command::new(std::env::current_exe()?);
         worker.arg("--mcp-upstream-worker");
         if let Some(bundle) = bundle {
             worker.arg("--runtime-bundle").arg(bundle);
+        }
+        if let Some(input) = workspace {
+            worker
+                .arg("--workspace-input")
+                .arg(&input.root)
+                .arg(input.identity[0].to_string())
+                .arg(input.identity[1].to_string())
+                .arg(&input.relative)
+                .arg(if input.tree { "tree" } else { "file" });
         }
         let mut child = worker
             .arg(command)

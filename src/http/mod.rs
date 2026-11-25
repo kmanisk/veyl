@@ -297,21 +297,36 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
                     async move {
                         #[cfg(target_os = "linux")]
                         let mut call = None;
-                        let result = tokio::time::timeout(HTTP_TIMEOUT, async {
-                            #[cfg(target_os = "linux")]
-                            if is_admin {
-                                return dashboard::serve(request, state).await;
-                            }
-                            serve(
-                                request,
-                                state,
-                                peer.ip(),
+                        let extend = std::sync::atomic::AtomicBool::new(false);
+                        let deadline = tokio::time::Instant::now() + HTTP_TIMEOUT;
+                        let result = {
+                            let mut work = std::pin::pin!(async {
                                 #[cfg(target_os = "linux")]
-                                &mut call,
-                            )
-                            .await
-                        })
-                        .await;
+                                if is_admin {
+                                    return dashboard::serve(request, state).await;
+                                }
+                                serve(
+                                    request,
+                                    state,
+                                    peer.ip(),
+                                    #[cfg(target_os = "linux")]
+                                    &mut call,
+                                    #[cfg(target_os = "linux")]
+                                    &extend,
+                                )
+                                .await
+                            });
+                            match tokio::time::timeout_at(deadline, &mut work).await {
+                                Err(_) if extend.load(std::sync::atomic::Ordering::Relaxed) => {
+                                    tokio::time::timeout_at(
+                                        deadline + Duration::from_secs(8),
+                                        &mut work,
+                                    )
+                                    .await
+                                }
+                                result => result,
+                            }
+                        };
                         #[cfg(target_os = "linux")]
                         if let Some(call) = call {
                             call.finish(match &result {
@@ -372,6 +387,7 @@ async fn serve(
     state: Arc<State>,
     peer: IpAddr,
     #[cfg(target_os = "linux")] call: &mut Option<activity::Call>,
+    #[cfg(target_os = "linux")] extend: &std::sync::atomic::AtomicBool,
 ) -> Reply {
     let marker = request.headers().contains_key("Tailscale-Funnel-Request");
     let raw_path = request.uri().path();
@@ -440,7 +456,16 @@ async fn serve(
     #[cfg(target_os = "linux")]
     if let Some(allow_secret_path) = public {
         let origin = funnel::Origin::parse(request.headers(), &origin);
-        return serve_public(request, state, peer, origin, allow_secret_path, call).await;
+        return serve_public(
+            request,
+            state,
+            peer,
+            origin,
+            allow_secret_path,
+            call,
+            extend,
+        )
+        .await;
     }
     if request.headers().get_all(header::ORIGIN).iter().count() > 1
         || request
@@ -458,6 +483,8 @@ async fn serve(
         None,
         #[cfg(target_os = "linux")]
         call,
+        #[cfg(target_os = "linux")]
+        extend,
     )
     .await
 }
@@ -470,6 +497,7 @@ async fn serve_public(
     origin: funnel::Origin,
     allow_secret_path: bool,
     call: &mut Option<activity::Call>,
+    extend: &std::sync::atomic::AtomicBool,
 ) -> Reply {
     let options = request.method() == Method::OPTIONS;
     let valid_path = funnel::route_matches(request.uri().path(), allow_secret_path);
@@ -518,7 +546,7 @@ async fn serve_public(
         }
     } else {
         let proof = funnel::proof(request.uri().path(), request.headers(), allow_secret_path);
-        serve_admitted(request, state, peer, true, proof, call).await
+        serve_admitted(request, state, peer, true, proof, call, extend).await
     };
     if valid_path {
         funnel::cors_headers(response.headers_mut(), origin, options);
@@ -547,6 +575,7 @@ async fn serve_admitted(
     marker: bool,
     proof: Option<[u8; 32]>,
     #[cfg(target_os = "linux")] call: &mut Option<activity::Call>,
+    #[cfg(target_os = "linux")] extend: &std::sync::atomic::AtomicBool,
 ) -> Reply {
     #[cfg(not(target_os = "linux"))]
     let _ = proof;
@@ -750,6 +779,15 @@ async fn serve_admitted(
         return simple(StatusCode::NOT_FOUND, "Expired MCP session");
     }
     session.last_used = Instant::now();
+
+    #[cfg(target_os = "linux")]
+    if client
+        .actions
+        .contains(&mcp_gateway::security::policy::Action::CallUpstream)
+        && client.upstreams.scoped_call(&payload)
+    {
+        extend.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 
     #[cfg(target_os = "linux")]
     if matches!(method, Some("tools/list" | "tools/call")) {

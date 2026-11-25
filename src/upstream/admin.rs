@@ -11,7 +11,7 @@ use super::{server_name, tool_name};
 use crate::http::admission::{parse_clients, parse_document};
 use crate::http::operator::{PolicyFile, verify_approvals};
 
-const HELP: &str = "usage: veyl mcp-servers list | probe ID | add-stdio ID /absolute/COMMAND [ARGS...] | add-bundle ID /absolute/COMMAND [ARGS...] | add-http ID URL [CONNECT_IP] | enable ID | disable ID | remove ID | restrict CLIENT | grant CLIENT ID TOOL | revoke CLIENT ID TOOL (append --config PATH)";
+const HELP: &str = "usage: veyl mcp-servers list | probe ID | add-stdio ID /absolute/COMMAND [ARGS...] | add-bundle ID /absolute/COMMAND [ARGS...] | add-http ID URL [CONNECT_IP] | enable ID | disable ID | remove ID | restrict CLIENT | grant CLIENT ID TOOL | revoke CLIENT ID TOOL | workspace CLIENT ID ROOT | unworkspace CLIENT ID (append --config PATH)";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args == ["--help"] {
@@ -126,6 +126,33 @@ pub(crate) fn manage(path: &Path, params: &[&str]) -> Result<Value, String> {
                 json!(*op == "enable");
             (*op, *id, None, None)
         }
+        ["workspace", principal, id, root] => {
+            if !servers.contains_key(*id) {
+                return Err("Unknown upstream server".into());
+            }
+            let entry = document["clients"]
+                .as_array_mut()
+                .and_then(|entries| entries.iter_mut().find(|entry| entry["id"] == *principal))
+                .ok_or("Unknown client")?;
+            if entry.get("upstream_workspace_roots").is_none() {
+                entry["upstream_workspace_roots"] = json!({});
+            }
+            entry["upstream_workspace_roots"][*id] = json!(root);
+            ("workspace", *id, Some(*principal), None)
+        }
+        ["unworkspace", principal, id] => {
+            let entry = document["clients"]
+                .as_array_mut()
+                .and_then(|entries| entries.iter_mut().find(|entry| entry["id"] == *principal))
+                .ok_or("Unknown client")?;
+            if let Some(map) = entry
+                .get_mut("upstream_workspace_roots")
+                .and_then(Value::as_object_mut)
+            {
+                map.remove(*id);
+            }
+            ("unworkspace", *id, Some(*principal), None)
+        }
         ["remove", id] => {
             if servers.remove(*id).is_none() && policy.pending_client()?.is_none() {
                 return Err("Unknown upstream server".into());
@@ -139,6 +166,12 @@ pub(crate) fn manage(path: &Path, params: &[&str]) -> Result<Value, String> {
                 }
                 if let Some(grants) = client
                     .get_mut("allowed_server_tools")
+                    .and_then(Value::as_object_mut)
+                {
+                    grants.remove(*id);
+                }
+                if let Some(grants) = client
+                    .get_mut("upstream_workspace_roots")
                     .and_then(Value::as_object_mut)
                 {
                     grants.remove(*id);

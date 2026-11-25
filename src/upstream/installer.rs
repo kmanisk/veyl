@@ -2818,6 +2818,12 @@ fn rollback_failed_swap(
                             {
                                 obj.remove(id);
                             }
+                            if let Some(obj) = c
+                                .get_mut("upstream_workspace_roots")
+                                .and_then(Value::as_object_mut)
+                            {
+                                obj.remove(id);
+                            }
                         }
                     }
                 }
@@ -3090,6 +3096,12 @@ pub(crate) fn uninstall(config: &Path, raw_id: &str) -> Result<Value, String> {
             {
                 grants.remove(&target_id);
             }
+            if let Some(grants) = client
+                .get_mut("upstream_workspace_roots")
+                .and_then(Value::as_object_mut)
+            {
+                grants.remove(&target_id);
+            }
         }
     }
     let marker = format!("marketplace:uninstall:{target_id}");
@@ -3213,6 +3225,20 @@ pub(crate) fn update_client_grants(config: &Path, body: &Value) -> Result<Value,
         entry["allowed_server_tools"] = json!(clean_map);
     }
 
+    // Removing an upstream server grant must also remove its workspace delegation.
+    let active: BTreeSet<String> = entry["allowed_servers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    if let Some(roots) = entry
+        .get_mut("upstream_workspace_roots")
+        .and_then(Value::as_object_mut)
+    {
+        roots.retain(|id, _| active.contains(id));
+    }
     let marker = format!("grants:{client_id}");
     policy.commit_edit(&document, &marker, |phase| {
         audit.record_upstream_change(

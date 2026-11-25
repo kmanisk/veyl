@@ -155,6 +155,9 @@ struct JobClient {
     _allowed_servers: Option<Vec<String>>,
     #[serde(default, rename = "allowed_server_tools")]
     _allowed_server_tools: Option<serde_json::Value>,
+    // Workspace delegation is validated by upstream admission, not job profiles.
+    #[serde(default, rename = "upstream_workspace_roots")]
+    _upstream_workspace_roots: Option<BTreeMap<String, String>>,
     #[serde(default, rename = "mode")]
     _mode: Option<String>,
     #[serde(default, rename = "yolo_roots")]
