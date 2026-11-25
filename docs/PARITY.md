@@ -1,14 +1,15 @@
 # BridgeDev capability comparison
 
-## 0.3.0-beta candidate scope
+## 0.3.0-beta release scope
 
-The six-domain planning score remains approximately 86%, not 100%. Includes the real runtime bundle extension probes (REA, Rust Anything and a custom Node MCP provider), compact live TUI status, and a verified fix for disconnected FUSE siblings disrupting Broad YOLO. TimeShift and autonomous Nightshift remain unimplemented. The new version number does not imply final parity.
+The six-domain BridgeDev functional-domain estimate is approximately 86% (6 of 7 domains implemented), not 100% parity or an acceptance score. Veyl `0.3.0-beta` adds real read-only runtime bundle extension support (`veyl mcp-servers add-bundle`, verified against REA, Rust Anything, and custom Node MCP providers), live MCP status in the TUI header, and verified skipping of `ENOTCONN` disconnected FUSE siblings during Broad YOLO home projection without weakening protected-path confinement. TimeShift (`rewind` checkpoints) and autonomous Nightshift orchestration remain unimplemented and are excluded from `0.3.0-beta`.
 
-## 86% functional parity milestone candidate (`parity-86`, 2026-11-25)
+## 86% functional parity baseline (`0.3.0-beta`, 2026-11-25)
 
-Candidate `/home/onyx/.local/share/veyl-development/candidates/parity-86.hjODQIAS/source`
-(branch `dev/parity-86`, base `0e2cf55`, version `0.2.5-beta`) completes all
-six non-Nightshift functional domains against BridgeDev:
+Candidate `/home/onyx/.local/share/veyl-development/candidates/timeshift.o89oyRsF/source`
+(branch `candidate/0.3.0-beta`, base `0e2cf55`, version `0.3.0-beta`) completes
+all six non-Nightshift functional domains against BridgeDev (86% functional-domain
+estimate; 6 of 7 domains):
 
 - Six of seven functional domains are implemented (6/7 = 85.7%, ~86%
   functional parity); only autonomous Nightshift orchestration and pre-edit
@@ -26,7 +27,7 @@ six non-Nightshift functional domains against BridgeDev:
 | 4. Durable execution & task budgets | `jobs.ts` (budgets up to 86400s), retries, recovery | IMPLEMENTED (`job_runtime_limit_seconds` up to 86400s, `cpu_percent` 10..1600, `memory_bytes` 16 MiB..16 GiB, `max_output_bytes` up to 16 MiB, `job_retention_count`, atomic `request_id` idempotency, cancellation, recovery) | Managed systemd user scope + signed receipts; no leased root `host-controller`. |
 | 5. Nightshift & checkpoints/rewind | `checkpoint.ts`, `rewind.ts`, `ponytail.ts` | NOT IMPLEMENTED as orchestration (`task_run` + `job_wait` + `tests/bridgedev_parity_and_nightshift.rs` cover primitives only) | Final 1/7 domain (~14.3%): autonomous multi-iteration Nightshift loops and pre-edit `rewind` store remain out of scope here. |
 | 6. System & context inspection | `system.ts`, `system-inspect.ts`, `context.ts`, `chezmoi.ts` | IMPLEMENTED (`system_info`, `system_inspect` 10 subsystems including `processes`, `network` TX/RX rates, wake-safe GPU/`nvidia_telemetry`, `service_status`, `project_context`, `system_context`, `load_path_rules`, `remember`, `chezmoi_inspect`, `list_skills`, `load_skill`, `skills_list`, `skills_read`) | Descriptor-pinned workspace traversal (`openat2`), zero env/cmdline scraping, and strict runtime PM active check before invoking `nvidia-smi`. |
-| 7. Extensions, marketplace & preview | `extensions.ts`, `marketplace.ts` | IMPLEMENTED (`extensions_list`, `extensions_info`, `extensions_search`, `skills_validate`, `mcp_list`, `mcp_status`, `mcp_info` with SHA-256 `provider_fingerprint`, `mcp_test`, 8 inert `*_propose_*` tools, `/api/dashboard/requests`, live-reload `tests/dashboard_preview.py`) | Proposals are strictly inert JSON records (`0600`) in state `proposals/` awaiting operator review; remote auto-download/install omitted by design. |
+| 7. Extensions, marketplace & preview | `extensions.ts`, `marketplace.ts` | IMPLEMENTED (`extensions_list`, `extensions_info`, `extensions_search`, `skills_validate`, `mcp_list`, `mcp_status`, `mcp_info` with SHA-256 `provider_fingerprint`, `mcp_test`, opt-in read-only runtime bundles via `veyl mcp-servers add-bundle`, 8 inert `*_propose_*` tools, `/api/dashboard/requests`, live-reload `tests/dashboard_preview.py`) | Proposals are strictly inert JSON records (`0600`) in state `proposals/` awaiting operator review; remote auto-download/install omitted by design. |
 
 Measured release resource & latency telemetry (`/home/onyx/Projects/veyl/target/release/mcp-gateway`, 7.4 MiB):
 - Idle RSS: `6348` KiB (`6464` KiB after 20 `read_file` calls)

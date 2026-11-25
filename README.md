@@ -11,7 +11,7 @@ commands, durable jobs, native diagnostics, skills and upstream MCP servers.
 Install the Linux beta from crates.io (no manual clone or symlink):
 
 ```sh
-cargo install veyl --version 0.2.5-beta --locked --bin veyl --bin veyl-monitor
+cargo install veyl --version 0.3.0-beta --locked --bin veyl --bin veyl-monitor
 ```
 
 Veyl is open source under the MIT license. Source code and prebuilt Linux
@@ -67,13 +67,15 @@ The durable audit remains metadata-only.
 
 ## Daily use
 
-Veyl v0.2.5-beta includes unified permission modes (`Standard`, `YOLO` with
+Veyl v0.3.0-beta includes unified permission modes (`Standard`, `YOLO` with
 native tool preset and `deny_tools`, `FULL` with confirmation), confined ad-hoc
 and durable commands (`exec_command`, `task_run` with optional isolated worktrees),
 persistent pipe/PTY sessions (`process_start`, `process_input`, `process_resize`,
 `shell_status`, `shell_reset`), structured Git workflows, workspace context/rule/skill
-helpers, independent `stdout`/`stderr` log cursors, and live local-timezone AM/PM
-millisecond monitoring.
+helpers, extension/upstream management with read-only runtime bundles
+(`veyl mcp-servers add-bundle`), independent `stdout`/`stderr` log cursors, and
+live local-timezone AM/PM millisecond monitoring. TimeShift (`rewind` checkpoints)
+and autonomous Nightshift orchestration are not implemented in `0.3.0-beta`.
 
 | Command | Action |
 | --- | --- |

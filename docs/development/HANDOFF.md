@@ -1,5 +1,9 @@
 # Gateway Milestone 1 — Working Handoff
 
+## 0.3.0-beta accepted for production promotion (2026-11-25)
+
+Candidate `~/.local/share/veyl-development/candidates/timeshift.o89oyRsF/source` (`candidate/0.3.0-beta`, version `0.3.0-beta`) passed independent AGY acceptance: 158/158 Rust tests, 287/287 locked cases across 28/28 unchanged pins + 6/6 three-mode cases, all 17 Python/JS/shell suites, Brave CDP browser checks, real REA + Rust Anything runtime bundle execution, delegated systemd & updater E2E suites, and offline RustSec advisory evaluation (47 advisories, 0 matches). Approximate BridgeDev parity is an 86% functional-domain estimate (6 of 7 domains implemented); TimeShift (`rewind`) and autonomous Nightshift remain unimplemented. Canonical `~/Projects/veyl` `main` push and crates.io publication require explicit separate authorization.
+
 ## 0.3.0-beta candidate
 
 Continue in `~/.local/share/veyl-development/candidates/timeshift.o89oyRsF/source`. The disconnected FUSE sibling preflight issue is corrected and 25 debug integration cases passed. Preserve existing parity-86 and live-status sources and previous binaries. The versioned release does not contain TimeShift or Nightshift. Verify the exact release binaries and independent locked suites, then deliver an isolated personal preview before promotion. Do not claim final parity.

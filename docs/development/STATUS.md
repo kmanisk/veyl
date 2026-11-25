@@ -1,5 +1,17 @@
 # Gate 3d status
 
+## 0.3.0-beta final independent acceptance (2026-11-25)
+
+Candidate `~/.local/share/veyl-development/candidates/timeshift.o89oyRsF/source` (branch `candidate/0.3.0-beta`, base `0e2cf55`, version `0.3.0-beta`). Includes the parity-86 capability surface (68 native MCP tools, ~86% functional-domain estimate across 6 of 7 BridgeDev domains), opt-in read-only runtime bundles (`veyl mcp-servers add-bundle`), compact live TUI MCP status, and the verified `ENOTCONN` FUSE sibling projection skip in Broad YOLO. TimeShift (`rewind` checkpoints) and autonomous Nightshift orchestration are NOT implemented and remain excluded from `0.3.0-beta`.
+
+Independent AGY verification (UID 1000):
+- Trusted harness fix: corrected `harness/acceptance.py` `GATEWAY_GIT_DIR` from missing `rust-mcp-gateway/.git` to `~/Projects/veyl/.git`, added explicit error on missing canonical repository so relocation cannot silently return zero suites, and supported `refs/remotes/origin/` milestone resolution (`harness/tests`: 37/37 PASS; `candidate/0.3.0-beta` selects all 28/28 locked suites).
+- Formatting & lints: `cargo fmt --check`, `cargo clippy --offline --locked --all-targets -- -D warnings`, and `node --check src/http/dashboard/app.js` PASS; zero emojis in code/docs/tests.
+- Rust suite (`cargo test --offline --locked -- --test-threads=1`): 158/158 PASS (lib 0, legacy_main 62, main 62, veyl-monitor 10, bridgedev_parity_and_nightshift 3, gate3_operator 11, onboarding 6, pass2_mutation 4; zero `#[ignore]`).
+- Locked acceptance: 28/28 original SHA-256 pins verified unchanged before and after execution; 28/28 locked suites (**287/287** cases) PASS; `acceptance_pass4_three_modes/locked_three_modes.py` **6/6** PASS against `preview-bin/mcp-gateway` (`test-hooks` binary used only for `locked_audit_chain.py`).
+- Integration, browser, provider & lifecycle suites (all PASS under UID 1000 against candidate binaries): `process_sessions.py` 10/10, `extended_jobs.py` 3/3, `dynamic_jobs.py` 5/5 (real PTY `veyl-monitor`), `git_tools.py` 3/3, `context_and_system.py` 3/3, `extensions_and_proposals.py` 3/3, `runtime_bundles.py` 2/2, `bundled-provider-probe.py` (REA 11,133 files / 27 tools + `inspect_python_pyc`, Rust Anything 22 tools + `analyze`), `linux_features.py` 16/16, `product_features.py` 9/9, `permission_modes.py` 5/5, `activity_features.py` 3/3, `job_streams.py` 1/1, `test_dashboard_preview.py` 1/1, `gate3_runtime.py`, `onboarding_browser.py` + `dashboard_tabs.mjs` (Brave CDP), `systemd_lifecycle.sh`, `updater_lifecycle.sh` (all 4 delegated systemd phases).
+- Advisory scan: `cargo-audit` binary unavailable; offline RustSec check against `~/.cargo/advisory-db` (`55e1c3dfbd834237a05bbbf7b50ba3b5be27b662`, 2026-11-21) evaluated all 86 crates.io lockfile packages across 47 non-withdrawn advisories with 0 vulnerability matches and 0 informational matches.
+
 ## 0.3.0-beta release candidate (2026-11-25)
 
 Candidate `~/.local/share/veyl-development/candidates/timeshift.o89oyRsF/source`, base `0e2cf55`. Includes the previously operator-tested parity-86 and live-status/runtime-bundle candidates. TimeShift and Nightshift are NOT implemented and are excluded from this release scope.
