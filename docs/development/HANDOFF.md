@@ -1,5 +1,9 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current gate: 0.5.0-beta Linux release — DEPLOYED AND PUBLISHED
+
+Release commit a3a8df21259510844fcab93d4ea1364ad883fcd6, GitHub v0.5.0-beta and crates.io veyl 0.5.0-beta verified. Direct BridgeDev acceptance: 186 Rust, 287 locked + 6 modes, 48 focused integration and lifecycle tests PASS. Both Low defects fixed. All six managed binary copies and production gateway match the release. Policy unchanged; rollback and artifacts recorded in STATUS.md. Native Android/Termux remains unverified for this tag; do not claim cross-platform acceptance. Next gate: native Termux verification of the exact release source, then resume platform feature development after operator direction.
+
 ## Current gate: checkpoint 3 security hardening / 0.5.0-beta — HOLD
 
 Both AGY Low findings fixed in separate checkpoint3-hardening/source worktree. See latest STATUS.md. Original platform-foundation.l7Ge9o1L source and binaries remain unchanged. New optimized build 7280bd4c47234a62 and forced collision test 5d1a327497f04add both exit 0; 54/54 focused checks passed. Verify ../SOURCE_SHA256SUMS-0.5.0-beta and ../release-0.5.0-beta/SHA256SUMS, then AGY independently reruns locked acceptance, targeted negatives and native Termux when available. No release promotion before exact candidate acceptance.
