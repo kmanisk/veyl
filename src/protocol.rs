@@ -3,198 +3,148 @@
 //! All file operations are delegated to `file_access`; no transport code or
 //! filesystem policy is duplicated in this module.
 
-use serde_json::{Map, Value, json};
+#[cfg(any(all(test, target_os = "linux"), target_os = "android"))]
+use serde_json::json;
+use serde_json::{Map, Value};
 
-use crate::file_access::FileAccess;
-use crate::tools::registry::{Tool, read_file};
+#[cfg(target_os = "linux")]
+use crate::{file_access::FileAccess, tools::registry::read_file};
+use mcp_gateway::core::{tools::tool_text,workspace::WorkspaceTool};
+#[cfg(target_os = "linux")]
+use mcp_gateway::core::tools::Tool;
 
-const MCP_VERSION: &str = "2025-11-25";
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum Phase {
-    New,
-    AwaitingInitialized,
-    Ready,
-}
+#[cfg(all(test, target_os = "linux"))]
+use mcp_gateway::core::protocol::MCP_VERSION;
+use mcp_gateway::core::protocol::Session;
 
 #[derive(Clone)]
 pub struct Protocol {
-    files: FileAccess,
-    phase: Phase,
+    #[cfg(target_os = "linux")]
+    files: Option<FileAccess>,
+    session: Session,
+    probe: bool,
+    #[cfg(target_os = "android")]
+    workspace: Option<mcp_gateway::platform::private_workspace::PrivateWorkspace>,
 }
 
 impl Protocol {
+    #[cfg(target_os = "linux")]
     pub fn new(files: FileAccess) -> Self {
         Self {
-            files,
-            phase: Phase::New,
+            files: Some(files),
+            session: Session::new("mcp-gateway", env!("CARGO_PKG_VERSION")),
+            probe: false,
+            #[cfg(target_os = "android")]
+            workspace: None,
         }
     }
 
-    pub fn parse_error() -> Value {
-        error(Value::Null, -32700, "Parse error")
+    pub fn platform_probe(root: Option<&std::path::Path>) -> Result<Self, &'static str> {
+        #[cfg(target_os = "android")]
+        let workspace = root
+            .map(mcp_gateway::platform::private_workspace::PrivateWorkspace::termux)
+            .transpose()?;
+        #[cfg(not(target_os = "android"))]
+        if root.is_some() {
+            return Err("platform probe has no filesystem adapter on this target");
+        }
+        Ok(Self {
+            #[cfg(target_os = "linux")]
+            files: None,
+            session: Session::new("mcp-gateway", env!("CARGO_PKG_VERSION")),
+            probe: true,
+            #[cfg(target_os = "android")]
+            workspace,
+        })
     }
 
+    pub fn parse_error() -> Value {
+        Session::parse_error()
+    }
     pub fn oversized_message(limit: usize) -> Value {
-        error(
-            Value::Null,
-            -32600,
-            &format!("Message exceeds the {limit}-byte limit"),
-        )
+        Session::oversized_message(limit)
     }
 
     pub fn dispatch(&mut self, message: Value) -> Option<Value> {
-        self.dispatch_with_tools(
+        if self.probe {
+            #[cfg(target_os = "android")]
+            let workspace = self.workspace.clone();
+            #[cfg(target_os = "android")]
+            let available = if workspace.is_some() { WorkspaceTool::READ_ONLY.as_slice() } else { &[WorkspaceTool::PlatformInfo] };
+            #[cfg(not(target_os = "android"))]
+            let available = &[WorkspaceTool::PlatformInfo];
+            // Windows/bootstrap mode deliberately has no filesystem or execution tools.
+            return self.session.dispatch(
+                message,
+                || available.iter().map(|t|t.schema()).collect(),
+                |name, args| {
+                    let tool=WorkspaceTool::parse(name)?;
+                    if !available.contains(&tool){return None;}
+                    if tool==WorkspaceTool::PlatformInfo {
+                        let valid = args.is_none_or(|v| v.as_object().is_some_and(Map::is_empty));
+                        return Some(if valid {
+                            let mut report = mcp_gateway::platform::report();
+                            #[cfg(target_os = "android")]
+                            if workspace.is_some() {
+                                report["probe"]["tools"] = json!([
+                                    "platform_info",
+                                    "read_file",
+                                    "list_directory",
+                                    "file_info"
+                                ]);
+                            }
+                            #[cfg(not(target_os = "android"))]
+                            let _ = &mut report;
+                            tool_text(false, &report.to_string())
+                        } else {
+                            tool_text(
+                                true,
+                                "Unexpected platform_info arguments",
+                            )
+                        });
+                    }
+                    #[cfg(target_os = "android")]
+                    if let Some(workspace)=workspace.as_ref() {
+                        return Some(match tool.path(args).and_then(|p|match tool {
+                            WorkspaceTool::ReadFile=>workspace.read(p),
+                            WorkspaceTool::FileInfo=>workspace.info(p).map(|v|v.to_string()),
+                            WorkspaceTool::ListDirectory=>workspace.list(p).map(|v|v.to_string()),
+                            _=>Err("Unsupported operation"),
+                        }) {
+                            Ok(value)=>tool_text(false,&value),
+                            Err(err)=>tool_text(true,err),
+                        });
+                    }
+                    None
+                },
+            );
+        }
+        #[cfg(target_os = "linux")]
+        return self.dispatch_with_tools(
             message,
             || vec![Tool::ReadFile.schema()],
-            |files, name, args| (name == "read_file").then(|| read_file(files, args)),
-        )
+            |files, name, args| {
+                (name == "read_file").then(|| read_file(files.expect("legacy file scope"), args))
+            },
+        );
+        #[cfg(not(target_os = "linux"))]
+        unreachable!("non-Linux protocol only supports probe");
     }
 
+    #[cfg(target_os = "linux")]
     pub fn dispatch_with_tools(
         &mut self,
         message: Value,
         list: impl FnOnce() -> Vec<Value>,
-        call: impl FnOnce(&FileAccess, &str, Option<&Value>) -> Option<Value>,
+        call: impl FnOnce(Option<&FileAccess>, &str, Option<&Value>) -> Option<Value>,
     ) -> Option<Value> {
-        let Value::Object(mut message) = message else {
-            return Some(error(Value::Null, -32600, "Invalid JSON-RPC request"));
-        };
-
-        let id = message.remove("id");
-        if id
-            .as_ref()
-            .is_some_and(|id| !(id.is_string() || id.is_i64() || id.is_u64()))
-        {
-            return Some(error(Value::Null, -32600, "Invalid MCP request id"));
-        }
-
-        if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-            return Some(error(
-                id.unwrap_or(Value::Null),
-                -32600,
-                "Invalid JSON-RPC version",
-            ));
-        }
-
-        let Some(method) = message.get("method").and_then(Value::as_str) else {
-            return Some(error(
-                id.unwrap_or(Value::Null),
-                -32600,
-                "JSON-RPC method must be a string",
-            ));
-        };
-
-        let params = message.get("params");
-        let valid_params = params.is_none_or(Value::is_object);
-        let Some(id) = id else {
-            if method == "notifications/initialized"
-                && valid_params
-                && self.phase == Phase::AwaitingInitialized
-            {
-                self.phase = Phase::Ready;
-            }
-            return None;
-        };
-        if !valid_params {
-            return Some(error(id, -32602, "MCP parameters must be an object"));
-        }
-        let params = params.and_then(Value::as_object);
-
-        Some(match method {
-            "initialize" => self.initialize(id, params),
-            "ping" => result(id, json!({})),
-            "tools/list" | "tools/call" if self.phase != Phase::Ready => {
-                error(id, -32000, "MCP connection has not been initialized")
-            }
-            "tools/list" => {
-                if params
-                    .and_then(|p| p.get("cursor"))
-                    .is_some_and(|cursor| !cursor.is_string())
-                {
-                    error(id, -32602, "tools/list cursor must be a string")
-                } else {
-                    result(id, json!({"tools": list()}))
-                }
-            }
-            "tools/call" => self.call_tool(id, params, call),
-            _ => error(id, -32601, "Method not found"),
-        })
-    }
-
-    fn initialize(&mut self, id: Value, params: Option<&Map<String, Value>>) -> Value {
-        if self.phase != Phase::New {
-            return error(id, -32600, "MCP initialization has already started");
-        }
-        let Some(params) = params else {
-            return error(id, -32602, "Expected initialize parameters");
-        };
-        if params
-            .get("protocolVersion")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-        {
-            return error(id, -32602, "Expected a nonempty client protocolVersion");
-        }
-        if !params.get("capabilities").is_some_and(Value::is_object) {
-            return error(id, -32602, "Expected client capabilities object");
-        }
-        let client_info = params.get("clientInfo").and_then(Value::as_object);
-        if !client_info.is_some_and(|info| {
-            info.get("name").is_some_and(Value::is_string)
-                && info.get("version").is_some_and(Value::is_string)
-        }) {
-            return error(
-                id,
-                -32602,
-                "Expected clientInfo with string name and version",
-            );
-        }
-
-        self.phase = Phase::AwaitingInitialized;
-        // The server offers its sole supported version during negotiation.
-        result(
-            id,
-            json!({
-                "protocolVersion": MCP_VERSION,
-                "capabilities": { "tools": {} },
-                "serverInfo": {
-                    "name": "mcp-gateway",
-                    "version": env!("CARGO_PKG_VERSION")
-                }
-            }),
-        )
-    }
-
-    fn call_tool(
-        &self,
-        id: Value,
-        params: Option<&Map<String, Value>>,
-        call: impl FnOnce(&FileAccess, &str, Option<&Value>) -> Option<Value>,
-    ) -> Value {
-        let Some(params) = params else {
-            return error(id, -32602, "Expected tools/call parameters");
-        };
-        let reply = params
-            .get("name")
-            .and_then(Value::as_str)
-            .and_then(|name| call(&self.files, name, params.get("arguments")));
-        match reply {
-            Some(body) => result(id, body),
-            None => error(id, -32602, "Unknown tool name"),
-        }
+        let files = self.files.as_ref();
+        self.session
+            .dispatch(message, list, |name, args| call(files, name, args))
     }
 }
 
-fn result(id: Value, body: Value) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "result": body })
-}
-
-fn error(id: Value, code: i32, message: &str) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message} })
-}
-
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 

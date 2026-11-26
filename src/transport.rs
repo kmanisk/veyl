@@ -57,7 +57,7 @@ fn write_reply(output: &mut impl Write, reply: &Value) -> io::Result<()> {
     output.flush()
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use std::io::{BufReader, Cursor};
 

@@ -1,5 +1,61 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current gate: checkpoint 3 security hardening / 0.5.0-beta — HOLD
+
+Both AGY Low findings fixed in separate checkpoint3-hardening/source worktree. See latest STATUS.md. Original platform-foundation.l7Ge9o1L source and binaries remain unchanged. New optimized build 7280bd4c47234a62 and forced collision test 5d1a327497f04add both exit 0; 54/54 focused checks passed. Verify ../SOURCE_SHA256SUMS-0.5.0-beta and ../release-0.5.0-beta/SHA256SUMS, then AGY independently reruns locked acceptance, targeted negatives and native Termux when available. No release promotion before exact candidate acceptance.
+
+## Current gate: architecture checkpoint 3 / 0.5.0-beta candidate — HOLD
+
+Direct BridgeDev implementation (no Codex) of shared session/admission, portable audit/job/activity/TimeShift contracts complete. 184/184 Rust and 46/46 focused integration cases passed on the versioned debug candidate; see latest STATUS.md and ARCHITECTURE.md. Operator will ask AGY to independently test. Source remains isolated/uncommitted: verify ../SOURCE_SHA256SUMS-0.5.0-beta, use ../veyl-0.5.0-beta-source.tar.gz for a disposable independent copy. Optimized build job 294162ea8eaa4389; verify exit and ../release-0.5.0-beta/SHA256SUMS. Native Android pending (Waydroid stopped); prior native previews retained. AGY owns locked acceptance and adversarial checks; do not modify locked tests/pins. No promotion until exact optimized candidate and independent verification are accepted. Existing production and three managed binaries remain 0.4.0-beta; separate connector is optional preview.
+
+## Current gate: architecture checkpoint 2 / HOLD
+
+Both AGY P0 defects fixed; shared capability/tool identities and typed workspace grants implemented. Native Android compiler -D warnings and Linux features 16/16 pass. Read latest STATUS.md and ARCHITECTURE.md. Exact previews ../architecture2-preview-bin and ~/veyl-termux-architecture2/bin. Continue common HTTP/session and portable audit/job/TimeShift/UI contracts before version 0.5.0-beta and full independent acceptance. Preserve production and old candidates. No promotion.
+
+
+## Current gate: architecture migration checkpoint 1 / HOLD
+
+Read ARCHITECTURE.md. Shared MCP protocol and credentials, platform-specific entry points and separate connector module implemented; host regression passed. Continue modular migration before new Android, Windows or public connector features. Preserve production and prior guest builds. Full native and locked acceptance pending. See STATUS.md for exact binary hashes and tests.
+
+
+## Current gate: separate connector persistent pairing / native8
+
+Linux isolated registry and native Android heartbeat pass; real reconnect across Linux connector restart verified. Run python3 -B tests/connector_persistence.py ../connector-pairing-bin/veyl-connector -v from candidate source. Guest binary ~/veyl-connector-native8/bin/veyl-connector. See STATUS.md and receipts. Cloud endpoint, OAuth and ChatGPT plugin registration remain pending; no public route or production promotion.
+
+
+## Current gate: separate connector preview / HOLD
+
+Standalone local preview veyl-connector passes 2/2 HTTP cases. See STATUS.md. Test with python3 -B tests/connector_preview.py ../connector-preview-bin/veyl-connector -v in candidate source. Cloud endpoint, persistent pairing, OAuth and account plugin creation remain blocked/pending; preserve existing gateway and native7. No marketplace listing or promotion.
+
+
+## Current gate: shared core extraction 1 / native7
+
+Read SHARED_CORE.md. Native6 personally verified; native7 shares credential primitives and passes host and native tests. Personal preview: ~/veyl-termux-native7/bin/mcp-gateway and tests/android_http.py. Preserve existing connector and grants. Public marketplace relay and OAuth remain proposals, not deployed. Windows paused.
+
+## Current gate: Android native6 audited text mutations — HOLD
+
+Native5 personally accepted (6/6); native6 development tests 7/7. Exact guest binary ~/veyl-termux-native6/bin/mcp-gateway. Test: cd ~/veyl-termux-native6; python3 -B tests/android_http.py "$PWD/bin/mcp-gateway" -v. See latest STATUS.md for hashes and limits. Existing grants preserved. No root or command execution, public route, or production promotion. Continue with worker isolation and authenticated HTTPS remote MCP in separate checkpoints.
+
+
+## Current gate: native Android HTTP preview (HOLD)
+
+Native5 authenticated loopback MCP passes 4/4 HTTP and 2/2 stdio on ordinary Termux UID. See latest STATUS.md. Personal test: cd ~/veyl-termux-native5; python3 -B tests/android_http.py "$HOME/veyl-termux-native/target/debug/mcp-gateway" -v. No persistent service or actual remote ChatGPT route configured. Local CLI android-init, android-add-client and android-serve provide explicit read-only operator preview. Preserve native5 source and logs; no promotion before acceptance. Windows paused.
+
+
+## Current gate: Android native foundation PASS, further development HOLD
+
+ADB authorized, ordinary Termux UID 10156 with native Android/Bionic toolchain. Native3 source and debug binaries verified; actual 2/2 MCP smoke and 3/3 Rust workspace tests pass. See latest STATUS.md and native-receipts. Guest source ~/veyl-termux-native3, binaries ~/veyl-termux-native/target/debug/. Native reader uses descriptor-relative openat with per-component procfs mount identity, no symlinks, private ownership and bounded reads. Android seccomp rejects the previous openat2 path (SIGSYS); Linux production containment unchanged. Next build the native credential boundary and authenticated loopback read-only MCP, then add audited mutations separately. No root changes or permission escalation; no release or promotion yet. Windows paused.
+
+
+## Current gate: Android/Termux first
+
+Windows paused by operator. Use existing isolated platform-foundation candidate; native Termux installed but ADB authorization denied. See STATUS.md and PLATFORMS.md for the expanded private-workspace read/list/info implementation and host-only verification. Native Bionic build and SELinux tests are next; no production changes or publication.
+
+## Current gate: native platform bootstrap
+
+Use isolated `platform-foundation.l7Ge9o1L/source` based on `0335e36`; [PLATFORMS.md](PLATFORMS.md) records the Notion requirements and exact test entry points. Linux production remains 0.4.0-beta. Native Windows and Android builds are blocked pending guest/toolchain availability; user must authorize Waydroid ADB and Windows VM preparation must preserve a consistent checkpoint. Do not bypass Android authentication with root or use GNU/Linux executable on Bionic. Run Android under the Termux app UID. Windows probe intentionally exposes only platform_info; secure Windows handle/ACL/junction adapter is next. Android native private read needs real Bionic/SELinux acceptance before broader capabilities. Preserve independent Linux acceptance pins and do not deploy/publish before exact-candidate approval. Nightshift remains separate.
+
+
 ## Current gate: 0.4.0-beta deployed; Nightshift next
 
 Release `7da68e4ae3fb2aefb25183432d2268963cdc197e` is deployed locally and published to GitHub and crates.io. See the latest STATUS.md entry for receipts, rollback and limitations. Existing ChatGPT grants remain unchanged; separately authorize TimeShift tools if desired. Begin Nightshift only in a new isolated candidate. Follow AGENTS.md: exact-candidate operator approval now covers local upgrade, canonical main/GitHub release and matching crates.io publication, subject to verification and no silent permission expansion. Older HOLD entries below are historical.

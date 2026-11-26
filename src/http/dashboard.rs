@@ -17,7 +17,8 @@ use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 
 use super::operator::{PolicyFile, verify_approvals};
-use super::{Reply, SESSION_IDLE, State, json_response, new_session_id, simple, unix_seconds};
+use super::{Reply, State, json_response, simple, unix_seconds};
+use mcp_gateway::core::session::random_id;
 use crate::tools::registry::Tool;
 
 const COOKIE: &str = "mcp_dash_session";
@@ -162,7 +163,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
 }
 
 pub(crate) fn issue_pairing(policy: &PolicyFile) -> Result<String, String> {
-    let token = new_session_id().map_err(|_| "Secure randomness unavailable")?;
+    let token = random_id::<24>().map_err(|_| "Secure randomness unavailable")?;
     let expiry = unix_seconds() + PAIR_TTL;
     policy
         .write_pairing(format!("{expiry} {}", digest(&token)).as_bytes())
@@ -726,17 +727,28 @@ async fn pair(admin: &Admin, token: &str, navigate: bool, remote: bool) -> Reply
     if !secret_format(token) {
         return simple(Status::UNAUTHORIZED, "Invalid or expired pairing code");
     }
-    let config = admin.config.clone();
-    let token = token.to_owned();
-    let (Ok(session), Ok(csrf)) = (new_session_id(), new_session_id()) else {
+    let (Ok(session), Ok(csrf)) = (random_id::<24>(), random_id::<24>()) else {
         return unavailable();
     };
+    let config = admin.config.clone();
+    let token = token.to_owned();
+    pair_with_ids(admin, navigate, remote, session, csrf, move || redeem(&config, &token)).await
+}
+
+async fn pair_with_ids(
+    admin: &Admin,
+    navigate: bool,
+    remote: bool,
+    session: String,
+    csrf: String,
+    redeem_pair: impl FnOnce() -> Result<bool, String> + Send + 'static,
+) -> Reply {
     let mut sessions = admin.sessions.lock().await;
     sessions.retain(|_, session| session.created.elapsed() < SESSION_TTL);
-    if sessions.len() >= 16 {
+    if sessions.len() >= 16 || sessions.contains_key(&session) {
         return unavailable();
     }
-    match tokio::task::spawn_blocking(move || redeem(&config, &token)).await {
+    match tokio::task::spawn_blocking(redeem_pair).await {
         Ok(Ok(true)) => {}
         Ok(Ok(false)) => return simple(Status::UNAUTHORIZED, "Invalid or expired pairing code"),
         _ => return unavailable(),
@@ -763,9 +775,9 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
         let sessions = state.sessions.lock().await;
         for session in sessions
             .values()
-            .filter(|s| s.last_used.elapsed() < SESSION_IDLE)
+            .filter(|s| s.is_live())
         {
-            *counts.entry(session.owner.clone()).or_insert(0) += 1;
+            *counts.entry(session.owner().clone()).or_insert(0) += 1;
         }
     }
     let connected: usize = counts.values().sum();
@@ -1016,6 +1028,44 @@ fn bad() -> Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dashboard_pair_collision_preserves_existing_session() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let admin = Admin::new("127.0.0.1:0".parse().unwrap(), PathBuf::new());
+            let id = "a".repeat(48);
+            let created = Instant::now();
+            admin.sessions.lock().await.insert(id.clone(), AdminSession {
+                created, csrf: "original".into(), remote: false,
+            });
+            let redeemed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let observed = redeemed.clone();
+            let reply = pair_with_ids(&admin, false, true, id.clone(), "replacement".into(), move || {
+                observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(true)
+            }).await;
+            assert_eq!(reply.status(), Status::SERVICE_UNAVAILABLE);
+            assert!(!reply.headers().contains_key(header::SET_COOKIE));
+            assert!(!redeemed.load(std::sync::atomic::Ordering::SeqCst));
+            let sessions = admin.sessions.lock().await;
+            assert_eq!(sessions.len(), 1);
+            let previous = &sessions[&id];
+            assert_eq!(previous.created, created);
+            assert_eq!(previous.csrf, "original");
+            assert!(!previous.remote);
+            drop(sessions);
+            // Positive control: the same successful redemption creates a fresh session.
+            let fresh = "b".repeat(48);
+            let reply = pair_with_ids(&admin, false, true, fresh.clone(), "new".into(), || Ok(true)).await;
+            assert_eq!(reply.status(), Status::OK);
+            assert!(reply.headers().contains_key(header::SET_COOKIE));
+            let sessions = admin.sessions.lock().await;
+            assert_eq!(sessions.len(), 2);
+            assert_eq!(sessions[&fresh].csrf, "new");
+            assert!(sessions[&fresh].remote);
+        });
+    }
 
     #[test]
     fn dashboard_session_expires_at_its_ttl() {

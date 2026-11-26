@@ -7,6 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use hyper::header::HeaderValue;
+use mcp_gateway::core::credential::select_client;
+pub(super) use mcp_gateway::core::credential::{decode_sha256, token_digest, token_shape};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -652,44 +654,12 @@ pub(crate) fn read_config(path: &Path) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-pub(super) fn decode_sha256(value: &str) -> Result<[u8; 32], String> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    {
-        return Err("invalid token verifier encoding".into());
-    }
-    let mut digest = [0_u8; 32];
-    for (i, byte) in digest.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[2 * i..2 * i + 2], 16)
-            .map_err(|_| "invalid token verifier encoding")?;
-    }
-    Ok(digest)
-}
-
 pub fn authenticate(clients: &[Client], header: Option<&HeaderValue>, now: u64) -> Option<usize> {
-    let header = header?.to_str().ok()?;
-    let token = header.strip_prefix("Bearer ")?;
-    let candidate = token_digest(token)?;
-    let mut found = None;
-    for (index, client) in clients.iter().enumerate() {
-        // Inspect every verifier, even after a match.
-        let matched: bool = client.digest.ct_eq(&candidate).into();
-        if matched && now < client.expires_at && !client.is_disabled() {
-            found = Some(index);
-        }
-    }
-    found
-}
-
-pub(super) fn token_shape(token: &str) -> bool {
-    token.len() == 64
-        && token
-            .bytes()
-            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
-}
-
-pub(super) fn token_digest(token: &str) -> Option<[u8; 32]> {
-    token_shape(token).then(|| Sha256::digest(token.as_bytes()).into())
+    let candidate = mcp_gateway::http_common::bearer(header?)?;
+    select_client(
+        &candidate,
+        clients
+            .iter()
+            .map(|c| (c.digest, now < c.expires_at && !c.is_disabled())),
+    )
 }

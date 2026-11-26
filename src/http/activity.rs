@@ -4,7 +4,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use serde::Serialize;
+pub(super) use mcp_gateway::core::lifecycle::ActivityStatus as Status;
+use mcp_gateway::core::lifecycle::ActivityRecord as Record;
 use serde_json::{Value, json};
 
 use crate::tools::registry::Tool;
@@ -13,27 +14,6 @@ use mcp_gateway::security::policy::Action;
 const RECENT_CALLS: usize = 128;
 const RECENT_ADMISSIONS: usize = 32;
 
-#[derive(Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum Status {
-    Running,
-    Success,
-    Failure,
-    TimedOut,
-    Canceled,
-}
-
-#[derive(Clone, Serialize)]
-struct Record {
-    kind: &'static str,
-    call_id: Option<String>,
-    time: u64,
-    client: Option<String>,
-    tool: &'static str,
-    status: Status,
-    duration_ms: Option<u64>,
-    target_summary: &'static str,
-}
 
 struct Active {
     record: Record,

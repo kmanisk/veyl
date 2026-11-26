@@ -5,6 +5,7 @@ use std::io::{self, Read};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 
+use mcp_gateway::core::timeshift::{changed_region, valid_id};
 use mcp_gateway::security::audit::StageProof;
 use mcp_gateway::security::linux_fs::{open_absolute_dir, publish_new, reopen_regular};
 use rustix::fd::OwnedFd;
@@ -114,12 +115,6 @@ fn read_private(dir: &OwnedFd, name: &str, limit: usize) -> io::Result<Vec<u8>> 
     Ok(bytes)
 }
 
-fn valid_id(id: &str) -> bool {
-    id.len() == 32
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-}
 
 // Interrupted private publication is never an approved checkpoint. Clean only
 // recognized, private temporary inodes under the exclusively locked store.
@@ -152,25 +147,6 @@ fn recover_stages(directory: &OwnedFd) -> io::Result<()> {
     Ok(())
 }
 
-// Linear-time changed line region; not a general-purpose diff algorithm.
-fn changed_region(current: &str, restored: &str) -> Value {
-    let current: Vec<_> = current.split_inclusive('\n').collect();
-    let restored: Vec<_> = restored.split_inclusive('\n').collect();
-    let prefix = current
-        .iter()
-        .zip(&restored)
-        .take_while(|(a, b)| a == b)
-        .count();
-    let suffix = current[prefix..]
-        .iter()
-        .rev()
-        .zip(restored[prefix..].iter().rev())
-        .take_while(|(a, b)| a == b)
-        .count();
-    json!({"common_prefix_lines":prefix,"common_suffix_lines":suffix,
-        "remove":current[prefix..current.len()-suffix].concat(),
-        "insert":restored[prefix..restored.len()-suffix].concat()})
-}
 
 impl Store {
     pub(super) fn open(config: &Path, owner: &str, limit: usize) -> Result<Self, MutationError> {
@@ -385,7 +361,7 @@ impl Store {
                 let diff = r
                     .before
                     .as_deref()
-                    .map(|prior| changed_region(&current, prior));
+                    .map(|prior| changed_region(&current, prior).to_json());
                 Ok(
                     json!({"checkpoint":r.id,"before":r.before,"current":current,
                     "diff":diff,"current_checkpoint":guard,"after_sha256":r.after_sha256,

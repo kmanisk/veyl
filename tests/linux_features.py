@@ -807,22 +807,30 @@ class LinuxFeatures(unittest.TestCase):
                 elif stage==1 and b"Filter: system_info" in screen and b"system_info" in screen:
                     os.write(terminal,b"\r")
                     stage=2
-                elif stage==2 and b"Details & Parameters (JSON)" in screen:
-                    self.assertIn(b'"tool": "system_info"',screen)
-                    self.assertIn(b'"call_id": "call-',screen)
-                    os.write(terminal,b"\x1b")
+                elif stage==2 and b"Activity details - command / target" in screen and b"Press d for full JSON" in screen:
+                    self.assertIn(b"system_info",screen)
+                    self.assertIn(b"No shell command for this activity.",screen)
+                    self.assertIn(b"COMMAND / TARGET",screen)
+                    os.write(terminal,b"d")
                     stage=3
-                elif stage==3 and b"Veyl / activity" in screen and b"system_info" in screen:
-                    os.write(terminal,b"\x1b[<0;8;7M")
+                elif stage==3 and b"Details & Parameters (JSON)" in screen and b'"call_id": "call-' in screen:
+                    self.assertIn(b'"tool": "system_info"',screen)
+                    os.write(terminal,b"d")
                     stage=4
-                elif stage==4 and b"Details & Parameters (JSON)" in screen:
-                    os.write(terminal,b"4")
+                elif stage==4 and b"Activity details - command / target" in screen and b"Press d for full JSON" in screen:
+                    os.write(terminal,b"\x1b")
                     stage=5
+                elif stage==5 and b"Veyl / activity" in screen and b"system_info" in screen:
+                    os.write(terminal,b"\x1b[<0;8;7M")
+                    stage=6
+                elif stage==6 and b"Activity details - command / target" in screen and b"Press d for full JSON" in screen:
+                    os.write(terminal,b"4")
+                    stage=7
                 if b"Veyl / clients" in result and not sent_quit:
                     os.write(terminal,b"q")
                     sent_quit=True
             self.assertIn(b"Veyl / clients",result)
-            self.assertEqual(stage,5)
+            self.assertEqual(stage,7)
             self.assertIn(b"\x1b[?1006h",result)
             self.assertIn(b"\x1b[?1006l",result)
             self.assertIn(b"primary",result)

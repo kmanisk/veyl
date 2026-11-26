@@ -18,7 +18,7 @@ PROVIDERS = {
     "node-utils": ["json_summary", "sha256_text"],
 }
 NATIVE = set(re.findall(r'Self::[A-Za-z]+\s*=>\s*"([a-z0-9_]+)"',
-                        (Path(__file__).resolve().parents[1] / "src/tools/registry.rs").read_text())) - {"rewind", "rewind_restore", "rewind_clear"}
+                        (Path(__file__).resolve().parents[1] / "src/core/tools.rs").read_text())) - {"rewind", "rewind_restore", "rewind_clear"}
 
 
 class WorkspaceJobs(unittest.TestCase):

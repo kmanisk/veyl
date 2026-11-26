@@ -8,10 +8,10 @@ commands, durable jobs, native diagnostics, skills and upstream MCP servers.
 
 ## Install
 
-Install the Linux beta from [GitHub Releases](https://github.com/kmanisk/veyl/releases). Download the three Linux x86_64 binaries and `SHA256SUMS` into a private folder, verify `sha256sum -c SHA256SUMS`, and use `veyl update --from-dir /absolute/path/to/bundle` for an existing installation. To build this release from source:
+Install the Linux beta from [GitHub Releases](https://github.com/kmanisk/veyl/releases). Download the Linux x86_64 bundle and `SHA256SUMS` into a private folder, verify `sha256sum -c SHA256SUMS`, and use `veyl update --from-dir /absolute/path/to/bundle` for an existing installation. The managed updater continues to install only `veyl`, `mcp-gateway`, and `veyl-monitor`. The separate `veyl-connector` binary is an experimental foreground loopback preview, not an automatically installed or started service. To build this release from source:
 
 ```sh
-cargo install --git https://github.com/kmanisk/veyl --tag v0.4.0-beta --locked --bins
+cargo install --git https://github.com/kmanisk/veyl --tag v0.5.0-beta --locked --bins
 ```
 
 Veyl is open source under the MIT license. Source code and prebuilt Linux

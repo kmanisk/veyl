@@ -42,6 +42,7 @@ use tokio::sync::{Mutex, Semaphore, watch};
 use tokio::task::JoinSet;
 
 use mcp_gateway::security::policy::{self, Action, ExecutionMode, Grant, PolicyInput};
+use mcp_gateway::http_common::{one, one_value};
 
 use crate::file_access::FileAccess;
 #[cfg(target_os = "linux")]
@@ -61,18 +62,12 @@ use mcp_gateway::security::audit::AuditPhase;
 const MAX_BODY: usize = 1_048_576;
 const MAX_SESSIONS: usize = 128;
 const MAX_CONNECTIONS: usize = 32;
-const SESSION_IDLE: Duration = Duration::from_secs(1800);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
-const MCP_VERSION: &str = "2025-11-25";
+use mcp_gateway::core::{protocol::MCP_VERSION, session::{OwnedSession, random_id}};
 
 type Reply = Response<Full<Bytes>>;
 
-struct Session {
-    owner: String,
-    public: bool,
-    protocol: Protocol,
-    last_used: Instant,
-}
+type Session = OwnedSession<String, bool, Protocol>;
 
 struct Failure {
     count: u32,
@@ -579,10 +574,8 @@ async fn serve_admitted(
 ) -> Reply {
     #[cfg(not(target_os = "linux"))]
     let _ = proof;
-    if request
-        .headers()
-        .get("MCP-Protocol-Version")
-        .is_some_and(|value| value.as_bytes() != MCP_VERSION.as_bytes())
+    if request.headers().contains_key("MCP-Protocol-Version")
+        && one(request.headers(), "MCP-Protocol-Version") != Some(MCP_VERSION)
     {
         if marker {
             let _ = audit("funnel.unsupported_protocol");
@@ -623,7 +616,7 @@ async fn serve_admitted(
     #[cfg(not(target_os = "linux"))]
     let clients = &state.clients;
 
-    let bearer = request.headers().get(header::AUTHORIZATION).cloned();
+    let bearer = one_value(request.headers(), "authorization").cloned();
     #[cfg(target_os = "linux")]
     let client_index = if marker {
         funnel::authenticate(&settings, proof.as_ref(), now)
@@ -694,19 +687,15 @@ async fn serve_admitted(
     if request.method() != Method::POST {
         return simple(StatusCode::METHOD_NOT_ALLOWED, "Only POST is supported");
     }
-    if request
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .is_none_or(|value| value.as_bytes() != b"application/json")
+    if one(request.headers(), "content-type") != Some("application/json")
     {
         return simple(StatusCode::UNSUPPORTED_MEDIA_TYPE, "JSON required");
     }
 
-    let session_header = request
-        .headers()
-        .get("Mcp-Session-Id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+    let session_header = one(request.headers(), "Mcp-Session-Id").map(str::to_owned);
+    if request.headers().contains_key("Mcp-Session-Id") && session_header.is_none() {
+        return simple(StatusCode::BAD_REQUEST, "Invalid MCP session header");
+    }
     let body = match tokio::time::timeout(HTTP_TIMEOUT, bounded_body(request.into_body(), MAX_BODY))
         .await
     {
@@ -745,22 +734,17 @@ async fn serve_admitted(
             return json_response(StatusCode::OK, reply, None);
         }
         let mut sessions = state.sessions.lock().await;
-        sessions.retain(|_, value| value.last_used.elapsed() < SESSION_IDLE);
+        sessions.retain(|_, value| value.is_live());
         if sessions.len() >= MAX_SESSIONS {
             return simple(StatusCode::SERVICE_UNAVAILABLE, "Session capacity reached");
         }
-        let Ok(id) = new_session_id() else {
+        let Ok(id) = random_id::<24>() else {
             return simple(StatusCode::SERVICE_UNAVAILABLE, "Session unavailable");
         };
-        sessions.insert(
-            id.clone(),
-            Session {
-                owner: client.id.clone(),
-                public: marker,
-                protocol,
-                last_used: Instant::now(),
-            },
-        );
+        if sessions.contains_key(&id) {
+            return simple(StatusCode::SERVICE_UNAVAILABLE, "Session unavailable");
+        }
+        sessions.insert(id.clone(), Session::new(client.id.clone(), marker, protocol));
         return json_response(StatusCode::OK, reply, Some(&id));
     }
 
@@ -771,14 +755,14 @@ async fn serve_admitted(
     let Some(session) = sessions.get_mut(&session_id) else {
         return simple(StatusCode::NOT_FOUND, "Unknown MCP session");
     };
-    if session.owner != client.id || session.public != marker {
+    if !session.belongs_to(&client.id, &marker) {
         return simple(StatusCode::FORBIDDEN, "Session access denied");
     }
-    if session.last_used.elapsed() >= SESSION_IDLE {
+    if !session.is_live() {
         sessions.remove(&session_id);
         return simple(StatusCode::NOT_FOUND, "Expired MCP session");
     }
-    session.last_used = Instant::now();
+    session.touch();
 
     #[cfg(target_os = "linux")]
     if client
@@ -1597,16 +1581,6 @@ fn unix_seconds() -> u64 {
         .map_or(0, |duration| duration.as_secs())
 }
 
-fn new_session_id() -> Result<String, getrandom::Error> {
-    let mut random = [0_u8; 24];
-    getrandom::fill(&mut random)?;
-    let mut result = String::with_capacity(48);
-    for byte in random {
-        use std::fmt::Write as _;
-        let _ = write!(&mut result, "{byte:02x}");
-    }
-    Ok(result)
-}
 
 fn audit(event: &'static str) -> bool {
     writeln!(std::io::stderr().lock(), "MCP_HTTP_EVENT={event}").is_ok()

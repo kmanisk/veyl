@@ -14,22 +14,7 @@ use serde_json::{Value, json};
 
 use ledger::Ledger;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuditAction {
-    WriteFile,
-    ApplyPatch,
-    JobStart,
-    JobCancel,
-    StageCleanup,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuditPhase {
-    Intent,
-    Success,
-    Failure,
-    Uncertain,
-}
+pub use crate::core::lifecycle::{AuditAction, AuditPhase};
 
 /// Typed, bounded job metadata. Raw command arguments, environment values,
 /// stdout, stderr and bearer credentials never enter the audit ledger.
@@ -478,17 +463,6 @@ impl AuditSink {
             }
         }
         self.0.append(event)
-    }
-}
-
-impl AuditPhase {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Intent => "intent",
-            Self::Success => "success",
-            Self::Failure => "failure",
-            Self::Uncertain => "uncertain",
-        }
     }
 }
 

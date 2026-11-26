@@ -5,54 +5,7 @@ use serde_json::{Value, json};
 
 use super::process::Identity;
 
-#[derive(Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum State {
-    Starting,
-    Running,
-    #[serde(rename = "completed")]
-    Exited,
-    Failed,
-    #[serde(rename = "canceled")]
-    Cancelled,
-    TimedOut,
-    Interrupted,
-    Lost,
-    Uncertain,
-}
-
-impl State {
-    pub fn active(self) -> bool {
-        matches!(self, Self::Starting | Self::Running)
-    }
-
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::Starting => "starting",
-            Self::Running => "running",
-            Self::Exited => "completed",
-            Self::Failed => "failed",
-            Self::Cancelled => "canceled",
-            Self::TimedOut => "timed_out",
-            Self::Interrupted => "interrupted",
-            Self::Lost => "lost",
-            Self::Uncertain => "uncertain",
-        }
-    }
-
-    fn reason(self) -> Option<&'static str> {
-        match self {
-            Self::Starting | Self::Running => None,
-            Self::Exited => Some("exit"),
-            Self::Failed => Some("spawn_failed"),
-            Self::Cancelled => Some("cancelled"),
-            Self::TimedOut => Some("timeout"),
-            Self::Interrupted => Some("interrupted"),
-            Self::Lost => Some("lost"),
-            Self::Uncertain => Some("uncertain"),
-        }
-    }
-}
+pub(super) use mcp_gateway::core::lifecycle::JobState as State;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(super) struct Receipt {
