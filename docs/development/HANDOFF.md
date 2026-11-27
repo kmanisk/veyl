@@ -1,6 +1,23 @@
 # Gateway Milestone 1 — Working Handoff
 
-## Current gate: 0.6.0-beta durable identity + migration rollback checkpoint
+## Current gate: 0.6.0-beta released and running
+
+Release tag `v0.6.0-beta` and published crate `veyl 0.6.0-beta` correspond to accepted code commit `f204dc257b1bdd8bde8c11811d84bf5b6e58a9cd`. The release assets and installed binaries match the approved bundle. The production service is active, all grants and audit history preserved, and the durable v2 checkpoint is verified against the pre-upgrade anchor. See STATUS.md for evidence. Earlier acceptance-pending sections below are historical. Next gate: real external-client interoperability, limited opt-in Veyl workflow trials, and measured BridgeDev parity. Preserve rollback and existing BridgeDev access.
+
+## Current gate: Independent AGY acceptance PASS for 0.6.0-beta (`f204dc257b1bdd8bde8c11811d84bf5b6e58a9cd`); explicit operator acceptance required before release
+
+Checkpoint: `fix/0.6.0-beta-durable-rollback` @ `f204dc257b1bdd8bde8c11811d84bf5b6e58a9cd` (plus final `STATUS.md` / `HANDOFF.md` evidence update)
+Bundle: `/home/onyx/.local/share/veyl-development/candidates/public-connector.b64EhS58/release-0.6.0-beta-final.KH9o63jx/`
+(`SHA256SUMS`: `veyl`, `mcp-gateway`, `veyl-monitor`, `veyl-connector` verified)
+Manifest: `/home/onyx/.local/share/veyl-development/candidates/public-connector.b64EhS58/SOURCE_SHA256SUMS-0.6.0-beta-final.KH9o63jx` (215/215 PASS)
+Tarball: `/home/onyx/.local/share/veyl-development/candidates/public-connector.b64EhS58/veyl-0.6.0-beta-final.KH9o63jx-source.tar.gz`
+Crate preflight: `/home/onyx/Projects/veyl/target/package/veyl-0.6.0-beta.crate` (189 files, `cargo package --offline --locked --no-verify` PASS)
+Independent AGY verification summary (see `STATUS.md`):
+- Clippy clean (0 warnings), Rust suite **228/228 PASS**, Locked + three-modes **293/293 PASS** (`28/28` pins, including `--features test-hooks` `locked_audit_chain.py` 13/13), bounded host `tmpfs` `oauth_funnel.py` **5/5 PASS** (0 skipped).
+- Rollback & systemd upgrade (`../release-0.6.0-beta/` `v0.5.0-beta` -> `release-0.6.0-beta-final.KH9o63jx`): `durable_update_rollback.py` **3/3 PASS**, `durable_update_service.sh` **3/3 scenarios PASS** (legacy updater refused, post-migration failed startup restored `v0.5.0-beta` & `v1` head cleanly, successful upgrade), `durable_identity.py` **3/3 PASS**, `durable_identity_loopback.py` **PASS**, read-only prod `audit verify` (2,590 records) & `mode list` **PASS**, remaining 32 Python integration suites (**139/139** unittest cases) + `onboarding_browser.py` **PASS**.
+Production PID `1012`, `~/.local/state/veyl`, `rollback-before-0.6.0-beta.Lf3fvq33`, and canonical `~/Projects/veyl` remain unchanged pending explicit operator acceptance under `AGENTS.md` to install locally via `release-0.6.0-beta-final.KH9o63jx/veyl update --from-dir ...`, verify production health & grants, fast-forward `main`, tag/publish `v0.6.0-beta`, and publish `veyl 0.6.0-beta` to `crates.io`.
+
+## Historical gate: BridgeDev 0.6.0-beta durable identity + migration rollback checkpoint
 
 Use `../release-0.6.0-beta-final.KH9o63jx/` (four optimized checksums in
 `SHA256SUMS` and STATUS.md). Do not use the superseded earlier durable bundle
