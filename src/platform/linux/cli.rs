@@ -24,6 +24,11 @@ pub(super) fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
         return Ok(());
     }
     #[cfg(target_os = "linux")]
+    if args == ["--persistent-format"] {
+        println!("{}", update_cli::PERSISTENT_FORMAT);
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "update") {
         return update_cli::run(&args[1..]);
     }
@@ -69,6 +74,10 @@ pub(super) fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "yolo") {
         return mode_cli::legacy(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "goal") {
+        return crate::goals::cli(&args[1..]);
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "mode") {

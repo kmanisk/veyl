@@ -97,7 +97,7 @@ class LinuxFeatures(unittest.TestCase):
     def start(self):
         self.f.start()
 
-    def test_broad_desktop_links_and_state_aliases(self):
+    def test_native_desktop_links_and_state_inventory(self):
         home = self.f.base
         state = home / "private-state"
         state.mkdir(mode=0o700)
@@ -133,11 +133,9 @@ class LinuxFeatures(unittest.TestCase):
             "desktop": {"executable": "/usr/bin/python3",
                         "args": ["-c",
                                  "from pathlib import Path; import sys\n"
-                                 "assert all(not Path(p).exists() for p in sys.argv[1:5])\n"
+                                 "assert all(Path(p).exists() for p in sys.argv[1:5])\n"
                                  "assert Path(sys.argv[5]).read_text() == 'read-only canary'\n"
-                                 "try: Path(sys.argv[5]).write_text('unexpected write')\n"
-                                 "except OSError: pass\n"
-                                 "else: raise AssertionError('read-only mount writable')\n"
+                                 "Path(sys.argv[5]).write_text('native write')\n"
                                  "print('desktop-probe-ok')",
                                  str(self.f.config), str(secret), str(outside_alias),
                                  str(socket_path), str(readonly / "current")],
@@ -157,13 +155,15 @@ class LinuxFeatures(unittest.TestCase):
         self.assertNotEqual(self.cli(*check, env=env).returncode, 0)
         invalid.unlink()
         self.assertEqual(self.cli(*check, env=env).returncode, 0)
-        enable = self.cli("yolo", "set", "--client", "primary", "--mode", "yolo", env=env)
+        migrated = self.cli("mode", "migrate", env=env)
+        self.assertEqual(migrated.returncode, 0, migrated.stderr)
+        enable = self.cli("mode", "yolo", "primary", "--confirm-native", env=env)
         self.assertEqual(enable.returncode, 0, enable.stderr)
         self.start()
         session = self.f.connect()
         self.assertFalse(self.f.call("read_file", {"path": str(outside)}, session).get("isError"))
-        for target in (self.f.config, secret, outside_alias):
-            self.assertTrue(self.f.call("read_file", {"path": str(target)}, session).get("isError"))
+        for target in (self.f.config, secret):
+            self.assertFalse(self.f.call("read_file", {"path": str(target)}, session).get("isError"))
         self.assertTrue(self.f.call("write_file", {
             "path": str(readonly / "current"), "content": "unexpected",
         }, session).get("isError"))
@@ -185,7 +185,13 @@ class LinuxFeatures(unittest.TestCase):
         hardlink = home / "hardlink-alias"
         os.link(secret, hardlink)
         self.assertTrue(self.f.call("read_file", {"path": str(hardlink)}, session).get("isError"))
-        self.assertTrue(self.f.call("job_start", {"profile": "desktop"}, session).get("isError"))
+        inventory_canary = state / "inventory-canary"
+        inventory_canary.touch(mode=0o600)
+        os.link(inventory_canary, home / "state-hardlink")
+        self.assertIn("exactly one hardlink", self.cli(*check, env=env).stderr)
+        out = self.f.call("exec_command", {"command": "printf native-job-unconfined"}, session)
+        self.assertFalse(out.get("isError"), out)
+        self.assertIn("native-job-unconfined", json.dumps(out))
 
     @contextmanager
     def tail_peer(self):
@@ -258,7 +264,9 @@ class LinuxFeatures(unittest.TestCase):
             self.f.doc["tailscale_serve"]["shared_funnel"] = True
         self.f.write_config()
         env = dict(os.environ, HOME=str(self.f.base))
-        enable = self.cli("yolo", "set", "--client", "primary", "--mode", "yolo", env=env)
+        migrated = self.cli("mode", "migrate", env=env)
+        self.assertEqual(migrated.returncode, 0, migrated.stderr)
+        enable = self.cli("mode", "yolo", "primary", "--confirm-native", env=env)
         self.assertEqual(enable.returncode, 0, enable.stderr)
         self.f.doc = json.loads(self.f.config.read_text())
         return token, env
@@ -566,7 +574,7 @@ class LinuxFeatures(unittest.TestCase):
             self.assertEqual(self.f.request(self.f.mcp,"POST",path,
                 {"jsonrpc":"2.0","id":2,"method":"tools/list"},**public,**session)[0], 200)
 
-    def test_broad_rejects_visible_mount_alias_and_nested_mount(self):
+    def test_native_selection_with_bind_alias_and_inventory_confines_walk(self):
         _, env = self.prepare_public_client()
         state = self.f.config.parent
         outside = self.f.base / "mountpoint"
@@ -577,7 +585,7 @@ class LinuxFeatures(unittest.TestCase):
         def check(*extra_mount, inventory_only=False):
             # Namespace-local bind mounts disappear with the command.
             command = ["state", "check", "--state-root", state] if inventory_only else [
-                "yolo", "set", "--client", "primary", "--mode", "yolo",
+                "mode", "yolo", "primary", "--confirm-native",
             ]
             return subprocess.run(
                 ["/usr/bin/bwrap", "--bind", "/", "/", *extra_mount, "--", GATEWAY,
@@ -588,9 +596,8 @@ class LinuxFeatures(unittest.TestCase):
         control = check(inventory_only=True)
         self.assertEqual(control.returncode, 0, control.stderr)
         alias = check("--bind", state, outside)
-        self.assertNotEqual(alias.returncode, 0)
-        self.assertIn("A visible mount aliases protected state", alias.stderr)
-        inside = check("--bind", outside, nested)
+        self.assertEqual(alias.returncode, 0, alias.stderr)
+        inside = check("--bind", outside, nested, inventory_only=True)
         self.assertNotEqual(inside.returncode, 0)
         self.assertIn("without following links or crossing mountpoints", inside.stderr)
 

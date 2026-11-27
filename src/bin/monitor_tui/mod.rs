@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const VIEWS: [&str; 7] = [
+const VIEWS: [&str; 8] = [
     "health",
     "clients",
     "jobs",
@@ -17,8 +17,9 @@ const VIEWS: [&str; 7] = [
     "skills",
     "upstreams",
     "integrations",
+    "goals",
 ];
-const LABELS: [&str; 7] = [
+const LABELS: [&str; 8] = [
     "Health",
     "Clients",
     "Jobs",
@@ -26,8 +27,10 @@ const LABELS: [&str; 7] = [
     "Skills",
     "Upstreams",
     "Integrations",
+    "Goals",
 ];
-const TAB_ORDER: [usize; 7] = [3, 2, 0, 1, 4, 5, 6];
+const GOALS: usize = 7;
+const TAB_ORDER: [usize; 8] = [3, 2, 0, 1, 4, 5, 6, GOALS];
 
 struct Screen {
     tty: File,
@@ -262,6 +265,7 @@ struct View {
     details: Option<Value>,
     detail_width: usize,
     detail_json: bool,
+    goal_log_index: usize,
     trace_enabled: bool,
     trace_rows: Value,
     trace_until: Option<Instant>,
@@ -432,6 +436,7 @@ impl View {
             5 => table_rows(&self.value, "servers")
                 .get(self.selected)
                 .cloned(),
+            GOALS => self.goal_rows().get(self.selected).cloned(),
             _ => Some(self.value.clone()),
         }
     }
@@ -440,6 +445,13 @@ impl View {
             && self.logs.is_none()
             && let Some(mut value) = self.selected_record()
         {
+            if self.tab == GOALS {
+                let Some(id) = value["id"].as_str().filter(|s| clean_id(s)) else { return; };
+                match monitor.request(&format!("goals?goal_id={id}"), None) {
+                    Ok((goal, _)) => value = goal,
+                    Err(error) => { self.notice = error; return; }
+                }
+            }
             if (self.tab == 2 || self.tab == 3 && !self.audit_ledger) && self.trace_enabled {
                 self.refresh_trace(monitor);
                 if self.trace_enabled
@@ -450,7 +462,35 @@ impl View {
             }
             self.enter_overlay();
             self.detail_json = false;
+            self.goal_log_index = 0;
             self.details = Some(value);
+        }
+    }
+    fn goal_log(&mut self, monitor: &Monitor) {
+        let Some(record) = self.details.as_ref() else { return; };
+        let goal = record.get("goal").unwrap_or(record);
+        let Some(id) = goal["id"].as_str().filter(|id| clean_id(id)) else { return; };
+        let Some(jobs) = goal["jobs"].as_array().filter(|jobs| !jobs.is_empty()) else { return; };
+        let Some(job) = jobs[self.goal_log_index % jobs.len()].as_str().filter(|id| clean_id(id)) else { return; };
+        match monitor.request(&format!("goals?goal_id={id}&job_id={job}"), None) {
+            Ok((logs, _)) => {
+                self.details = Some(serde_json::json!({"goal":goal,"logs":logs,"job_id":job}));
+                self.goal_log_index += 1;
+                self.selected = 0;
+            }
+            Err(error) => self.notice = error,
+        }
+    }
+    fn goal_rows(&self) -> Vec<Value> {
+        table_rows(&self.value, "goals").into_iter().filter(|goal| self.matches(goal)).collect()
+    }
+    fn goal_action(&mut self, monitor: &Monitor, action: &str) {
+        if let Some(goal) = self.selected_record() {
+            self.notice = monitor.request(
+                "goals", Some(serde_json::json!({
+                    "action": action, "goal_id": goal["id"], "revision": goal["revision"], "confirm": true
+                })),
+            ).err().unwrap_or_default();
         }
     }
     fn job_rows(&self) -> Vec<Value> {
@@ -581,6 +621,14 @@ impl View {
             if self.activity_detail() && !self.detail_json {
                 return self.activity_detail_rows(value);
             }
+            if self.tab == GOALS && let Some(logs) = value.get("logs") {
+                let mut lines = vec![(format!("Job {}", strval(&value["job_id"])), "\x1b[36m")];
+                for stream in ["stdout", "stderr"] {
+                    lines.push((format!("--- {stream} ---"), "\x1b[36m"));
+                    lines.extend(logs[stream].as_str().unwrap_or_default().lines().map(|line| (safe(line), "")));
+                }
+                return lines;
+            }
             let json = serde_json::to_string_pretty(value).unwrap_or_default();
             return json
                 .lines()
@@ -604,6 +652,11 @@ impl View {
             return lines;
         }
         match self.tab {
+            GOALS => self.goal_rows().iter().map(|goal| (
+                format!("{:<11} {}/{}  {}", strval(&goal["state"]),
+                    strval(&goal["completed_milestones"]), strval(&goal["milestones"]),
+                    strval(&goal["description"])), ""
+            )).collect(),
             0 => {
                 let v = &self.value;
                 let mut lines = vec![
@@ -1000,7 +1053,9 @@ impl View {
             }
             border(&mut out, w, false);
             let status = if let Some(id) = &self.confirm {
-                if id == "local-trace" {
+                if id == "goal-cancel" {
+                    "Cancel the selected goal? y confirms / n returns".into()
+                } else if id == "local-trace" {
                     "Capture command arguments and responses for 10 min (may contain secrets)? y confirms".into()
                 } else {
                     format!("Cancel {id}? y confirms / n returns")
@@ -1036,7 +1091,9 @@ impl View {
             row(
                 &mut out,
                 if self.details.is_some() || self.logs.is_some() {
-                    if self.activity_detail() {
+                    if self.tab == GOALS {
+                        "[j/k] Scroll  [l] Cycle linked job logs  [Esc] Back"
+                    } else if self.activity_detail() {
                         "[j/k] Scroll  [d] Details/JSON  [Esc] Back  [q] Quit"
                     } else {
                         "[j/k] Scroll  [Esc] Back  [q] Quit"
@@ -1054,6 +1111,8 @@ impl View {
                     ""
                 } else if self.tab == 3 {
                     "[t] Capture commands  [f] Funnel  [a] Audit  [r] Refresh  [q] Quit"
+                } else if self.tab == GOALS {
+                    "[P] Pause  [R] Resume  [C] Cancel  [r] Refresh  [q] Quit"
                 } else if self.tab == 2 {
                     "[p] Client  [l] Logs  [n] Next  [x] Cancel  [t] Trace  [r] Refresh  [q] Quit"
                 } else {
@@ -1180,6 +1239,13 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                 return Ok(());
             }
             if let Some(id) = v.confirm.take() {
+                if id == "goal-cancel" {
+                    if key == b'y' {
+                        v.goal_action(monitor, "cancel");
+                    }
+                    next = Instant::now();
+                    continue;
+                }
                 if id == "local-trace" {
                     if key == b'y' {
                         match monitor.request(
@@ -1246,7 +1312,7 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                         v.confirm = Some("local-trace".into());
                     }
                 }
-                b'1'..=b'7' => {
+                b'1'..=b'8' => {
                     v.switch(TAB_ORDER[usize::from(key - b'1')]);
                     next = Instant::now();
                 }
@@ -1260,6 +1326,13 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                 }
                 b'j' => v.selected = (v.selected + 1).min(v.rows().len().saturating_sub(1)),
                 b'k' => v.selected = v.selected.saturating_sub(1),
+                b'P' | b'R' if v.tab == GOALS && v.details.is_none() => {
+                    v.goal_action(monitor, if key == b'P' { "pause" } else { "resume" });
+                    next = Instant::now();
+                }
+                b'C' if v.tab == GOALS && v.details.is_none() && v.selected_record().is_some() => {
+                    v.confirm = Some("goal-cancel".into());
+                }
                 b'p' => {
                     if !v.clients.is_empty() {
                         let i = v
@@ -1298,6 +1371,7 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                     v.selected = 0;
                 }
                 b'\r' | b'\n' if v.logs.is_none() => v.open_details(monitor),
+                b'l' if v.tab == GOALS && v.details.is_some() => v.goal_log(monitor),
                 b'l' if v.tab == 2 && v.logs.is_none() && v.details.is_none() => {
                     if let Some(id) = v
                         .job_rows()

@@ -504,13 +504,23 @@ pub(crate) fn update_target(
     config: Option<&Path>,
     executables: &[PathBuf],
 ) -> Result<Option<(PathBuf, bool)>, String> {
-    update_target_with_query(home, config, executables, query_unit)
+    update_target_with_query(home, config, executables, false, query_unit)
+}
+
+
+pub(crate) fn recovery_target(
+    home: &Path,
+    config: Option<&Path>,
+    executables: &[PathBuf],
+) -> Result<Option<(PathBuf, bool)>, String> {
+    update_target_with_query(home, config, executables, true, query_unit)
 }
 
 fn update_target_with_query(
     home: &Path,
     config: Option<&Path>,
     executables: &[PathBuf],
+    allow_failed: bool,
     query: impl FnOnce() -> Result<Value, String>,
 ) -> Result<Option<(PathBuf, bool)>, String> {
     let target = home.join(".config/systemd/user").join(UNIT);
@@ -554,6 +564,7 @@ fn update_target_with_query(
         })
         .ok_or("Service is not the standard generated Veyl unit; update manually")?;
     match state["ActiveState"].as_str() {
+        Some("failed") if allow_failed => Ok(Some((executable.clone(), false))),
         Some("inactive") => {
             if std::net::TcpStream::connect_timeout(&listener.into(), Duration::from_millis(200))
                 .is_ok()
@@ -637,7 +648,7 @@ mod tests {
         std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
         std::fs::write(&unit, b"unit").unwrap();
         let result =
-            update_target_with_query(&home, None, &[], || Err("manager unavailable".into()));
+            update_target_with_query(&home, None, &[], false, || Err("manager unavailable".into()));
         assert!(
             result
                 .unwrap_err()
@@ -653,7 +664,7 @@ mod tests {
             crate::http::operator::revision().unwrap()
         ));
         let result =
-            update_target_with_query(&home, None, &[], || Err("manager unavailable".into()));
+            update_target_with_query(&home, None, &[], false, || Err("manager unavailable".into()));
         if std::net::TcpStream::connect_timeout(
             &"127.0.0.1:7331".parse().unwrap(),
             Duration::from_millis(200),

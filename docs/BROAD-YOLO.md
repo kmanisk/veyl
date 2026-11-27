@@ -1,129 +1,102 @@
-# Veyl execution modes and permissions
+# Execution modes
 
-| Mode | Filesystem and execution | Tool grants |
-| --- | --- | --- |
-| Standard | Approved workspaces and offline sandboxed jobs | Explicit tool names |
-| YOLO | Broad developer filesystem and networking inside Bubblewrap with mandatory protected paths | Native developer preset and explicit grants, subject to denials |
-| FULL | Unconfined execution with the gateway user's Unix permissions | Explicit tool names. Requires `--confirm-full`. |
+| Mode | Authority |
+| --- | --- |
+| Standard | Explicit local tool and workspace grants. Command jobs use an offline Linux sandbox, fail closed when isolation is unavailable and retain scoped job limits. |
+| YOLO | Native execution as the gateway user, normal host networking and host filesystem access. Locally confirmed selection activates the applicable development tools, subject to configured denials. |
+
+Native commands can access files, local sockets, credentials, process state
+and Veyl data visible to the gateway UID. Veyl disables privilege gains on
+exec. Gateway authentication, client ownership, an audited local grant and
+revocation protect MCP admission. Audit and private state are writable by
+the same UID. Treat an approved native client as a remote shell for that
+account. Choose Standard for clients that need workspace isolation.
+
+## Upgrade and local confirmation
+
+An older sandboxed YOLO entry has scoped Standard access on candidate
+startup. Legacy preset tools and implicit scopes do not become native
+grants. A valid audited FULL entry continues to receive native execution
+with its explicit tools. This legacy selector has been retired.
 
 ```sh
-veyl state check --state-root "$state" --config "$state/clients.json"
-veyl mode
-veyl mode yolo dev
-veyl mode get dev
-veyl mode disable dev
-veyl mode enable dev
-veyl mode standard dev
+veyl mode migrate --config /path/to/clients.json
+veyl mode get CLIENT --config /path/to/clients.json
+veyl mode yolo CLIENT --confirm-native --config /path/to/clients.json
+veyl mode standard CLIENT --config /path/to/clients.json
 ```
 
-Modes persist across restarts and apply to the next admitted request, including
-requests on existing MCP sessions. The client's enabled state is independent.
-Running jobs retain the profile recorded in their signed receipt. Credentials
-retain their configured expiry. Use an unprivileged Linux account.
+Migration writes policy schema 4 under the local policy lock and records
+the mode changes in the audit ledger. To recover an interrupted bulk
+migration, use `veyl mode standard --all --config PATH` and review all
+client grants before approving any native access. Disable revokes the
+native grant. Enabling the same client restores Standard access. A
+changed approval revision stops cooperating native job runners.
 
-The YOLO preset enables native file, search, Git, context and diagnostic tools.
-Job tools require a configured job store. Skill tools require a configured skill
-store and reading a skill still needs an individual skill grant. Upstream MCP
-still needs an explicit MCP tool grant and server/tool approval. A client can
-set `"deny_tools": ["apply_patch", "system_inspect"]` in its trusted policy.
-Denials take precedence over preset and manual grants. A deny also covers an
-alias for the same action, such as `edit_file` for `apply_patch`.
+Managed OAuth uses the same native path. Choose YOLO during local consent
+or use `veyl mode yolo CLIENT --managed --confirm-native` and reauthorize the
+remote client. A legacy OAuth YOLO grant reads as Standard until the
+operator gives fresh consent. Revocation and downgrade block admission
+and stop cooperating native jobs, with an asynchronous check in the runner.
 
-### Upgrade an existing policy
+## Jobs and sessions
 
-`veyl mode migrate --config PATH` converts older policies to the current schema.
-Canonical mode changes also migrate older policies when needed. An old scoped
-authorization becomes Standard with its previously active, explicitly approved
-workspace roots. Inferred sibling scopes and dormant legacy roots are discarded.
-Previously approved broad authorizations retain their exact grants. Run
-`veyl mode yolo CLIENT` to approve the native preset explicitly. Existing FULL
-approvals, client identities, credentials and denials carry over. Historical
-`veyl yolo` commands remain available for older automation, including the scoped
-behavior of `yolo enable` on older schemas. They do not select the preset for
-older policies.
+`exec_command` and `task_run` use the same signed detached runner, ownership,
+cancellation, receipts and output limits. A returned job ID can be used
+with `job_status`, `job_logs` and `job_cancel`. Use `request_id` on starts
+that may be retried. A replay that differs in the command, scope or limits
+fails. After gateway restart an active runner may appear uncertain until
+it publishes a terminal receipt.
 
-## State and migration
+Newly confirmed clients can omit `timeout_seconds` to run until exit or
+cancellation. For an explicit deadline, use seconds between 1 and the
+client's configured maximum. Native dynamic jobs have optional CPU and
+memory quotas. Enforcement of requested quotas needs the user systemd
+manager. Output, concurrent jobs and retained receipts remain bounded.
+With no available user manager, runners detach from the foreground process.
+A service manager that kills the entire service cgroup can also stop such
+a runner. Host reboot ends running Linux processes.
 
-Put the configuration directly in one dedicated `0700` state directory
-owned by the gateway account. Put the audit ledger, job directory, keys
-and related state beneath it. Use private regular files with exactly one
-link. Keep workspaces outside that tree. The gateway rejects symlink
-traversal, nested mounts within private state and visible alternate
-mount aliases.
+For native `process_start`, choose profile `shell` for a pipe session or
+`pty` for a terminal. Use `process_input` with the documented sequence
+number, and `process_resize` for PTY geometry. Local named profiles remain
+available. Application output and goal progress are separate records.
 
-Keep executable helpers outside the state tree. For a Codex header
-helper, use an owner-only directory such as `~/.codex/veyl-helpers/`,
-which is covered by the YOLO mask. Keep the bearer it
-reads in state. Update the helper path in the Codex client configuration
-as part of the upgrade.
+See [durable goals](GOALS.md) and the [replacement acceptance contract](development/TWO_MODE_ACCEPTANCE.md).
 
-Prepare the state directory yourself. Stop admissions and let active
-jobs finish. Keep a private rollback copy of the old configuration,
-ledger segments, metadata, keys and receipts. Copy those objects into
-the new directory, adjust the audit and job paths in the copied config,
-and run the read-only state check on that layout. Activate broad YOLO
-only after verifying the new layout. Veyl never moves existing state
-during activation. Revoke broad authorization before reverting to a
-binary that predates it. Preserve the audit history and use a policy
-version supported by that binary.
+## Recovery and rollback
 
-## Sandbox and protected file tools
+Keep the verified 0.7.0-beta bundle and the updater's private backup. The
+updater preserves policy bytes during executable replacement. Compatibility
+is checked before restoring backup executables, and the updater refuses
+rollback after policy bytes change since staging. After a compatible
+installation succeeds, a private marker records the minimum executable
+state format. A schema-4 policy, its audited migration intent, and a
+managed OAuth profile also require a compatible reader. Older builds may
+still verify the audit ledger and be unable to start the gateway.
 
-The supervisor assembles the broad filesystem inside Bubblewrap. It
-makes selected host developer trees available under `/home`, `/tmp`,
-`/var/tmp`, `/srv`, `/opt`, `/mnt` and `/media`. Runtime system trees
-`/usr` and `/etc` are read-only. Ancestors of masked directories and
-protected HOME paths are projected into a private tree. Existing safe
-siblings remain available through descriptor-pinned mounts. Creation or
-rename at a projected directory boundary stays in the sandbox. Create a
-host workspace directory before sharing it with a job.
+For an interrupted policy migration, use the verified new executable to
+run `veyl mode standard --all --config PATH`. This uses the current policy
+under its lock, appends audit transitions, preserves disabled clients and
+drops native grants. Review the recovered policy and verify the ledger
+before restarting. Approve native access again separately.
 
-Veyl masks the entire private state directory, default sensitive HOME
-directories, and configured optional masks. Existing default shell and
-desktop persistence paths and ordinary Git hook directories at known
-workspace roots are read-only. Custom Git hook paths and alternate
-application startup mechanisms require explicit rules or separate
-review. Files created at missing protected HOME paths remain sandbox
-local. Unsafe or stale protected path identities fail closed.
+When `update --recover` refuses the backup, keep the active journal and run
+the recovery executable from a verified bundle:
 
-Desktop directories can contain symbolic links. Veyl inventories links
-without following them and checks real protected files for hardlink
-aliases. A link inside a masked directory disappears with its containing
-mount. A link inside a read-only directory cannot be replaced through
-that mount. Its referent follows the policy for the referent's own
-location. If a desktop mechanism loads a writable external referent,
-protect that referent explicitly. Existing desktop socket entries are
-accepted only beneath complete directory masks. Rules still reject
-symlink roots and nested mount boundaries. The dedicated state tree
-still rejects all symbolic links, sockets and executable regular files.
+```sh
+/path/to/verified-bundle/veyl update --recover-forward /path/to/verified-bundle
+```
 
-A guard executes after all mounts. It verifies the final masks, read-only
-mounts, workspace identity, private PID and mount namespaces, non-root
-UID, NoNewPrivileges, capability drop and descriptor checks before
-executing the configured program. Broad file tools apply the same
-mandatory path and object policy to descriptor-relative reads, writes
-and patches. The gateway rechecks private state and hardlinks at job
-admission and again in the runner. Runtime failure disables execution of
-that job and never falls back to FULL.
+Forward recovery installs a compatible executable while retaining the
+current policy, audit history, jobs, credentials and goals. It resumes
+the managed user service if the interrupted transaction recorded it as
+active. Check `veyl service status`, `veyl audit verify --config PATH` and
+an authenticated MCP initialization and read. If there is no active
+journal, stop the failed managed service, reinstall the verified bundle
+with `update --from-dir`, then start it and verify readiness.
 
-## Threat model
-
-Model A covers the untrusted job inside Bubblewrap, broad direct file
-tools, and pre-existing symlink, hardlink and bind-mount aliases to
-protected objects. The mounts protect the configured state and paths.
-Independent copies and backups outside those trees remain ordinary
-host files. Separate gateway instances sharing a Unix user need
-coordinated protection rules.
-
-Broad jobs share the host IP network. Localhost TCP and UDP services
-remain reachable. The filter denies creation of AF_UNIX sockets, which
-blocks pathname and abstract Unix connections from the job. Procfs runs
-inside the private PID namespace. Veyl does not bind the host runtime
-directory. It may bind the system resolver's individual file if needed.
-
-A separately compromised same-UID host process outside the sandbox
-is Model B. It can exercise the account's ordinary file authority,
-including creating aliases after a preflight. It is outside the
-containment claim. FULL is intentionally unsandboxed and carries that
-authority. Use an audit anchor outside the gateway account to detect
-rewriting of local ledger history.
+Disabled legacy FULL clients migrate to disabled Standard. Re-enabling one
+restores Standard. A separate `mode yolo --confirm-native` authorizes native
+execution. Replaying an earlier activation state or a revoked native
+approval fails audit verification.

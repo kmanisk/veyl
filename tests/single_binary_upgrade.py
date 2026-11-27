@@ -130,7 +130,7 @@ try:
     broken.mkdir(mode=0o700)
     c = base / "fail.c"
     version = run(new / "veyl", "--version").stdout.strip().split()[-1]
-    c.write_text('#include <stdio.h>\n#include <string.h>\nint main(int argc,char**argv){if(argc==2&&!strcmp(argv[1],"--version")){const char*n=strrchr(argv[0],47);printf("%s %s\\n",n?n+1:argv[0],' + json.dumps(version) + ');return 0;}return 1;}\n')
+    c.write_text('#include <stdio.h>\n#include <string.h>\nint main(int argc,char**argv){if(argc==2&&!strcmp(argv[1],"--persistent-format")){puts("veyl-linux-state-4");return 0;}if(argc==2&&!strcmp(argv[1],"--version")){const char*n=strrchr(argv[0],47);printf("%s %s\\n",n?n+1:argv[0],' + json.dumps(version) + ');return 0;}return 1;}\n')
     subprocess.run(["/usr/bin/cc", "-O2", str(c), "-o", str(broken / "veyl")], check=True)
     (broken / "SHA256SUMS").write_text(hashlib.sha256((broken / "veyl").read_bytes()).hexdigest() + "  veyl\n")
     result = run(bins / "veyl", "update", "--from-dir", str(broken), expect=1)

@@ -122,7 +122,7 @@ class MarketplaceInstallerTests(unittest.TestCase):
         self.skills_dir.mkdir(mode=0o700)
         f.config = self.state / "clients.json"
         f.doc.update(
-            policy_version=3,
+            policy_version=4,
             audit_log=str(f.audit),
             job_state_dir=str(jobs),
             skills_dir=str(self.skills_dir),
@@ -133,7 +133,7 @@ class MarketplaceInstallerTests(unittest.TestCase):
         for c in f.doc["clients"]:
             c.update(mode="standard", disabled=False, tools=["read_file", "skills_list", "skills_read", "mcp_servers_list", "mcp_servers_call"])
         f.write_config()
-        f.cli("mode", "yolo", "primary")
+        f.cli("mode", "yolo", "primary", "--confirm-native")
         f.start()
         self.headers = f.pair()
 
@@ -571,9 +571,9 @@ try {
   assert.ok(await ev("Array.from(document.querySelectorAll('#verified-providers article[data-recipe=rust-anything] button')).some(b => b.textContent === 'Install')"));
   assert.ok(await ev("Array.from(document.querySelectorAll('#catalog-cards article[data-entry=rea] button')).some(b => b.textContent === 'Install')"));
   await ev("document.querySelector('nav a[href=\"#clients\"]').click()");
-  await until(() => ev("document.querySelectorAll('#native-grant-grid input[type=checkbox]').length === 71"));
+  await until(() => ev("document.querySelectorAll('#native-grant-grid input[type=checkbox]').length === 81"));
   await ev("document.querySelector('#grant-all-safe').click()");
-  assert.equal(await ev("document.querySelectorAll('#native-grant-grid input[type=checkbox]:checked').length"), 68);
+  assert.equal(await ev("document.querySelectorAll('#native-grant-grid input[type=checkbox]:checked').length"), 78);
   assert.equal(await ev("Array.from(document.querySelectorAll('#native-grant-grid input[type=checkbox]')).filter(b=>b.value.startsWith('rewind') && b.checked).length"),0);
   await ev("document.querySelector('nav a[href=\"#servers\"]').click()");
   assert.ok(await ev("!!document.querySelector('#upstream-bulk-card') && !!document.querySelector('#server-add')"));

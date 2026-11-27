@@ -24,14 +24,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use mcp_gateway::security::audit::{AuditAction, AuditLimits, AuditPhase, AuditSink, JobAuditInfo};
 
-pub(crate) use broad::Broad;
 pub(crate) use config::{
     EXTENDED_RUNTIME_MAX, JobRoot, Profiles, SHORT_RUNTIME_MAX, parse_settings, oauth_profiles,
 };
 pub(crate) use resources::verify as verify_scope;
 pub(crate) use runner::run_worker;
 pub(crate) use sandbox::{
-    GitToolRequest, git_tool_worker, git_worker, probe as probe_sandbox,
+    GitToolRequest, git_tool_worker, git_worker,
     probe_worker as probe_sandbox_worker, upstream_worker,
 };
 pub(crate) use session::{
@@ -57,9 +56,11 @@ pub(crate) struct JobPolicy<'a> {
     pub oauth_bounded_workspace: bool,
     pub yolo: bool,
     pub session: Option<SessionAuthorization<'a>>,
+    pub native_authority: Option<(&'a Path, &'a str)>,
     pub oauth: Option<OAuthSessionAuthorization<'a>>,
     pub full: bool,
     pub job_runtime_limit_seconds: u64,
+    pub native_default_timeout: Option<u64>,
     pub job_cpu_percent_limit: u64,
     pub job_memory_bytes_limit: u64,
     pub job_output_limit_bytes: usize,
@@ -173,4 +174,10 @@ fn record(
 
 fn invalid() -> io::Error {
     io::Error::new(ErrorKind::InvalidData, "invalid or changed job state")
+}
+
+pub(crate) fn owns_job(state: &Path, owner: &str, id: &str) -> bool {
+    Store::open(state, false).is_ok_and(|store| {
+        store.job(id).and_then(|job| job.read()).is_ok_and(|receipt| receipt.client_id == owner)
+    })
 }

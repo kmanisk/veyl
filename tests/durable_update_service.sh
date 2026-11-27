@@ -5,9 +5,10 @@ repo=$(cd "$(dirname "$0")/.." && pwd)
 old=$(realpath "$1")
 new=$(realpath "$2")
 test_script=durable_update_service.py
-if [[ "${3:-}" == single-binary ]]; then
-    test_script=single_binary_upgrade.py
-fi
+case "${3:-}" in
+    single-binary) test_script=single_binary_upgrade.py ;;
+    policy-recovery) test_script=policy_recovery_service.py ;;
+esac
 fixture=$(mktemp -d /tmp/veyl-durable-updater.XXXXXXXX)
 cleanup() {
     python3 -B - "$fixture" <<'PY'

@@ -25,7 +25,7 @@ the trusted local CLI. Credentials and user configuration are excluded from
 dashboard responses. The configuration and protection panels show a
 redacted summary of service and route status, YOLO state-layout
 validation and configured path rules. They have no policy-editing controls.
-Standard, YOLO and FULL appear independently of the client's enabled state.
+Standard and YOLO appear with the client's enabled state.
 The client view lists effective tool names after preset and denial resolution.
 Job logs are visible to the paired operator and may
 contain sensitive output written by the job itself.
@@ -132,3 +132,7 @@ An explicitly configured admin listener can report an unavailable ledger.
 In that startup state all dashboard operations and MCP admissions return an
 unavailable response. Inspect the ledger locally and restart after recovering
 it. The daemon never weakens audit checks to admit operations in that state.
+
+The local Goals tab shows persistent progress, associated job logs and lifecycle
+controls. The dashboard’s status check reports live audit availability. Use
+the audit view or `veyl audit verify` for ledger verification. See [Goals](GOALS.md).

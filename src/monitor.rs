@@ -15,7 +15,7 @@ use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
 
-const HELP: &str = "Usage: veyl dashboard pair --config PATH | veyl monitor --listen 127.0.0.1:PORT [--client ID] [--view health|clients|jobs|logs|activity|audit|skills|upstreams|integrations] [--job ID]\n    Use --cancel JOB --client ID --confirm for non-interactive cancellation.";
+const HELP: &str = "Usage: veyl dashboard pair --config PATH | veyl monitor --listen 127.0.0.1:PORT [--client ID] [--view health|clients|jobs|logs|activity|audit|skills|upstreams|integrations|goals] [--job ID]\n    Use --cancel JOB --client ID --confirm for non-interactive cancellation.";
 struct Monitor {
     rt: tokio::runtime::Runtime,
     addr: SocketAddrV4,
@@ -141,7 +141,7 @@ impl Monitor {
                 job.ok_or("Specify a job ID")?,
                 client.ok_or("Select a client first")?
             ),
-            "activity" | "audit" | "skills" | "integrations" => view.into(),
+            "activity" | "audit" | "skills" | "integrations" | "goals" => view.into(),
             "upstreams" => "servers".into(),
             _ => return Err("Unknown view".into()),
         };

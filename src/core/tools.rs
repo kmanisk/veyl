@@ -77,10 +77,20 @@ pub enum Tool {
     Rewind,
     RewindRestore,
     RewindClear,
+    GoalCreate,
+    GoalGet,
+    GoalList,
+    GoalUpdate,
+    GoalCheckpoint,
+    GoalNext,
+    GoalPause,
+    GoalResume,
+    GoalComplete,
+    GoalCancel,
 }
 
 impl Tool {
-    pub const ALL: [Self; 71] = [
+    pub const ALL: [Self; 81] = [
         Self::ReadFile,
         Self::SearchFiles,
         Self::GitInspect,
@@ -152,6 +162,16 @@ impl Tool {
         Self::Rewind,
         Self::RewindRestore,
         Self::RewindClear,
+        Self::GoalCreate,
+        Self::GoalGet,
+        Self::GoalList,
+        Self::GoalUpdate,
+        Self::GoalCheckpoint,
+        Self::GoalNext,
+        Self::GoalPause,
+        Self::GoalResume,
+        Self::GoalComplete,
+        Self::GoalCancel,
     ];
 
     pub fn parse(name: &str) -> Option<Self> {
@@ -231,6 +251,16 @@ impl Tool {
             Self::Rewind => "rewind",
             Self::RewindRestore => "rewind_restore",
             Self::RewindClear => "rewind_clear",
+            Self::GoalCreate => "goal_create",
+            Self::GoalGet => "goal_get",
+            Self::GoalList => "goal_list",
+            Self::GoalUpdate => "goal_update",
+            Self::GoalCheckpoint => "goal_checkpoint",
+            Self::GoalNext => "goal_next",
+            Self::GoalPause => "goal_pause",
+            Self::GoalResume => "goal_resume",
+            Self::GoalComplete => "goal_complete",
+            Self::GoalCancel => "goal_cancel",
         }
     }
 
@@ -302,6 +332,14 @@ impl Tool {
             Self::Rewind => Action::Rewind,
             Self::RewindRestore => Action::RewindRestore,
             Self::RewindClear => Action::RewindClear,
+            Self::GoalGet | Self::GoalList | Self::GoalNext => Action::GoalRead,
+            Self::GoalCreate
+            | Self::GoalUpdate
+            | Self::GoalCheckpoint
+            | Self::GoalPause
+            | Self::GoalResume
+            | Self::GoalComplete
+            | Self::GoalCancel => Action::GoalWrite,
         }
     }
 
@@ -380,6 +418,10 @@ impl Tool {
         matches!(self, Self::Rewind | Self::RewindRestore | Self::RewindClear)
     }
 
+    pub fn is_goal(self) -> bool {
+        matches!(self.action(), Action::GoalRead | Action::GoalWrite)
+    }
+
     pub fn in_yolo_preset(self, jobs: bool, skills: bool) -> bool {
         if self.is_rewind() {
             return false;
@@ -404,13 +446,40 @@ impl Tool {
             | Action::WriteFile
             | Action::ApplyPatch => true,
             Action::ListSkills | Action::ReadSkill => skills,
-            action if action.is_job() => jobs && !self.process_control(),
+            Action::GitAdd
+            | Action::GitCommit
+            | Action::GitBranch
+            | Action::GitCheckout
+            | Action::GitRestore
+            | Action::GitStash
+            | Action::GitReset
+            | Action::GitPull
+            | Action::GitPush
+            | Action::SkillsValidate
+            | Action::ExtensionsInspect
+            | Action::McpInspect
+            | Action::McpTest
+            | Action::ProposeExtension
+            | Action::ListUpstreams
+            | Action::CallUpstream => true,
+            Action::GoalRead | Action::GoalWrite => true,
+            action if action.is_job() => jobs,
             _ => false,
         }
     }
 
     pub fn schema(self) -> Value {
         match self {
+            Self::GoalCreate
+            | Self::GoalGet
+            | Self::GoalList
+            | Self::GoalUpdate
+            | Self::GoalCheckpoint
+            | Self::GoalNext
+            | Self::GoalPause
+            | Self::GoalResume
+            | Self::GoalComplete
+            | Self::GoalCancel => self.goal_schema(),
             Self::ReadFile => json!({
                 "name": "read_file",
                 "description": "Read a UTF-8 text file relative to the configured allowed root (max 65536 bytes)",
@@ -861,7 +930,7 @@ impl Tool {
             }),
             Self::GitPull => json!({
                 "name": "git_pull",
-                "description": "Pull updates from a configured remote (requires YOLO or FULL mode and confirm=true)",
+                "description": "Pull updates from a configured remote (requires YOLO mode and confirm=true)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -876,7 +945,7 @@ impl Tool {
             }),
             Self::GitPush => json!({
                 "name": "git_push",
-                "description": "Push local commits to a configured remote (requires YOLO or FULL mode and confirm=true)",
+                "description": "Push local commits to a configured remote (requires YOLO mode and confirm=true)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1058,4 +1127,86 @@ impl Tool {
 
 pub fn tool_text(is_error: bool, text: &str) -> Value {
     json!({ "content": [{"type": "text", "text": text}], "isError": is_error })
+}
+
+impl Tool {
+    fn goal_schema(self) -> Value {
+        let id = json!({"type":"string","pattern":"^[0-9a-f]{32}$"});
+        let text = json!({"type":"string"});
+        let string_array = json!({"type":"array","items":{"type":"string"}});
+        let criteria = json!({"type":"array","minItems":1,"maxItems":32,"items":{
+            "type":"object","properties":{"description":text,"evidence":text},
+            "required":["description"],"additionalProperties":false
+        }});
+        fn tasks(depth: usize) -> Value {
+            let mut properties = json!({"id":{"type":"string"},"description":{"type":"string"},
+                                        "completed":{"type":"boolean"}});
+            if depth > 1 {
+                properties["subtasks"] = tasks(depth - 1);
+            }
+            json!({"type":"array","items":{"type":"object","properties":properties,
+                   "required":["id","description"],"additionalProperties":false}})
+        }
+        let revision = json!({"type":"integer","minimum":1});
+        let (description, properties, required) = match self {
+            Self::GoalList => (
+                "List the client's durable goals.",
+                json!({"cursor":id}),
+                json!([]),
+            ),
+            Self::GoalGet => (
+                "Read the current goal, revision, roadmap, evidence and checkpoints.",
+                json!({"goal_id":id}),
+                json!(["goal_id"]),
+            ),
+            Self::GoalNext => (
+                "Read the next actionable roadmap item, blockers and latest handoff.",
+                json!({"goal_id":id}),
+                json!(["goal_id"]),
+            ),
+            Self::GoalCreate => (
+                "Create a persistent goal. Reuse request_id to safely retry the same creation.",
+                json!({"description":text,"request_id":text,"acceptance_criteria":criteria,
+                       "roadmap":tasks(3)}),
+                json!(["description", "request_id", "acceptance_criteria"]),
+            ),
+            Self::GoalUpdate => (
+                "Replace supplied progress fields using the current goal revision. Verify ownership before linking any durable jobs.",
+                json!({"goal_id":id,"revision":revision,"state":{"enum":["running","blocked","failed"]},
+                    "acceptance_criteria":criteria,"roadmap":tasks(3),"active_task":text,"progress":text,
+                    "decisions":string_array,"findings":string_array,"blockers":string_array,
+                    "evidence":string_array,"jobs":string_array}),
+                json!(["goal_id", "revision"]),
+            ),
+            Self::GoalCheckpoint => (
+                "Save a compact durable handoff for a later AI session.",
+                json!({"goal_id":id,"revision":revision,"handoff":{"type":"object",
+                    "properties":{"completed_work":text,"outstanding_work":text,"files":string_array,
+                        "commits":string_array,"jobs":string_array,"test_results":text,"next_action":text},
+                    "required":["completed_work","outstanding_work","test_results","next_action"],
+                    "additionalProperties":false}}),
+                json!(["goal_id", "revision", "handoff"]),
+            ),
+            _ => {
+                let operation = match self {
+                    Self::GoalPause => "Pause this goal.",
+                    Self::GoalResume => "Resume this goal after resolving its blockers.",
+                    Self::GoalComplete => {
+                        "Complete this goal after recording evidence for all criteria and completing its roadmap."
+                    }
+                    Self::GoalCancel => "Cancel this goal.",
+                    _ => unreachable!(),
+                };
+                (
+                    operation,
+                    json!({"goal_id":id,"revision":revision}),
+                    json!(["goal_id", "revision"]),
+                )
+            }
+        };
+        let read = self.action() == Action::GoalRead;
+        json!({"name":self.name(),"description":description,"inputSchema":{"type":"object",
+               "properties":properties,"required":required,"additionalProperties":false},
+               "annotations":{"readOnlyHint":read,"destructiveHint":false}})
+    }
 }

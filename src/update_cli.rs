@@ -16,11 +16,14 @@ use rustix::fs::{self as at, AtFlags, Mode, OFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub(crate) const PERSISTENT_FORMAT: &str = "veyl-linux-state-4";
+const FORMAT_FILE: &str = "persistent-format";
+const FORWARD_HELP: &str = "Use the verified compatible bundle's veyl update --recover-forward BUNDLE";
 const NAMES: [&str; 3] = ["veyl", "veyl-monitor", "mcp-gateway"];
 const REMOTE_LIMIT: usize = 32 * 1024 * 1024;
 const LOCAL_LIMIT: usize = 128 * 1024 * 1024;
 const REPO: &str = "https://github.com/kmanisk/veyl/releases/download/";
-const HELP: &str = "Usage: veyl update [--check | --reinstall | --from-dir DIR | --recover]\nUpdates the installed user binaries from the official GitHub release, or a trusted local bundle with SHA256SUMS. No automatic updates. Active jobs block installation. Requires curl for downloads and a standard Linux user installation.";
+const HELP: &str = "Usage: veyl update [--check | --reinstall | --from-dir DIR | --recover | --recover-forward DIR]\nUpdates the installed user binaries from the official GitHub release, or a trusted local bundle with SHA256SUMS. No automatic updates. Active jobs block installation. Requires curl for downloads and a standard Linux user installation.";
 
 fn version_key(s: &str) -> Option<(u32, u32, u32, u8, u32)> {
     let (core, rank, sequence) = match s.split_once('-') {
@@ -548,6 +551,105 @@ fn restore_legacy_audit(
     crate::http::operator::verify_approvals(&settings)
 }
 
+fn state_floor(
+    home: &Path,
+    rollback: &Path,
+    policy: Option<&crate::http::operator::PolicyFile>,
+) -> Result<bool, String> {
+    if let Some((format, mode)) = read_owned(&rollback.join(FORMAT_FILE), 64)? {
+        if mode != 0o600 || format != PERSISTENT_FORMAT.as_bytes() {
+            return Err("Unrecognized persistent state format; use a compatible updater".into());
+        }
+        return Ok(true);
+    }
+    // Older updaters cannot inspect a managed OAuth profile for new durable
+    // consent. Conservatively require a modern reader whenever it exists.
+    if home.join(".veyl-login/profile").try_exists().map_err(|_| "Cannot inspect managed OAuth profile")? {
+        return Ok(true);
+    }
+    policy.map_or(Ok(false), |policy| {
+        let bytes = policy.bytes()?;
+        let document = crate::http::operator::parse_document(&bytes)?;
+        if document["policy_version"] == 4 {
+            return Ok(true);
+        }
+        let snapshot = policy.snapshot()?;
+        snapshot.audit_log.as_deref().map_or(Ok(false), |path| {
+            let mut head = path.as_os_str().to_os_string();
+            head.push(".head");
+            if !Path::new(&head).try_exists().map_err(|_| "Cannot inspect audit checkpoint")? {
+                return Ok(false);
+            }
+            mcp_gateway::security::audit::AuditSink::has_schema_four_migration(path)
+                .map_err(|_| "Cannot verify authorization history before recovery".into())
+        })
+    })
+}
+
+fn supports_current_state(executable: &Path) -> bool {
+    let mut command = Command::new(executable);
+    command.env_clear().arg("--persistent-format");
+    crate::linux_command::capture(&mut command, 64, Duration::from_secs(5))
+        .is_ok_and(|(status, output)| status.success()
+            && std::str::from_utf8(&output).is_ok_and(|output| output.trim() == PERSISTENT_FORMAT))
+}
+
+fn persist_floor(root: &Path) -> Result<(), String> {
+    let path = root.join(FORMAT_FILE);
+    match read_owned(&path, 64)? {
+        Some((bytes, 0o600)) if bytes == PERSISTENT_FORMAT.as_bytes() => return Ok(()),
+        Some(_) => return Err("Unrecognized persistent state format".into()),
+        None => (),
+    }
+    let dir = open_operator_dir(root).map_err(|_| "Cannot open format marker directory")?;
+    let name = format!(".format-{}", crate::http::operator::revision().map_err(|_| "Cannot allocate format marker")?);
+    let temp = std::ffi::OsStr::new(&name);
+    let result = (|| {
+        write_at(&dir, temp, PERSISTENT_FORMAT.as_bytes(), 0o600)?;
+        at::renameat(&dir, temp, &dir, std::ffi::OsStr::new(FORMAT_FILE))
+            .map_err(|_| "Cannot publish format marker")?;
+        at::fsync(&dir).map_err(|_| "Cannot sync format marker".into())
+    })();
+    if result.is_err() {
+        let _ = at::unlinkat(&dir, temp, AtFlags::empty());
+    }
+    result
+}
+
+fn policy_digest(policy: &crate::http::operator::PolicyFile) -> Result<String, String> {
+    Ok(format!("{:x}", Sha256::digest(policy.bytes()?)))
+}
+
+fn check_rollback(
+    home: &Path,
+    root: &Path,
+    policy: Option<&crate::http::operator::PolicyFile>,
+    journal: &Journal,
+    backups: impl IntoIterator<Item = PathBuf>,
+) -> Result<(), String> {
+    let incompatible = || format!("Rollback refused after persistent state changed. {FORWARD_HELP}");
+    let digest = read_owned(&journal.backup_dir.join("policy.sha256"), 64)?;
+    if let Some((expected, mode)) = &digest
+        && (*mode != 0o600 || policy.map(policy_digest).transpose()?.as_deref().map(str::as_bytes)
+            != Some(expected.as_slice()))
+    {
+        return Err(incompatible());
+    }
+    if state_floor(home, root, policy)? {
+        let mut verified = false;
+        for path in backups {
+            if !supports_current_state(&path) {
+                return Err(format!("Rollback executable cannot read the current persistent state. {FORWARD_HELP}"));
+            }
+            verified = true;
+        }
+        if !verified || digest.is_none() && policy.is_some() {
+            return Err(incompatible());
+        }
+    }
+    Ok(())
+}
+
 fn require_idle(policy: &crate::http::operator::PolicyFile) -> Result<(), String> {
     let settings = policy.snapshot()?;
     crate::http::operator::verify_approvals(&settings)?;
@@ -879,6 +981,7 @@ fn recover(home: &Path) -> Result<(), String> {
     let entries: Vec<ManifestEntry> =
         serde_json::from_slice(&data).map_err(|_| "Invalid rollback manifest")?;
     let mut prepared = Vec::new();
+    let mut backup_paths = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for e in entries {
         let dir = e
@@ -918,6 +1021,7 @@ fn recover(home: &Path) -> Result<(), String> {
             {
                 return Err("Rollback backup checksum or mode mismatch".into());
             }
+            backup_paths.push(path.to_owned());
             Some(Installed::Regular(data, mode))
         } else {
             if e.original_mode.is_some() || e.original_sha256.is_some() {
@@ -930,6 +1034,7 @@ fn recover(home: &Path) -> Result<(), String> {
     if seen.len() != j.dirs.len() * NAMES.len() {
         return Err("Incomplete rollback manifest".into());
     }
+    check_rollback(home, &root, policy.as_ref(), &j, backup_paths)?;
     j.phase = "rolling_back".into();
     write_journal(&fd, &j)?;
     if j.service_active {
@@ -980,6 +1085,90 @@ fn recover(home: &Path) -> Result<(), String> {
     }
     clear_journal(&fd)?;
     println!("Recovered interrupted update ({}).", j.nonce);
+    Ok(())
+}
+
+/// Replace the executable set for an interrupted transaction while retaining
+/// its original backup and the current policy, audit, job and goal state.
+fn recover_forward(home: &Path, payloads: &[Vec<u8>]) -> Result<(), String> {
+    let [binary] = payloads else {
+        return Err("Forward recovery requires a verified single-executable bundle".into());
+    };
+    let _lock = update_lock(home)?;
+    let (root, fd) = rollback_root(home, false)?.ok_or("No interrupted update to recover")?;
+    let mut journal = read_journal(home, &root)?
+        .filter(|journal| journal.phase != "staging")
+        .ok_or("No interrupted replacement. Use update --from-dir for a stopped installation")?;
+    let mut stages = Vec::new();
+    for dir in &journal.dirs {
+        checked_dir(dir)?;
+        let name = format!(".veyl-update-forward-{}", journal.nonce);
+        clean_private_dir(dir, std::ffi::OsStr::new(&name))?;
+        let mut stage = PrivateStage::create(dir.join(name))?;
+        let binary = stage.write("veyl", binary, 0o755)?;
+        if !supports_current_state(&binary) {
+            return Err("Forward recovery executable cannot read the current persistent state".into());
+        }
+        stage.alias("mcp-gateway")?;
+        stage.alias("veyl-monitor")?;
+        stages.push(stage);
+    }
+    let config = config_path(home)?;
+    let policy = config.as_ref().map(|path|
+        crate::http::operator::PolicyFile::lock(path, true)
+    ).transpose()?;
+    if let Some(policy) = &policy {
+        require_idle(policy)?;
+    }
+    let executables: Vec<_> = journal.dirs.iter().flat_map(|dir|
+        [dir.join("veyl"), dir.join("mcp-gateway")]
+    ).collect();
+    let service = crate::service_cli::recovery_target(home, config.as_deref(), &executables)?;
+    if (journal.service_active && service.as_ref().map(|(path, _)| path) != journal.service_executable.as_ref())
+        || (!journal.service_active && service.as_ref().is_some_and(|(_, active)| *active))
+    {
+        return Err("Managed service changed since update; forward recovery refused".into());
+    }
+    let audit = policy.as_ref().map(|policy| {
+        let settings = policy.snapshot()?;
+        settings.audit_log.as_deref().map(|path| {
+            mcp_gateway::security::audit::AuditSink::open_with_limits(path, settings.audit_limits)
+                .map_err(|_| "Forward recovery needs a healthy audit ledger".to_owned())
+        }).transpose()
+    }).transpose()?.flatten();
+    let record = |phase| audit.as_ref().map_or(Ok(()), |audit| {
+        audit.record_runtime_mode("local_operator", "update_forward_recovery", "standard", phase,
+                                  crate::http::unix_seconds())
+            .map_err(|_| "Cannot audit forward recovery")
+    });
+    record(mcp_gateway::security::audit::AuditPhase::Intent)?;
+    journal.phase = "replacing".into();
+    write_journal(&fd, &journal)?;
+    if journal.service_active {
+        crate::service_cli::update_stop()?;
+    }
+    // Ordinary update destination checks apply to any files left by the
+    // interrupted replacement, including compatibility symlink ownership.
+    for (dir, stage) in journal.dirs.iter().zip(&stages) {
+        let dest = open_operator_dir(dir).map_err(|_| "Cannot open install directory")?;
+        for name in NAMES {
+            read_installed(&dir.join(name))?;
+            let name = std::ffi::OsStr::new(name);
+            at::renameat(&*stage.directory, name, &dest, name)
+                .map_err(|_| "Cannot install forward recovery executable")?;
+        }
+        at::fsync(&dest).map_err(|_| "Cannot sync recovered executable directory")?;
+    }
+    drop(policy);
+    if journal.service_active {
+        crate::service_cli::update_start(journal.service_executable.as_deref()
+                                       .ok_or("Missing service executable")?)?;
+    }
+    persist_floor(&root)?;
+    record(mcp_gateway::security::audit::AuditPhase::Success)?;
+    clean_staging(&journal, &root, false)?;
+    clear_journal(&fd)?;
+    println!("Forward recovery completed ({}).", journal.nonce);
     Ok(())
 }
 
@@ -1143,6 +1332,10 @@ fn install(
     if let Some(policy) = &policy {
         require_idle(policy)?;
     }
+    let staged_modern = supports_current_state(&changes[0].staged);
+    if state_floor(home, &rollback_root, policy.as_ref())? && !staged_modern {
+        return Err("Staged executable cannot read the current persistent state".into());
+    }
     // Recheck staged data and the original files after draining admitted calls.
     // Never overwrite an installation that changed while the update was prepared.
     for (i, change) in changes.iter().enumerate() {
@@ -1183,6 +1376,8 @@ fn install(
         .map(|(path, _)| path);
     if let Some(policy) = &policy {
         journal.legacy_audit = capture_legacy_audit(policy)?;
+        backup.write("policy.sha256", policy_digest(policy)?.as_bytes(), 0o600)?;
+        sync_dir(&journal.backup_dir)?;
     }
     journal.phase = "replacing".into();
     journal.service_active = restart.is_some();
@@ -1221,6 +1416,9 @@ fn install(
                 format!("{error}; automatic rollback refused: {e}; backups retained")
             })?;
         }
+        check_rollback(home, &rollback_root, rollback_policy.as_ref(), &journal,
+            changes.iter().filter_map(|change| change.backup.clone()))
+            .map_err(|reason| format!("{error}; {reason}"))?;
         if restart.is_some() {
             crate::service_cli::update_stop()
                 .map_err(|e| format!("{error}; cannot stop service for rollback: {e}"))?;
@@ -1247,6 +1445,9 @@ fn install(
         clear_journal(&root_fd)?;
         return Err(format!("{error}; previous binaries restored"));
     }
+    if staged_modern {
+        persist_floor(&rollback_root)?;
+    }
     clear_journal(&root_fd)?;
     println!(
         "Veyl {version} installed. Reopen existing TUI instances. Permissions and configuration unchanged."
@@ -1263,7 +1464,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         return Err("Updater requires an unprivileged Linux x86_64 user".into());
     }
     let local = match args {
-        [a, b] if a == "--from-dir" => Some(PathBuf::from(b)),
+        [a, b] if a == "--from-dir" || a == "--recover-forward" => Some(PathBuf::from(b)),
         [] => None,
         [a] if a == "--check" || a == "--reinstall" || a == "--recover" => None,
         _ => return Err(HELP.into()),
@@ -1284,7 +1485,12 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
                 .join(dir)
         };
         checked_dir(&dir)?;
-        return install(&home, &bundle(Some(&dir), "")?, None);
+        let payloads = bundle(Some(&dir), "")?;
+        return if args[0] == "--recover-forward" {
+            recover_forward(&home, &payloads)
+        } else {
+            install(&home, &payloads, None)
+        };
     }
     let version = latest()?;
     let current = env!("CARGO_PKG_VERSION");

@@ -1,5 +1,126 @@
 # Gate 3d status
 
+## 2026-11-27 — 0.7.0-beta recovery checkpoint (staged, not promoted)
+
+Codex corrected disabled legacy FULL migration, stale policy replay handling,
+and schema-4 updater recovery. A disabled legacy client remains disabled in
+Standard; re-enable alone cannot authorize native YOLO. Executable rollback
+is refused after incompatible persistent state changes; audited forward
+recovery preserves policy, audit history, job receipts and goals.
+
+Exact optimized ELF `../release-0.7.0-beta/veyl` SHA-256
+`f5d216d92968edd6a8c7c21053dfd12590d2e09cff94ed0bbda7cf2043718552`,
+base `a807b61e2d93333f624cc5d734bff0712c5a55dc`. Shared release executable
+matches the staged bytes. Codex logs: 149 Rust tests, clean warning-denied
+Clippy, 162 passing integration cases and one privileged Funnel skip (38
+counted suite receipts), single-ELF update/systemd lifecycle, verified crate
+compilation and 307.58-second native job across restart. Actual isolated
+Codex app-server discovered 76 tools and executed a native command.
+
+BridgeDev independently reran 12 focused unified YOLO/goals/OAuth cases and
+nested systemd forward recovery against the exact ELF (`mwz67s04-06d5b1`, exit
+0). Additional independently authored external black-box gate passed 3/3
+(`mwz6egec-wqgf6n`, exit 0): enabled FULL migration and old-reader refusal,
+disabled FULL migration/re-enable/actual HTTP revocation and stale replay,
+and interrupted migration recovery including invalid marker permissions.
+Fixture and gate are in `../agy-two-mode.BkjEbfWl/`, separate from product
+source and historical independent lab. This is BridgeDev verification, not
+AGY acceptance. AGY drafts v1/v2/v4 failed during fixture/interface setup;
+v3 has incorrect config shape and non-ledger audit content. Preserve all
+versions. No locked test was modified. Latest historical battery confirmed
+228/293 pass, 65 fail, zero skipped; individual dispositions in
+LEGACY_FAILURES.md. Replacement AGY gate remains open. Do not claim a full
+locked pass or bypass the operator acceptance gate.
+
+Production still 0.6.1-beta, PID 26100. Candidate read-only preflight showed
+2,792 valid audit records and safe Standard interpretation of legacy ChatGPT
+YOLO. Current installed grant remains legacy YOLO. No production state,
+route, binary or main changes. Before promotion require independent gate
+closure and explicit acceptance of exact artifact. After approved update,
+perform audited migration, obtain fresh local confirmation for native YOLO
+and verify the actual ChatGPT connection. Keep the new bundle for forward
+recovery; old executables cannot read schema 4.
+
+## Unified YOLO and durable goals candidate
+
+Isolated implementation from `a807b61`. Production has 29 terminal jobs and
+uses legacy sandboxed YOLO for its native ChatGPT grant. Production routing,
+policy, service and installed executable remain in place. See
+[TWO_MODE_ACCEPTANCE.md](TWO_MODE_ACCEPTANCE.md) for the replacement contract.
+
+The candidate reads previous sandboxed YOLO as Standard and retains audited
+FULL grants with their explicit tools. A local schema-4 migration and
+`--confirm-native` distinguish new native grants from earlier approvals.
+The managed OAuth fixture verified Standard, separate native consent and
+downgrade. The native fixtures verified filesystem and loopback network
+access, local Git status, pipe and PTY input, and restart persistence.
+
+The Codex cleanup removed `bridge_dev_v2`, `veyl_broad_test` and
+`veyl_test` from the app-owned configuration. A fresh Codex app-server
+discovered production Veyl's 14 tools. The private backup is
+`~/.codex/config.toml.before-veyl-mcp-cleanup-20261127T142719Z`.
+
+Goal checkpoints, ownership, revision conflict, linked job logs and local
+operator controls passed the regression fixtures, including browser
+navigation and dashboard pause/resume. The replacement locked gate remains
+an independent AGY handoff. Candidate and production may both report
+0.6.1-beta, so use artifact digests to distinguish them.
+
+### Optimized candidate verification
+
+Candidate `../candidate/veyl` is one Linux ELF built with the guarded Cargo
+release profile. SHA-256
+`7ce8ceddfea19f4beadb3db65622b08ae96c19ca9824bb076c7c22b1c4675275`.
+The isolated source has base commit `a807b61e2d93333f624cc5d734bff0712c5a55dc`.
+The candidate receipt and source checksum manifest identify the working
+tree used for this trial.
+
+- Formatting, warning-denied all-target Clippy, JavaScript syntax, and
+  149 Rust tests passed. New black-box regressions covered native and
+  OAuth admission, downgrade, descendant cancellation, pipe and PTY,
+  normalization of legacy grants, goal ownership, restart, and corruption.
+- Standard refused execution when the Bubblewrap binary was replaced in
+  the disposable namespace. Native execution, real Git writes and local
+  socket access succeeded in the same fixture.
+- A deadline-free native job completed in 307.66 seconds across gateway
+  restart. The repeated request returned its original job ID, and the
+  final logs included output from before and after the restart.
+- Brave browser pairing and Goals UI passed. A paired PTY monitor exercised
+  navigation, pause, resume, and confirmed cancellation.
+- Four isolated single-ELF updater scenarios passed, including rollback
+  after failed startup and refusal of foreign alias paths.
+- A real isolated Codex app-server discovered 76 candidate tools and ran
+  the native command canary. The production Veyl app connection still uses
+  the deployed binary and returned `Broad job denied: Protected directory
+  has a hardlink alias` on its command canary. Candidate verification with
+  the actual ChatGPT client is pending operator-approved routing.
+- The 28 independent pins remained byte-identical. Across the 293 cases,
+  including the supplemental three-mode suite, 228 passed and 65 failed.
+  The old selectors, policy schemas, and sandbox assumptions conflict with
+  the candidate. See [legacy gate disposition](TWO_MODE_ACCEPTANCE.md).
+  Applicable failure examples and exact outputs are in `../locked-logs/`.
+  This run is development verification. AGY owns the replacement gate.
+
+### Loopback performance
+
+Comparison used the installed release and optimized candidate with 100
+audited writes, 40 reads, 24 status requests, and 16 trivial commands in
+separate disposable profiles.
+
+| Measurement | Installed median | Candidate median |
+| --- | ---: | ---: |
+| Dashboard status | 4.911 ms | 0.962 ms |
+| MCP read | 0.570 ms | 0.497 ms |
+| Native exec round trip | 244.640 ms | 218.871 ms |
+
+Native exec p95 moved from 249.494 ms to 255.687 ms. Both idle samples
+recorded zero scheduler ticks over two seconds. Resident memory moved
+from 8,428 KiB to 9,456 KiB. The status route now reads the live cached
+policy and checks ledger availability. Full audit verification remains
+an explicit operation. Raw timing and test outputs are alongside the
+candidate. The production PID, executable, configuration and routing
+remain in place.
+
 ## 2026-11-27 — 0.6.1-beta single-executable release deployed and published
 
 Operator explicitly accepted bundle `single-binary.WbADoDZC/release-0.6.1-beta` (veyl SHA-256 `b534c40338a9a52e2d9e7805ee551051bbb88ce0655cbffdc23d37b9ffea9a39`). BridgeDev verified 214 source manifest entries, 28 locked pins, 13 focused integration cases and four isolated migration/rollback scenarios against this exact ELF. AGY reported 153 Rust and 293 locked/supplementary cases passing and warning-denied Clippy clean. One privileged host-tmpfs Funnel case was skipped; external ChatGPT and Android remain unverified.

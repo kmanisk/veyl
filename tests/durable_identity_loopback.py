@@ -30,7 +30,7 @@ def run(cmd, home=None, check=True):
 
 def write_cfg(cfg: Path, root: Path, audit_log: Path, jobs_dir: Path):
     doc = {
-        "policy_version": 3,
+        "policy_version": 4,
         "audit_log": str(audit_log),
         "job_state_dir": str(jobs_dir),
         "job_profiles": {"ok": {"executable": "/usr/bin/true", "args": [], "timeout_seconds": 5}},
@@ -96,7 +96,7 @@ def main():
         audit_log.chmod(0o600)
         write_cfg(cfg, root, audit_log, jobs_dir)
 
-        run([str(BIN), "mode", "yolo", "dev", "--config", str(cfg)], home=home)
+        run([str(BIN), "mode", "yolo", "dev", "--confirm-native", "--config", str(cfg)], home=home)
         secret_dir = mnt_btrfs / "secret-dir"
         secret_dir.mkdir(mode=0o700)
         run([str(BIN), "protected-paths", "add", "--optional", str(secret_dir), "--config", str(cfg)], home=home)
@@ -147,7 +147,7 @@ def main():
         e_audit.touch()
         e_audit.chmod(0o600)
         write_cfg(e_cfg, mnt_ext4 / "workspace", e_audit, mnt_ext4 / "state/jobs")
-        run([str(BIN), "mode", "yolo", "dev", "--config", str(e_cfg)], home=mnt_ext4 / "home")
+        run([str(BIN), "mode", "yolo", "dev", "--confirm-native", "--config", str(e_cfg)], home=mnt_ext4 / "home")
         ext4_dev1 = os.stat(e_audit).st_dev
         subprocess.run(["sudo", "umount", str(mnt_ext4)], check=True)
 
@@ -188,7 +188,7 @@ def main():
         t_audit.touch()
         t_audit.chmod(0o600)
         write_cfg(t_cfg, mnt_tmpfs / "workspace", t_audit, mnt_tmpfs / "state/jobs")
-        run([str(BIN), "mode", "yolo", "dev", "--config", str(t_cfg)], home=mnt_tmpfs / "home")
+        run([str(BIN), "mode", "yolo", "dev", "--confirm-native", "--config", str(t_cfg)], home=mnt_tmpfs / "home")
         t_head = Path(str(t_audit) + ".head")
         saved_head = json.loads(t_head.read_text())
         assert saved_head["durable"]["fs"]["kind"] == "volatile", saved_head

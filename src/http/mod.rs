@@ -282,6 +282,10 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
     #[cfg(target_os = "linux")]
     let degraded = mutations.read_only() || diagnostic_only;
     #[cfg(target_os = "linux")]
+    if startup_transaction.is_some() && degraded {
+        return Err("Cannot complete update startup with a degraded audit ledger".into());
+    }
+    #[cfg(target_os = "linux")]
     if oauth.is_some() && (degraded || !mutations.available()) {
         return Err("OAuth native preview requires a writable audit ledger".into());
     }
@@ -879,7 +883,7 @@ async fn serve_admitted(
             });
             if let Some((index, id))=&identity {
                 let mode_label = if id.mode == ConnectionMode::Yolo {
-                    "broad_yolo"
+                    "native_yolo"
                 } else {
                     "standard"
                 };
@@ -1252,7 +1256,7 @@ fn dispatch_tools(
                     }
                     #[cfg(target_os = "linux")]
                     if oauth_owner.is_some()
-                        && client.mode != ExecutionMode::BroadYolo
+                        && client.mode != ExecutionMode::Yolo
                         && matches!(tool, Tool::ExecCommand | Tool::TaskRun)
                     {
                         schema["description"]=serde_json::json!("Execute explicitly granted arbitrary code in the offline, writable workspace sandbox. Returns a durable job ID; poll job_status/job_logs for completion.");
@@ -1266,6 +1270,32 @@ fn dispatch_tools(
                     if matches!(tool, Tool::TaskRun | Tool::ProcessStart) {
                         schema["inputSchema"]["properties"]["timeout_seconds"]["maximum"] =
                             serde_json::json!(client.job_runtime_limit_seconds);
+                    }
+                    #[cfg(target_os = "linux")]
+                    if client.mode == ExecutionMode::Yolo {
+                        let native = match tool {
+                            Tool::ExecCommand | Tool::TaskRun => Some("Start a native host-user command. Omit timeout_seconds to use the local policy deadline, if configured. Use the returned job ID for logs and cancellation."),
+                            Tool::ProcessStart => Some("Start a native pipe or PTY session using shell, pty, or a configured interactive profile."),
+                            _ => None,
+                        };
+                        if let Some(description) = native {
+                            schema["description"] = description.into();
+                            let properties = &mut schema["inputSchema"]["properties"];
+                            properties["timeout_seconds"] = serde_json::json!({
+                                "type":"integer", "minimum":1, "maximum":client.job_runtime_limit_seconds
+                            });
+                            if tool == Tool::ExecCommand {
+                                let task = Tool::TaskRun.schema();
+                                for key in ["cpu_percent", "memory_bytes", "max_output_bytes"] {
+                                    properties[key] = task["inputSchema"]["properties"][key].clone();
+                                }
+                            }
+                            if matches!(tool, Tool::ExecCommand | Tool::TaskRun) {
+                                properties["cwd"] = serde_json::json!({
+                                    "type":"string", "description":"Host path, absolute or relative to the approved default workspace"
+                                });
+                            }
+                        }
                     }
                     schema
                 })
@@ -1395,7 +1425,7 @@ fn dispatch_tools(
                 {
                     return Some(tool_text(true, "Audit intent unavailable"));
                 }
-                let reply = store.call(tool, args, &client.skills);
+                let reply = store.call(tool, args, &client.skills, client.native_tool_preset);
                 let phase = if reply["isError"] == true {
                     AuditPhase::Failure
                 } else {
@@ -1496,7 +1526,26 @@ fn dispatch_tools(
                 });
             }
             #[cfg(target_os = "linux")]
-            if (oauth_owner.is_none() || client.mode == ExecutionMode::BroadYolo)
+            if tool.is_goal() {
+                let owner = oauth_owner.unwrap_or(&client.id);
+                let result = crate::goals::execute(
+                    state.policy.path(),
+                    Some(&crate::goals::Owner { id:owner, workspace:&client.root }),
+                    tool,
+                    args.cloned().unwrap_or_else(|| serde_json::json!({})),
+                    |id, phase| state.mutations.record_runtime_mode(
+                        owner, &format!("{name}/{id}"), client.mode.audit_mode().unwrap_or("standard"), phase,
+                    ),
+                    |owner, job| settings.job_state_path()
+                        .is_some_and(|path| crate::jobs::owns_job(path, owner, job)),
+                );
+                return Some(match result {
+                    Ok(goal) => tool_text(false, &goal.to_string()),
+                    Err(error) => tool_text(true, &error),
+                });
+            }
+            #[cfg(target_os = "linux")]
+            if (oauth_owner.is_none() || client.mode == ExecutionMode::Yolo)
                 && (client.mode.audit_mode().is_some() || tool.process_control())
             {
                 return Some(privileged_tool(
@@ -1587,18 +1636,20 @@ fn dispatch_tools(
                         root,
                         JobPolicy {
                             oauth_family:oauth_owner.is_some(),
+                            native_authority: None,
                             oauth_bounded_workspace:oauth_owner.is_some() && state.oauth.as_ref().is_some_and(|o| o.bounded_workspace),
                             yolo: false,
                             session,
                             oauth: oauth_grant,
                             full: false,
                             job_runtime_limit_seconds: client.job_runtime_limit_seconds,
+                            native_default_timeout: client.native_default_timeout,
                             job_cpu_percent_limit: client.job_cpu_percent_limit,
                             job_memory_bytes_limit: client.job_memory_bytes_limit,
                             job_output_limit_bytes: client.job_output_limit_bytes,
                             job_retention_count: client.job_retention_count,
                             broad: None,
-                            workspace_mounts: settings.managed.then_some(&client.job_extra_roots),
+                            workspace_mounts: Some(&client.job_extra_roots),
                         },
                     );
                     if oauth_owner.is_some() && tool.process_control() {
@@ -1692,7 +1743,7 @@ fn privileged_tool(
     now: u64,
 ) -> Value {
     let mode = client.mode.audit_mode().unwrap_or("standard");
-    let full = client.mode == ExecutionMode::Full;
+    let full = client.mode == ExecutionMode::Yolo;
     let owner = oauth_owner.unwrap_or(&client.id);
     if !state
         .mutations
@@ -1712,14 +1763,6 @@ fn privileged_tool(
         } else {
             match (state.jobs.as_ref(), client.job_root.as_ref()) {
                 (Some(jobs), Some(root)) => {
-                    let broad = if client.mode == ExecutionMode::BroadYolo
-                        && (tool.process_control()
-                            || matches!(tool.action(), Action::StartJob | Action::RunShortJob))
-                    {
-                        crate::jobs::broad::Broad::prepare(state.policy.path(), settings).map(Some)
-                    } else {
-                        Ok(None)
-                    };
                     let oauth_grant = oauth_identity.and_then(|identity| {
                         state
                             .oauth
@@ -1732,13 +1775,16 @@ fn privileged_tool(
                                 family: &identity.family,
                             })
                     });
-                    match broad {
-                        Ok(broad) => jobs.call(
+                    jobs.call(
                             tool,
                             args,
                             owner,
                             root,
                             JobPolicy {
+                                native_authority: if full && oauth_grant.is_none() {
+                                    client.yolo_revision.as_deref().map(|revision| (state.policy.path(), revision))
+                                } else { None },
+
                                 oauth_family: oauth_owner.is_some(),
                                 oauth_bounded_workspace: false,
                                 yolo: client.mode.audit_mode().is_some() && !full,
@@ -1753,19 +1799,16 @@ fn privileged_tool(
                                 oauth: oauth_grant,
                                 full,
                                 job_runtime_limit_seconds: client.job_runtime_limit_seconds,
+                            native_default_timeout: client.native_default_timeout,
                                 job_cpu_percent_limit: client.job_cpu_percent_limit,
                                 job_memory_bytes_limit: client.job_memory_bytes_limit,
                                 job_output_limit_bytes: client.job_output_limit_bytes,
                                 job_retention_count: client.job_retention_count,
-                                broad: broad.as_ref(),
-                                workspace_mounts: (!full
-                                    && broad.is_none()
-                                    && (settings.managed || client.mode.audit_mode().is_some()))
+                                broad: None,
+                                workspace_mounts: (!full)
                                 .then_some(&client.job_extra_roots),
                             },
-                        ),
-                        Err(reason) => tool_text(true, &format!("Broad job denied: {reason}")),
-                    }
+                        )
                 }
                 _ => tool_text(true, "Jobs unavailable"),
             }
@@ -1807,29 +1850,21 @@ fn client_file_tool(
     let args = args?.as_object()?;
     let raw_path = args.get("path")?.as_str()?;
     let path = Path::new(raw_path);
-    if raw_path.split('/').any(|part| part == ".." || part == ".") {
+    let native = client.mode == ExecutionMode::Yolo;
+    if !native && raw_path.split('/').any(|part| part == ".." || part == ".") {
         return None;
     }
-    let yolo = client.mode == ExecutionMode::PersistentYolo;
     let full_root;
     let absolute;
-    let (root, relative) = if matches!(client.mode, ExecutionMode::Full | ExecutionMode::BroadYolo)
-    {
+    let (root, relative) = if native {
         if raw_path.is_empty() || raw_path.ends_with('/') {
             return None;
         }
         absolute = client.root.join(path);
-        full_root = if client.mode == ExecutionMode::BroadYolo {
-            crate::jobs::broad::Broad::prepare(state.policy.path(), settings)
-                .ok()?
-                .file_parent(&absolute, tool != Tool::ReadFile)
-                .ok()?
-        } else {
-            crate::tools::MutationRoot::open_host_parent(absolute.parent()?).ok()?
-        };
+        full_root = crate::tools::MutationRoot::open_host_parent(absolute.parent()?).ok()?;
         (&full_root, Path::new(absolute.file_name()?))
     } else if path.is_absolute() {
-        if !yolo && !(client.explicit_extra_roots && !client.extra_roots.is_empty()) {
+        if !(client.explicit_extra_roots && !client.extra_roots.is_empty()) {
             return None;
         }
         client
@@ -1851,7 +1886,7 @@ fn client_file_tool(
     {
         return None;
     }
-    if client.mode != ExecutionMode::Full
+    if client.mode != ExecutionMode::Yolo
         && operator::policy_path(state.policy.path(), &root.path().join(relative))
     {
         return None;
@@ -1905,7 +1940,7 @@ fn permit_tool(
     if state
         .oauth
         .as_ref()
-        .is_some_and(|oauth| tool.process_control() && !oauth.workspace_interactive)
+        .is_some_and(|oauth| tool.process_control() && client.mode != ExecutionMode::Yolo && !oauth.workspace_interactive)
     {
         return Err(DENIED);
     }
@@ -1924,13 +1959,19 @@ fn permit_tool(
 #[cfg(target_os = "linux")]
 fn timeshift_limit(client: &Client, settings: &Configuration) -> Option<usize> {
     (settings.managed
-        && client.mode != ExecutionMode::Full
+        && client.mode != ExecutionMode::Yolo
         && client.tools.contains(&Tool::Rewind)
         && client.tools.contains(&Tool::ReadFile))
     .then_some(client.timeshift_retention_count)
 }
 
 fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configuration) -> bool {
+    if tool.is_goal() {
+        #[cfg(target_os = "linux")]
+        return settings.managed && state.mutations.available();
+        #[cfg(not(target_os = "linux"))]
+        return false;
+    }
     if tool.is_rewind() {
         #[cfg(target_os = "linux")]
         return timeshift_limit(client, settings).is_some()
@@ -1942,12 +1983,11 @@ fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configu
     if tool.process_control() {
         #[cfg(target_os = "linux")]
         return settings.managed
-            && !matches!(client.mode, ExecutionMode::Full)
             && client.job_root.is_some()
-            && state.jobs.as_ref().is_some_and(Jobs::sessions_available)
+            && state.jobs.as_ref().is_some_and(|jobs| jobs.sessions_available(client.mode == ExecutionMode::Yolo))
             && state.mutations.available()
             && state.oauth.as_ref().is_none_or(|oauth| {
-                oauth.workspace_interactive
+                client.mode == ExecutionMode::Yolo || oauth.workspace_interactive
                     && state.jobs.as_ref().is_some_and(Jobs::oauth_launch_available)
             });
         #[cfg(not(target_os = "linux"))]
@@ -1984,7 +2024,7 @@ fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configu
         #[cfg(target_os = "linux")]
         return state.mutations.available()
             && (client.mutation_root.is_some()
-                || matches!(client.mode, ExecutionMode::BroadYolo | ExecutionMode::Full));
+                || client.mode == ExecutionMode::Yolo);
         #[cfg(not(target_os = "linux"))]
         return false;
     }
@@ -1994,7 +2034,7 @@ fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configu
     if tool.action().is_job() {
         #[cfg(target_os = "linux")]
         {
-            if state.oauth.is_some() && matches!(tool,Tool::RunCommand|Tool::JobStart|Tool::ExecCommand|Tool::TaskRun) {
+            if state.oauth.is_some() && client.mode != ExecutionMode::Yolo && matches!(tool,Tool::RunCommand|Tool::JobStart|Tool::ExecCommand|Tool::TaskRun) {
                 return client.job_root.is_some() && state.jobs.as_ref().is_some_and(Jobs::oauth_launch_available);
             }
             return client.job_root.is_some() && state.jobs.as_ref().is_some_and(Jobs::available);
@@ -2119,7 +2159,7 @@ fn json_response(status: StatusCode, body: Value, session: Option<&str>) -> Repl
     response
 }
 
-fn unix_seconds() -> u64 {
+pub(crate) fn unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs())

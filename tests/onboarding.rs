@@ -103,7 +103,7 @@ fn short_mode_commands_select_single_client_and_reject_ambiguous_changes() {
     doc["clients"].as_array_mut().unwrap().push(other);
     fs::write(&config, serde_json::to_vec(&doc).unwrap()).unwrap();
     let before = fs::read(&config).unwrap();
-    let ambiguous = invoke(&["mode", "yolo"]);
+    let ambiguous = invoke(&["mode", "yolo", "--confirm-native"]);
     assert!(!ambiguous.status.success());
     assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("Multiple clients configured"));
     assert_eq!(fs::read(&config).unwrap(), before);
@@ -272,7 +272,7 @@ fn repeated_and_invalid_setup_rejected_without_overwriting() {
 }
 
 #[test]
-fn mode_transitions_and_full_confirmation_workflow() {
+fn mode_transitions_and_native_confirmation_workflow() {
     let _lock = SERIAL_LOCK.lock().unwrap();
     let f = Fixture::new();
     let home = f.0.join("home");
@@ -311,26 +311,16 @@ fn mode_transitions_and_full_confirmation_workflow() {
     // 1. Initial state
     assert!(ok(invoke(&["mode", "get", "chatgpt"])).contains("mode=yolo"));
 
-    // 2. Full mode requires explicit confirmation
-    let denied_full = invoke(&["mode", "set", "chatgpt", "full"]);
-    assert!(!denied_full.status.success());
-
-    let allowed_full = ok(invoke(&[
-        "mode",
-        "set",
-        "chatgpt",
-        "full",
-        "--confirm-full",
-    ]));
-    assert!(allowed_full.contains("mode=full"));
-    assert!(ok(invoke(&["mode", "get", "chatgpt"])).contains("effective_policy=full"));
+    assert!(!invoke(&["mode", "set", "chatgpt", "full"]).status.success());
+    assert!(!invoke(&["mode", "yolo", "chatgpt"]).status.success());
+    assert!(ok(invoke(&["mode", "yolo", "chatgpt", "--confirm-native"])).contains("mode=yolo"));
 
     // 3. Disable client
     let disable_res = ok(invoke(&["mode", "disable", "chatgpt"]));
     assert!(disable_res.contains("client_state=disabled"));
 
     // 4. Modifying disabled client is rejected
-    let set_disabled = invoke(&["mode", "set", "chatgpt", "standard"]);
+    let set_disabled = invoke(&["mode", "yolo", "chatgpt", "--confirm-native"]);
     assert!(!set_disabled.status.success());
 
     // 5. Re-enable client
@@ -341,7 +331,7 @@ fn mode_transitions_and_full_confirmation_workflow() {
     let set_standard = ok(invoke(&["mode", "set", "chatgpt", "standard"]));
     assert!(set_standard.contains("mode=standard"));
     assert!(ok(invoke(&["mode", "get", "chatgpt"])).contains("mode=standard"));
-    assert!(ok(invoke(&["mode", "yolo", "chatgpt"])).contains("mode=yolo"));
+    assert!(ok(invoke(&["mode", "yolo", "chatgpt", "--confirm-native"])).contains("mode=yolo"));
     assert!(ok(invoke(&["mode", "standard", "chatgpt"])).contains("mode=standard"));
 }
 

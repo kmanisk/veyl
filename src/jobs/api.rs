@@ -406,12 +406,9 @@ impl Jobs {
             ) && !(task
                 && matches!(
                     key.as_str(),
-                    "wait_seconds"
-                        | "ephemeral_worktree"
-                        | "cpu_percent"
-                        | "memory_bytes"
-                        | "max_output_bytes"
-                ))
+                    "wait_seconds" | "ephemeral_worktree"
+                )) && !((task || policy.full)
+                    && matches!(key.as_str(), "cpu_percent" | "memory_bytes" | "max_output_bytes"))
         }) {
             return Err(argument_error("Unexpected command argument"));
         }
@@ -425,7 +422,7 @@ impl Jobs {
                 .ok_or_else(|| argument_error("Invalid ephemeral_worktree"))?,
         };
         if policy.oauth_family
-            && !policy.yolo
+            && !policy.full
             && (ephemeral || args.get("cwd").is_some_and(|v| v.as_str() != Some(".")))
         {
             return Err(argument_error("OAuth dynamic commands use only the approved workspace root; worktrees are disabled"));
@@ -440,17 +437,19 @@ impl Jobs {
                     .ok_or_else(|| argument_error("Invalid command time budget")),
             }
         };
-        let timeout = number(
-            "timeout_seconds",
-            if task { 120 } else { 30 },
-            1,
-            if task {
-                policy.job_runtime_limit_seconds
-            } else {
-                SHORT_RUNTIME_MAX
-            },
-        )?;
-        let wait = if task && policy.oauth_family {
+        let timeout = if policy.full && args.get("timeout_seconds").is_none() {
+            policy.native_default_timeout.unwrap_or(0)
+        } else {
+            number(
+                "timeout_seconds",
+                if task { 120 } else { 30 },
+                1,
+                if task || policy.full { policy.job_runtime_limit_seconds } else { SHORT_RUNTIME_MAX },
+            )?
+        };
+        let wait = if policy.full && timeout == 0 && !task {
+            2
+        } else if task && policy.oauth_family {
             number("wait_seconds",2,0,2)?
         } else if task {
             number("wait_seconds", 15, 0, 60)?.min(20)
@@ -509,8 +508,8 @@ impl Jobs {
             executable,
             args: argv,
             timeout_seconds: timeout,
-            extended_runtime: task && timeout > SHORT_RUNTIME_MAX,
-            max_output_bytes: if task {
+            extended_runtime: policy.full || task && timeout > SHORT_RUNTIME_MAX,
+            max_output_bytes: if task || policy.full {
                 number(
                     "max_output_bytes",
                     (MAX_OUTPUT as u64).min(policy.job_output_limit_bytes as u64),
@@ -520,7 +519,9 @@ impl Jobs {
             } else {
                 MAX_OUTPUT
             },
-            cpu_percent: if task {
+            cpu_percent: if policy.full {
+                number("cpu_percent", policy.job_cpu_percent_limit, 10, if policy.job_cpu_percent_limit == 0 { 1600 } else { policy.job_cpu_percent_limit })?
+            } else if task {
                 number(
                     "cpu_percent",
                     100.min(policy.job_cpu_percent_limit),
@@ -530,7 +531,9 @@ impl Jobs {
             } else {
                 super::config::default_cpu()
             },
-            memory_bytes: if task {
+            memory_bytes: if policy.full {
+                number("memory_bytes", policy.job_memory_bytes_limit, 16 * 1024 * 1024, if policy.job_memory_bytes_limit == 0 { 16 * 1024 * 1024 * 1024 } else { policy.job_memory_bytes_limit })?
+            } else if task {
                 number(
                     "memory_bytes",
                     super::config::default_memory().min(policy.job_memory_bytes_limit),
@@ -541,7 +544,7 @@ impl Jobs {
                 super::config::default_memory()
             },
         };
-        profile.validate()?;
+        profile.validate(policy.full)?;
         // Revalidate original approved handles before resolving a nested cwd.
         root.identity().handle()?;
         for mount in policy.workspace_mounts.unwrap_or_default() {

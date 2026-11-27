@@ -39,7 +39,7 @@ class ExtensionsAndProposalsTests(unittest.TestCase):
         self.state = state
 
     def start(self, tools, broad=False):
-        self.f.doc["policy_version"] = 3
+        self.f.doc["policy_version"] = 4
         for client in self.f.doc["clients"]:
             client["mode"] = "standard"
             client["disabled"] = False
@@ -47,7 +47,7 @@ class ExtensionsAndProposalsTests(unittest.TestCase):
         primary["tools"] = tools
         self.f.write_config()
         if broad:
-            self.f.cli("mode", "yolo", primary["id"])
+            self.f.cli("mode", "yolo", primary["id"], "--confirm-native")
         proc = self.f.start()
         self.addCleanup(self.f.stop, proc)
         return self.f.connect(token=pf.TOKEN)
@@ -207,7 +207,7 @@ for line in sys.stdin:
         self.assertEqual(tested["health"], "ready")
         self.assertIn("echo", tested["tools"])
 
-    def test_yolo_preset_excludes_extension_management_tools(self):
+    def test_yolo_preset_includes_extension_proposals(self):
         sess = self.start(["read_file"], broad=True)
         tools_resp = self.f.request(
             self.f.mcp,
@@ -220,7 +220,7 @@ for line in sys.stdin:
         self.assertEqual(tools_resp[0], 200)
         tools = {t["name"] for t in json.loads(tools_resp[2])["result"]["tools"]}
         for protected in ("mcp_test", "mcp_list", "mcp_info", "extensions_propose_add", "skills_propose_add"):
-            self.assertNotIn(protected, tools)
+            self.assertIn(protected, tools)
 
 
 if __name__ == "__main__":

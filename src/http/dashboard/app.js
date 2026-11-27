@@ -63,6 +63,7 @@ function updateTraceState(trace, requested) {
 }
 byId("trace-controls").hidden = remote;
 byId("diagnostics-nav").hidden = remote;
+byId("goals-nav").hidden = remote;
 const diagnosticNames = {resources:"Resources",gpu:"Graphics",storage:"Storage",network:"Network",audio:"Audio",bluetooth:"Bluetooth",desktop:"Display connectors",sway:"Sway",services:"Services"};
 const fieldNames = {cpu:"CPU",io:"I/O",mtu:"MTU",pci_address:"PCI address",vendor_id:"Vendor ID",device_id:"Device ID",rx_bytes:"Received (total)",tx_bytes:"Sent (total)",busy_percent:"GPU busy",capacity_percent:"Capacity",temperature_millicelsius:"Temperature",memory_available_kib:"Available RAM",memory_total_kib:"Total RAM",swap_free_kib:"Free swap",swap_total_kib:"Total swap",MainPID:"PID",MemoryCurrent:"Memory",TasksCurrent:"Tasks",NRestarts:"Restarts",UnitFileState:"Startup",ActiveState:"State",SubState:"Service state",LoadState:"Load state"};
 function diagLabel(key) { return fieldNames[key] || key.replace(/([a-z])([A-Z])/g,"$1 $2").replaceAll("_"," ").replace(/^./,c=>c.toUpperCase()); }
@@ -302,6 +303,7 @@ function selectTab(id, focus = false) {
     if (selected && focus) tab.focus();
   }
   if (id === "diagnostics") loadDiagnostics();
+  if (id === "goals" && changed) loadGoals().catch(goalError);
   if (id === "oauth" && changed) loadOAuth().catch(error => byId("oauth-message").textContent = error.message);
 }
 for (const tab of tabs) {
@@ -690,15 +692,15 @@ function renderStatus(state) {
   summary("configuration-summary", [
     ["Version", state.version],
     ["Authorization", config.authorization],
-    ["Private state layout", config.broad_state_layout],
+    ["Native YOLO", config.native_yolo ? "Enabled · host-user access includes Veyl state" : "Inactive"],
     ["Job profiles", config.configured_job_profiles ? "Configured" : "Unconfigured"],
     ["Skills store", config.configured_skills_store ? "Configured" : "Unconfigured"],
   ]);
   summary("protected-summary", [
-    ["Masked state", paths.state_directory || "Broad YOLO inactive"],
-    ["Masked skill store", paths.skills_directory || "Unconfigured"],
-    ["Masked paths", ((paths.default_masked || []).length + (paths.extra_masked || []).length) + " rules"],
-    ["Read-only paths", ((paths.default_readonly || []).length + (paths.extra_readonly || []).length) + " rules"],
+    ["YOLO state access", "Host-user permissions"],
+    ["Skill store", paths.skills_directory || "Unconfigured"],
+    ["Legacy mask rules", ((paths.default_masked || []).length + (paths.extra_masked || []).length) + " rules"],
+    ["Legacy read-only rules", ((paths.default_readonly || []).length + (paths.extra_readonly || []).length) + " rules"],
   ]);
   const modes = modeLabels;
   const maskedBody = byId("protected-masked-rows");
@@ -1266,7 +1268,7 @@ byId("audit-ledger").addEventListener("toggle", async (event) => {
   } catch (error) { output.textContent = error.message; }
 });
 
-const modeLabels = { standard: "Standard", scoped_yolo: "Scoped YOLO (legacy)", broad_yolo: "YOLO", yolo: "YOLO", full: "FULL", disabled: "Disabled" };
+const modeLabels = { standard: "Standard", yolo: "YOLO" };
 function modeSummary(clients) {
   const groups = new Map();
   for (const c of clients) {
@@ -1380,7 +1382,7 @@ async function loadOAuth() {
       toYolo.type = "button";
       toYolo.disabled = !result.eligible;
       toYolo.onclick = async () => {
-        if (!window.confirm("Switch OAuth client " + registration.client_id + " to YOLO?\n\nExisting Standard tokens will be revoked immediately and the remote client must re-authorize with YOLO consent. Protected paths remain masked.")) return;
+        if (!window.confirm("Switch OAuth client " + registration.client_id + " to YOLO?\n\nExisting Standard tokens will be revoked immediately and the remote client must re-authorize with YOLO consent. Native commands can access Veyl state and any data available to the gateway user.")) return;
         toYolo.disabled = true;
         try {
           const switched = await request("oauth",{action:"mode",client_id:registration.client_id,mode:"yolo",confirm:true});
@@ -1451,7 +1453,7 @@ function renderOAuthReview(handle, info, generation) {
     modeSelect.id="oauth-approve-mode";
     modeLabel.htmlFor="oauth-approve-mode";
     const stdOpt=add(modeSelect,"option","Standard (default, workspace-scoped)"); stdOpt.value="standard";
-    const yoloOpt=add(modeSelect,"option","YOLO (broad host-user access, protected paths masked)"); yoloOpt.value="yolo";
+    const yoloOpt=add(modeSelect,"option","YOLO (native host-user access)"); yoloOpt.value="yolo";
     modeSelect.value=info.mode || "standard";
     modeSelect.onchange=async () => {
       const nextGeneration=++oauthGeneration;
@@ -1463,13 +1465,11 @@ function renderOAuthReview(handle, info, generation) {
       }
     };
   }
-  const modeDesc=scope.mode==="yolo"?"YOLO broad host-user access (protected paths masked, outbound network allowed)":(scope.workspace_interactive?"Standard interactive-session preview":scope.workspace_commands?"Standard dynamic-command preview":scope.workspace_jobs?"Standard named-job preview":scope.workspace_edit?"Standard workspace-edit preview":"Standard read-only preview");
+  const modeDesc=scope.mode==="yolo"?"YOLO native host-user access, including Veyl state":(scope.workspace_interactive?"Standard interactive-session preview":scope.workspace_commands?"Standard dynamic-command preview":scope.workspace_jobs?"Standard named-job preview":scope.workspace_edit?"Standard workspace-edit preview":"Standard read-only preview");
   add(card,"p","Scope: "+info.scope+" · "+modeDesc);
   add(card,"p","Workspace root: "+scope.root);
   add(card,"p","Granted tools: "+scope.tools.join(", "));
-  if(scope.mode==="yolo" && scope.protected_paths) {
-    add(card,"p","Protected paths (masked/read-only): "+JSON.stringify(scope.protected_paths));
-  }
+  if(scope.mode==="yolo" && scope.warning) add(card,"p",scope.warning);
   if(scope.mode==="yolo" && scope.resource_ceilings) {
     add(card,"p","Job resource ceilings: "+JSON.stringify(scope.resource_ceilings));
   }
@@ -1486,7 +1486,7 @@ function renderOAuthReview(handle, info, generation) {
     control.disabled=action==="approve"&&!info.eligible;
     control.onclick=async () => {
       const selectedMode=(info.mode==="yolo"?"YOLO":"Standard");
-      if(generation!==oauthGeneration||!window.confirm(action.toUpperCase()+" ("+selectedMode+") client "+binding.client_id+"\nCallback: "+binding.redirect_uri+"\nResource: "+binding.resource+"\nNative client: "+binding.local_client+"\nWorkspace: "+scope.root+"\nTools: "+scope.tools.join(", ")+(scope.mode==="yolo"?"\nWARNING: YOLO grants broad host-user access and outbound network within masked/readonly protections.":"")+(scope.funnel_advanced?"\nPublic HTTPS advanced capabilities; trusted providers may have side effects outside workspace limits.":"")+(scope.workspace_jobs?"\nJobs may write within the workspace. Profiles: "+JSON.stringify(scope.job_profiles):"")+(scope.workspace_interactive?"\nInteractive stdin/PTY sessions allowed for approved profiles.":"")+(scope.workspace_upstreams?"\nUpstreams may have side effects and shared state: "+JSON.stringify(scope.upstream_providers):""))) return;
+      if(generation!==oauthGeneration||!window.confirm(action.toUpperCase()+" ("+selectedMode+") client "+binding.client_id+"\nCallback: "+binding.redirect_uri+"\nResource: "+binding.resource+"\nNative client: "+binding.local_client+"\nWorkspace: "+scope.root+"\nTools: "+scope.tools.join(", ")+(scope.mode==="yolo"?"\nWARNING: YOLO grants host-user access and normal networking, including access to Veyl state.":"")+(scope.funnel_advanced?"\nPublic HTTPS advanced capabilities; trusted providers may have side effects outside workspace limits.":"")+(scope.workspace_jobs?"\nJobs may write within the workspace. Profiles: "+JSON.stringify(scope.job_profiles):"")+(scope.workspace_interactive?"\nInteractive stdin/PTY sessions allowed for approved profiles.":"")+(scope.workspace_upstreams?"\nUpstreams may have side effects and shared state: "+JSON.stringify(scope.upstream_providers):""))) return;
       for(const b of controls.querySelectorAll("button")) b.disabled=true;
       try {
         await request("oauth",{action,request:handle,confirm:true,...binding,...(action==="approve"?{mode:info.mode||"standard",scope_fingerprint:info.scope_fingerprint}:{})});
@@ -1526,3 +1526,114 @@ if (automaticPair) {
 } else {
   refresh().catch(error => notice.textContent = error.status === 401 ? "" : error.message);
 }
+
+let goalPage;
+let nextGoalPage;
+let goalSelection;
+let goalGeneration = 0;
+function goalError(error) {
+  byId("goal-message").textContent = error.message;
+}
+async function loadGoals(cursor) {
+  const generation = ++goalGeneration;
+  const page = await request("goals" + (cursor ? "?cursor=" + encodeURIComponent(cursor) : ""));
+  if (generation !== goalGeneration) return;
+  goalPage = cursor;
+  nextGoalPage = page.next_cursor;
+  byId("goals-next").hidden = !nextGoalPage;
+  const list = byId("goals-list");
+  list.replaceChildren();
+  byId("goal-message").textContent = page.goals.length ? "" : "No goals.";
+  for (const goal of page.goals) {
+    const item = add(list, "li", "");
+    const button = add(item, "button", goal.description);
+    button.type = "button";
+    button.onclick = () => showGoal(goal.id).catch(goalError);
+    add(item, "span", " " + goal.state + " · " + goal.completed_milestones + "/" + goal.milestones + " milestones");
+  }
+  if (goalSelection) await showGoal(goalSelection);
+}
+function goalItems(parent, title, values, render) {
+  if (!values?.length) return;
+  add(parent, "h3", title);
+  renderGoalItems(parent, values, render);
+}
+function renderGoalItems(parent, values, render) {
+  const list = add(parent, "ul", "");
+  for (const item of values) render(add(list, "li", ""), item);
+}
+function renderMilestone(row, task) {
+  row.textContent = (task.completed ? "Completed · " : "") + task.description;
+  if (task.subtasks?.length) renderGoalItems(row, task.subtasks, renderMilestone);
+}
+async function showGoal(id) {
+  const generation = ++goalGeneration;
+  const goal = await request("goals?goal_id=" + encodeURIComponent(id));
+  if (generation !== goalGeneration) return;
+  goalSelection = id;
+  const detail = byId("goal-detail");
+  detail.replaceChildren();
+  add(detail, "h2", goal.description);
+  add(detail, "p", goal.state + " · " + goal.workspace + " · " + goal.owner);
+  if (goal.progress) add(detail, "p", goal.progress);
+  if (goal.active_task) {
+    const find = tasks => {
+      for (const task of tasks) {
+        if (task.id === goal.active_task) return task.description;
+        const nested = find(task.subtasks || []);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    add(detail, "p", "Current task · " + (find(goal.roadmap) || goal.active_task));
+  }
+  const actions = add(detail, "div", "");
+  actions.className = "actions";
+  if (!["completed", "failed", "cancelled"].includes(goal.state)) {
+    const available = goal.state === "paused" || goal.state === "blocked" ? ["resume", "cancel"] : ["pause", "cancel"];
+    for (const action of available) {
+      const button = add(actions, "button", action[0].toUpperCase() + action.slice(1));
+      button.type = "button";
+      if (action === "resume" && goal.blockers.length) button.disabled = true;
+      button.onclick = async () => {
+        if (action === "cancel" && !window.confirm("Cancel this goal? Associated jobs keep their own lifecycle.")) return;
+        button.disabled = true;
+        try {
+          await request("goals", {action, goal_id: id, revision: goal.revision, confirm: action === "cancel"});
+          await loadGoals(goalPage);
+        } catch (error) {
+          goalError(error);
+          button.disabled = false;
+        }
+      };
+    }
+  }
+  goalItems(detail, "Acceptance criteria", goal.acceptance_criteria, (row, value) => {
+    row.textContent = value.description;
+    if (value.evidence) add(row, "p", value.evidence);
+  });
+  goalItems(detail, "Roadmap", goal.roadmap, renderMilestone);
+  for (const [field, label] of [["blockers","Blockers"], ["evidence","Verification"], ["decisions","Decisions"], ["findings","Findings"]]) {
+    goalItems(detail, label, goal[field], (row, value) => row.textContent = value);
+  }
+  goalItems(detail, "Jobs", goal.jobs, (row, job) => {
+    const button = add(row, "button", "Logs for " + job);
+    button.type = "button";
+    const output = add(row, "pre", "");
+    output.hidden = true;
+    button.onclick = async () => {
+      try {
+        const logs = await request("goals?goal_id=" + encodeURIComponent(id) + "&job_id=" + encodeURIComponent(job));
+        output.hidden = false;
+        output.textContent = "stdout\n" + (logs.stdout || "") + "\nstderr\n" + (logs.stderr || "");
+      } catch (error) { goalError(error); }
+    };
+  });
+  goalItems(detail, "Checkpoints", goal.checkpoints.slice().reverse(), (row, value) => {
+    const entry = add(row, "details", "");
+    add(entry, "summary", new Date(value.at * 1000).toLocaleString() + " · " + value.handoff.next_action);
+    add(entry, "pre", JSON.stringify(value.handoff, null, 2));
+  });
+}
+byId("goals-refresh").onclick = () => loadGoals(goalPage).catch(goalError);
+byId("goals-next").onclick = () => loadGoals(nextGoalPage).catch(goalError);

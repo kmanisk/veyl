@@ -55,6 +55,8 @@ pub enum Action {
     JobLogs,
     CancelJob,
     ListJobs,
+    GoalRead,
+    GoalWrite,
     PrivilegedCommand,
     ServiceControl,
 }
@@ -82,7 +84,7 @@ impl Action {
 pub enum ExecutionMode {
     Standard,
     PersistentYolo,
-    Full,
+    Yolo,
     BroadYolo,
     Disabled,
     /// Merely expressing intent is never evidence of an authorized YOLO lease.
@@ -95,7 +97,7 @@ impl ExecutionMode {
     pub fn public_label(self) -> &'static str {
         match self {
             Self::BroadYolo => "yolo",
-            Self::Full => "full",
+            Self::Yolo => "yolo",
             _ => "standard",
         }
     }
@@ -103,7 +105,7 @@ impl ExecutionMode {
     pub fn audit_mode(self) -> Option<&'static str> {
         match self {
             Self::PersistentYolo => Some("yolo"),
-            Self::Full => Some("full"),
+            Self::Yolo => Some("native_yolo"),
             Self::BroadYolo => Some("broad_yolo"),
             _ => None,
         }

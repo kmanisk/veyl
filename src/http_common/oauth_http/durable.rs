@@ -176,8 +176,8 @@ pub fn active_family_guard_with_mode(
     if required_yolo && registration.mode() != ConnectionMode::Yolo {
         return Err(Error::InvalidGrant);
     }
-    let expected_code = crate::core::oauth::challenge_digest(family_code)
-        .ok_or(Error::InvalidRequest)?;
+    let expected_code =
+        crate::core::oauth::challenge_digest(family_code).ok_or(Error::InvalidRequest)?;
     let active = snapshot.families.iter().any(|family| {
         family.matches_active(oauth_client, local_client, &expected_code, now_ms)
             && family.matches_mode(required_yolo)
@@ -249,8 +249,15 @@ pub(super) fn revoke_stopped_client(
         .and_then(|s| s.strip_suffix("/mcp"))
         .ok_or("Invalid saved OAuth origin")?;
     let resource = Resource::new(origin).map_err(|_| "Invalid saved OAuth origin")?;
-    let (mut durable, mut registry, mut grants) =
-        Durable::open_locked(store, resource, local, &snapshot.binding, None, false, false)?;
+    let (mut durable, mut registry, mut grants) = Durable::open_locked(
+        store,
+        resource,
+        local,
+        &snapshot.binding,
+        None,
+        false,
+        false,
+    )?;
     if registry.get(oauth_client).is_none() {
         return Ok(false);
     }
@@ -291,8 +298,15 @@ pub(super) fn switch_stopped_client_mode(
         .and_then(|s| s.strip_suffix("/mcp"))
         .ok_or("Invalid saved OAuth origin")?;
     let resource = Resource::new(origin).map_err(|_| "Invalid saved OAuth origin")?;
-    let (mut durable, mut registry, mut grants) =
-        Durable::open_locked(store, resource, local, &snapshot.binding, None, false, false)?;
+    let (mut durable, mut registry, mut grants) = Durable::open_locked(
+        store,
+        resource,
+        local,
+        &snapshot.binding,
+        None,
+        false,
+        false,
+    )?;
     let Some(previous) = registry.set_mode(oauth_client, target_mode) else {
         return Err("Unknown OAuth client".into());
     };
@@ -333,14 +347,31 @@ pub(super) fn switch_stopped_client_mode(
 pub(super) fn revoke_stopped_profile(dir: &Path, local: &str) -> Result<(), String> {
     let store = Store::open_oauth_state(dir)?;
     let snapshot = unseal(&store.read()?).map_err(|_| "Invalid OAuth state")?;
-    let origin = snapshot.registry["resource"].as_str().and_then(|s| s.strip_suffix("/mcp"))
+    let origin = snapshot.registry["resource"]
+        .as_str()
+        .and_then(|s| s.strip_suffix("/mcp"))
         .ok_or("Invalid saved OAuth origin")?;
     let resource = Resource::new(origin).map_err(|_| "Invalid saved OAuth origin")?;
-    let empty = ClientRegistry::new(Resource::new(origin).map_err(|_| "Invalid saved OAuth origin")?);
-    let (mut durable, _registry, _grants) = Durable::open_locked(store, resource, local, &snapshot.binding, None, false, true)?;
+    let empty =
+        ClientRegistry::new(Resource::new(origin).map_err(|_| "Invalid saved OAuth origin")?);
+    let (mut durable, _registry, _grants) =
+        Durable::open_locked(store, resource, local, &snapshot.binding, None, false, true)?;
     let now = Instant::now();
-    let epoch = durable.begin("revoke",now).map_err(|_| "Cannot publish logout intent")?;
-    durable.finish(Transition {operation:"revoke",status:200,client:None,now,epoch}, &empty,&GrantStore::default())
+    let epoch = durable
+        .begin("revoke", now)
+        .map_err(|_| "Cannot publish logout intent")?;
+    durable
+        .finish(
+            Transition {
+                operation: "revoke",
+                status: 200,
+                client: None,
+                now,
+                epoch,
+            },
+            &empty,
+            &GrantStore::default(),
+        )
         .map_err(|_| "Cannot confirm durable logout".to_owned())
 }
 
@@ -419,8 +450,7 @@ impl Durable {
             store.write(&sealed, true)?;
         }
         let mut previous = store.read()?;
-        let snapshot =
-            unseal(&previous).map_err(|_| "Invalid OAuth state checksum or schema")?;
+        let snapshot = unseal(&previous).map_err(|_| "Invalid OAuth state checksum or schema")?;
         let legacy_match = snapshot.binding != binding
             && snapshot.interrupted.is_none()
             && legacy_binding.is_some_and(|old| snapshot.binding == old);
@@ -637,7 +667,11 @@ mod tests {
         let challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
         let auth_req = crate::core::oauth::AuthorizationRequest::new(
             registry
-                .binding(&client_id, "https://client.example/cb", "https://veyl.example/mcp")
+                .binding(
+                    &client_id,
+                    "https://client.example/cb",
+                    "https://veyl.example/mcp",
+                )
                 .unwrap(),
             challenge,
             "S256",
@@ -650,7 +684,11 @@ mod tests {
             .exchange(
                 &approved.code,
                 &registry
-                    .binding(&client_id, "https://client.example/cb", "https://veyl.example/mcp")
+                    .binding(
+                        &client_id,
+                        "https://client.example/cb",
+                        "https://veyl.example/mcp",
+                    )
                     .unwrap(),
                 verifier,
                 now,
@@ -697,16 +735,23 @@ mod tests {
             Err(Error::InvalidGrant)
         ));
 
-        let (mut reopened, _, _) =
-            Durable::open(&state_dir, Resource::new(origin).unwrap(), local, binding, false)
-                .unwrap();
+        let (mut reopened, _, _) = Durable::open(
+            &state_dir,
+            Resource::new(origin).unwrap(),
+            local,
+            binding,
+            false,
+        )
+        .unwrap();
         // Deterministically inspect both lock directions, then exercise the
         // real durable intent writer while an admitted action holds its guard.
         let admission = active_family_guard(&state_dir, &client_id, local, &family_code)
             .expect("active admission");
         let probe = std::fs::OpenOptions::new()
-            .read(true).write(true)
-            .open(state_dir.join(".oauth-admission-lock")).unwrap();
+            .read(true)
+            .write(true)
+            .open(state_dir.join(".oauth-admission-lock"))
+            .unwrap();
         assert_eq!(
             rustix::fs::flock(&probe, rustix::fs::FlockOperation::NonBlockingLockExclusive),
             Err(rustix::io::Errno::WOULDBLOCK)
@@ -717,13 +762,21 @@ mod tests {
             let state = &mut reopened;
             let writer = scope.spawn(move || {
                 started_tx.send(()).unwrap();
-                done_tx.send(state.begin("refresh", Instant::now())).unwrap();
+                done_tx
+                    .send(state.begin("refresh", Instant::now()))
+                    .unwrap();
             });
             started_rx.recv().unwrap();
             let blocked = done_rx.recv_timeout(Duration::from_millis(30));
             drop(admission);
-            assert!(matches!(blocked, Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
-            let epoch = done_rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+            assert!(matches!(
+                blocked,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ));
+            let epoch = done_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
             writer.join().unwrap();
             epoch
         });
@@ -784,8 +837,14 @@ mod tests {
         let origin = "https://veyl.example";
         let local = "oauth-preview";
         let binding = "test-binding";
-        let (mut durable, mut registry, mut grants) =
-            Durable::open(&state_dir, Resource::new(origin).unwrap(), local, binding, true).unwrap();
+        let (mut durable, mut registry, mut grants) = Durable::open(
+            &state_dir,
+            Resource::new(origin).unwrap(),
+            local,
+            binding,
+            true,
+        )
+        .unwrap();
         let now = Instant::now();
         let client_id = registry
             .register(
@@ -800,17 +859,29 @@ mod tests {
             .client_id()
             .to_owned();
         let binding_obj = registry
-            .binding(&client_id, "https://client.example/cb", "https://veyl.example/mcp")
+            .binding(
+                &client_id,
+                "https://client.example/cb",
+                "https://veyl.example/mcp",
+            )
             .unwrap();
         let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
         let challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
-        let req = crate::core::oauth::AuthorizationRequest::new(binding_obj.clone(), challenge, "S256", None).unwrap();
+        let req = crate::core::oauth::AuthorizationRequest::new(
+            binding_obj.clone(),
+            challenge,
+            "S256",
+            None,
+        )
+        .unwrap();
         let handle = grants.begin(req, now).unwrap();
         let approved = grants
             .approve_local_with_mode(&handle, local, ConnectionMode::Yolo, now)
             .unwrap();
         registry.set_mode(&client_id, ConnectionMode::Yolo);
-        let issued = grants.exchange(&approved.code, &binding_obj, verifier, now).unwrap();
+        let issued = grants
+            .exchange(&approved.code, &binding_obj, verifier, now)
+            .unwrap();
         let id = grants
             .authenticate(&issued.access_token, "https://veyl.example/mcp", now)
             .unwrap();
@@ -831,26 +902,29 @@ mod tests {
             .unwrap();
         drop(durable);
 
-        assert!(verify_active_family_with_mode(&state_dir, &client_id, local, &family_code, true).is_ok());
+        assert!(
+            verify_active_family_with_mode(&state_dir, &client_id, local, &family_code, true)
+                .is_ok()
+        );
         // Downgrade immediately rejects required_yolo=true while allowing standard checks.
-        let (prev, reauth) = switch_stopped_client_mode(
-            &state_dir,
-            local,
-            &client_id,
-            ConnectionMode::Standard,
-        )
-        .unwrap();
+        let (prev, reauth) =
+            switch_stopped_client_mode(&state_dir, local, &client_id, ConnectionMode::Standard)
+                .unwrap();
         assert_eq!(prev, ConnectionMode::Yolo);
         assert!(!reauth);
         assert!(matches!(
             verify_active_family_with_mode(&state_dir, &client_id, local, &family_code, true),
             Err(Error::InvalidGrant)
         ));
-        assert!(verify_active_family_with_mode(&state_dir, &client_id, local, &family_code, false).is_ok());
+        assert!(
+            verify_active_family_with_mode(&state_dir, &client_id, local, &family_code, false)
+                .is_ok()
+        );
 
         // Escalation revokes existing Standard family so fresh OAuth auth is required.
         let (prev, reauth) =
-            switch_stopped_client_mode(&state_dir, local, &client_id, ConnectionMode::Yolo).unwrap();
+            switch_stopped_client_mode(&state_dir, local, &client_id, ConnectionMode::Yolo)
+                .unwrap();
         assert_eq!(prev, ConnectionMode::Standard);
         assert!(reauth);
         assert!(matches!(

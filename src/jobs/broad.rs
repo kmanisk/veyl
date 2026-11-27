@@ -7,15 +7,12 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use mcp_gateway::security::linux_fs::open_absolute_dir;
 use serde::{Deserialize, Serialize};
 
-use crate::http::admission::Configuration;
-use crate::protected_paths::{
-    CONTROL_PLANE_DIRS, Kind, OPTIONAL_DEFAULTS, READONLY_DEFAULTS, validate_path,
-};
+use crate::protected_paths::Kind;
 use crate::state_cli::Layout;
 
 use super::sandbox::{Sandbox, check_inherited_fds, unsupported, validate_executable};
@@ -37,102 +34,6 @@ pub(crate) struct Broad {
 }
 
 impl Broad {
-    pub(crate) fn prepare(config: &Path, settings: &Configuration) -> Result<Self, String> {
-        let layout = Layout::admission(config, settings)?;
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or("HOME unavailable")?;
-        validate_path(&home)?;
-        let mut plan = Self {
-            config: config.to_owned(),
-            state: layout.path().to_owned(),
-            home,
-            masked: BTreeSet::new(),
-            readonly: BTreeSet::new(),
-        };
-        plan.masked.insert(plan.state.clone());
-        for dir in CONTROL_PLANE_DIRS {
-            plan.masked.insert(plan.home.join(dir));
-        }
-        if let Some(skills) = &settings.skills {
-            plan.masked.insert(skills.path().to_owned());
-        }
-        for name in OPTIONAL_DEFAULTS {
-            plan.masked.insert(plan.home.join(name));
-        }
-        for name in READONLY_DEFAULTS {
-            plan.readonly.insert(plan.home.join(name));
-        }
-        for kind in [Kind::Optional, Kind::ReadOnly] {
-            for rule in settings.protected_paths.selected(kind) {
-                rule.check_identity(kind)?;
-                match kind {
-                    Kind::Optional => &mut plan.masked,
-                    Kind::ReadOnly => &mut plan.readonly,
-                }
-                .insert(rule.path.clone());
-            }
-        }
-        for client in &settings.clients {
-            let hooks = client.root.join(".git/hooks");
-            if metadata(&hooks)
-                .map_err(|error| error.to_string())?
-                .is_some()
-            {
-                plan.readonly.insert(hooks);
-            }
-        }
-        plan.validate().map_err(|error| error.to_string())?;
-        Ok(plan)
-    }
-
-    pub(crate) fn is_readonly(&self, path: &Path) -> bool {
-        self.readonly
-            .iter()
-            .any(|readonly| path.starts_with(readonly))
-    }
-
-    pub(crate) fn file_parent(
-        &self,
-        path: &Path,
-        write: bool,
-    ) -> io::Result<crate::tools::MutationRoot> {
-        if !visible(path)
-            || self.is_masked(path)
-            || (write
-                && (SYSTEM.iter().any(|root| path.starts_with(root))
-                    || self
-                        .readonly
-                        .iter()
-                        .any(|readonly| path.starts_with(readonly))))
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "Protected or unavailable path",
-            ));
-        }
-        let mut protected = BTreeSet::new();
-        for candidate in self
-            .masked
-            .iter()
-            .chain(self.readonly.iter().filter(|_| write))
-        {
-            if !visible(candidate) || self.hidden_by_parent(candidate) {
-                continue;
-            }
-            if metadata(candidate)?.is_some() {
-                protected.extend(crate::state_cli::protected_objects(
-                    candidate,
-                    self.masked.contains(candidate),
-                )?);
-            }
-        }
-        crate::tools::MutationRoot::open_broad_parent(
-            path.parent().ok_or_else(unsupported)?,
-            protected,
-        )
-    }
-
     /// Runner-side validation uses the admitted paths and checks state aliases
     /// again immediately before the mount namespace is assembled.
     pub(super) fn validate(&self) -> io::Result<()> {
@@ -319,22 +220,6 @@ impl Broad {
             .arg(executable)
             .args(args);
         Ok(sandbox)
-    }
-
-    pub(crate) fn probe(&self, cwd: &Path) -> io::Result<()> {
-        let meta = fs::metadata(cwd)?;
-        let status = self
-            .command(cwd, [meta.dev(), meta.ino()], "/usr/bin/true", &[], false)?
-            .command
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(unsupported())
-        }
     }
 
     fn project(&self, path: &Path, sandbox: &mut Sandbox, seen: &mut usize) -> io::Result<()> {

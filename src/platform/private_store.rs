@@ -33,6 +33,21 @@ impl Store {
     pub fn open_oauth_state_readonly(path: &Path) -> Result<Self, String> {
         Self::open_named(path, "oauth-state.json", 4 * 1024 * 1024, false)
     }
+    pub fn open_goals(config: &Path) -> Result<Self, String> {
+        let parent = config.parent().ok_or("Goal state parent unavailable")?;
+        let directory = crate::security::linux_fs::open_operator_dir(parent)
+            .map_err(|_| "Goal state parent unavailable")?;
+        let mut name = std::ffi::OsString::from(".");
+        name.push(config.file_name().ok_or("Goal policy name unavailable")?);
+        name.push(".goals");
+        match fs::mkdirat(&directory, &name, Mode::from_raw_mode(0o700)) {
+            Ok(()) => fs::fsync(&directory).map_err(|_| "Goal state directory sync failed")?,
+            Err(rustix::io::Errno::EXIST) => (),
+            Err(_) => return Err("Cannot create goal state directory".into()),
+        }
+        Self::open_named(&parent.join(name), "goals.json", 2 * 1024 * 1024, true)
+    }
+
     fn open_named(
         path: &Path,
         name: &'static str,
@@ -74,7 +89,9 @@ impl Store {
         let open = || fs::openat(&self.0, name, flags, Mode::empty());
         let fd = if create {
             match fs::openat(
-                &self.0, name, flags | OFlags::CREATE | OFlags::EXCL,
+                &self.0,
+                name,
+                flags | OFlags::CREATE | OFlags::EXCL,
                 Mode::from_raw_mode(0o600),
             ) {
                 Ok(fd) => {
@@ -83,7 +100,9 @@ impl Store {
                     fs::fsync(&self.0).map_err(|_| "State directory sync failed")?;
                     fd
                 }
-                Err(rustix::io::Errno::EXIST) => open().map_err(|_| "Admission lock unavailable")?,
+                Err(rustix::io::Errno::EXIST) => {
+                    open().map_err(|_| "Admission lock unavailable")?
+                }
                 Err(_) => return Err("Admission lock creation failed".into()),
             }
         } else {
@@ -122,13 +141,20 @@ impl Store {
         Ok(fd)
     }
     pub fn read(&self) -> Result<Value, String> {
-        let fd = fs::openat(
+        self.read_optional()?.ok_or("Registry unavailable".into())
+    }
+
+    pub fn read_optional(&self) -> Result<Option<Value>, String> {
+        let fd = match fs::openat(
             &self.0,
             self.1,
             OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
             Mode::empty(),
-        )
-        .map_err(|_| "Registry unavailable")?;
+        ) {
+            Ok(fd) => fd,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(_) => return Err("Registry unavailable".into()),
+        };
         let st = fs::fstat(&fd).map_err(|_| "Registry metadata unavailable")?;
         if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile
             || st.st_uid != geteuid().as_raw()
@@ -147,9 +173,9 @@ impl Store {
         }
         let value: Value = serde_json::from_slice(&bytes).map_err(|_| "Malformed registry")?;
         if self.1 != REG && value.to_string().as_bytes() != bytes {
-            return Err("Noncanonical OAuth registry".into());
+            return Err("Noncanonical private registry".into());
         }
-        Ok(value)
+        Ok(Some(value))
     }
     pub fn write(&self, v: &Value, initial: bool) -> Result<(), String> {
         // Both the interrupted intent and the finished snapshot are published

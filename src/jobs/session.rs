@@ -68,6 +68,39 @@ impl LaunchAuthority {
     }
 }
 
+/// Native permission authorizes this runner until its audited revision is
+/// replaced or revoked. Unrelated policy edits leave the job running.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NativeAuthority {
+    config: PathBuf,
+    revision: String,
+}
+
+impl NativeAuthority {
+    pub fn new((config, revision): (&Path, &str)) -> Self {
+        Self { config: config.to_owned(), revision: revision.to_owned() }
+    }
+
+    pub fn guard(&self, owner: &str) -> Result<crate::http::operator::PolicyFile, String> {
+        use crate::http::operator::{Mode, PolicyFile, parse_document};
+        let policy = PolicyFile::try_read(&self.config).map_err(|_| "Native authorization policy unavailable")?;
+        if policy.pending_client()?.is_some() {
+            return Err("Policy update in progress".into());
+        }
+        let document = parse_document(&policy.bytes()?)?;
+        let version = document["policy_version"].as_u64();
+        let enabled = document["clients"].as_array().is_some_and(|clients| clients.iter().any(|entry| {
+            entry["id"] == owner && entry["disabled"] != true
+                && entry["yolo_revision"] == self.revision
+                && entry["expires_at_unix_seconds"].as_u64().is_some_and(|expiry| expiry > super::now())
+                && matches!(Mode::from_entry(entry, version), Ok(Mode::NativeYolo | Mode::Full))
+        }));
+        if !enabled { return Err("Native job authorization revoked".into()); }
+        Ok(policy)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct OAuthBinding {
@@ -131,8 +164,8 @@ pub(super) fn verify_oauth_grant_mode(
 }
 
 impl Jobs {
-    pub(crate) fn sessions_available(&self) -> bool {
-        self.scopes.is_some() && self.profiles.has_interactive() && self.available()
+    pub(crate) fn sessions_available(&self, native: bool) -> bool {
+        (native || self.scopes.is_some() && self.profiles.has_interactive()) && self.available()
     }
 
     pub(super) fn session_call(
@@ -155,11 +188,15 @@ impl Jobs {
                 .get("profile")
                 .and_then(Value::as_str)
                 .ok_or_else(|| argument_error("Expected an approved interactive profile"))?;
-            let mut profile = self.interactive_profile(name)?;
+            let mut profile = self.interactive_profile(name, policy)?;
             if let Some(timeout) = args.get("timeout_seconds") {
                 profile.timeout_seconds = timeout
                     .as_u64()
-                    .filter(|limit| (1..=profile.timeout_seconds).contains(limit))
+                    .filter(|limit| (1..=if profile.timeout_seconds == 0 {
+                            policy.job_runtime_limit_seconds
+                        } else {
+                            profile.timeout_seconds
+                        }).contains(limit))
                     .ok_or_else(|| {
                         argument_error("Timeout must fit the approved profile budget")
                     })?;
@@ -350,11 +387,26 @@ impl Jobs {
         Ok(status)
     }
 
-    fn interactive_profile(&self, name: &str) -> io::Result<Profile> {
-        self.profiles
-            .named(name)
-            .filter(|profile| profile.interactive)
-            .ok_or_else(|| argument_error("Unknown or noninteractive profile"))
+    fn interactive_profile(&self, name: &str, policy: JobPolicy<'_>) -> io::Result<Profile> {
+        if let Some(profile) = self.profiles.named(name).filter(|profile| profile.interactive) {
+            return Ok(profile);
+        }
+        if policy.full && matches!(name, "shell" | "pty") {
+            let mut profile = Profile {
+                executable: "/usr/bin/sh".into(),
+                args: vec![if name == "pty" { "-i" } else { "-s" }.into()],
+                interactive: true,
+                pty: name == "pty",
+                extended_runtime: true,
+                timeout_seconds: policy.native_default_timeout.unwrap_or(0),
+                max_output_bytes: policy.job_output_limit_bytes,
+                cpu_percent: policy.job_cpu_percent_limit,
+                memory_bytes: policy.job_memory_bytes_limit,
+            };
+            profile.validate(true)?;
+            return Ok(profile);
+        }
+        Err(argument_error("Unknown or noninteractive profile"))
     }
 
     fn session_receipt(
@@ -367,15 +419,15 @@ impl Jobs {
     ) -> io::Result<(Receipt, Profile)> {
         let receipt = self.owned_receipt(&self.store.job(id)?, owner)?;
         root.identity().handle()?;
-        let profile = self.interactive_profile(&receipt.profile)?;
+        let profile = self.interactive_profile(&receipt.profile, policy)?;
         let mounts = policy.workspace_mounts.unwrap_or_default();
         for mount in mounts {
             mount.identity().handle()?;
         }
         if receipt.session.as_ref() != Some(&Binding::new(auth, root.identity(), profile.pty))
             || receipt.oauth_family != policy.oauth_family
-            || !receipt.isolated
-            || receipt.full
+            || (!receipt.isolated && !policy.full)
+            || receipt.full != policy.full
             || receipt.yolo != policy.yolo
             || receipt.broad.as_ref() != policy.broad
             || !receipt
@@ -386,6 +438,7 @@ impl Jobs {
             || receipt.timeout_seconds
                 > profile
                     .timeout_seconds
+                    .max(if profile.timeout_seconds == 0 { policy.job_runtime_limit_seconds } else { 0 })
                     .min(policy.job_runtime_limit_seconds)
             || receipt.max_output_bytes != profile.max_output_bytes
         {

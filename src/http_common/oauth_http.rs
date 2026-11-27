@@ -207,7 +207,13 @@ impl Server {
         if !state.admin_budget.take(30) {
             return oauth_error(Error::Capacity);
         }
-        consent(&mut state, body, eligible, native_scope, yolo_scope.as_ref())
+        consent(
+            &mut state,
+            body,
+            eligible,
+            native_scope,
+            yolo_scope.as_ref(),
+        )
     }
     pub fn local_client(&self) -> &str {
         &self.local_client
@@ -1103,10 +1109,12 @@ fn operator(state: &mut State, path: &str, body: &[u8], now: Instant) -> Reply {
             if state.registry.get(&oauth_client_id).is_none() {
                 return oauth_error(Error::InvalidGrant);
             }
-            match state
-                .grants
-                .approve_local_with_mode(handle, &state.local_client, approved_mode, now)
-            {
+            match state.grants.approve_local_with_mode(
+                handle,
+                &state.local_client,
+                approved_mode,
+                now,
+            ) {
                 Ok(code) => {
                     state.registry.set_mode(&oauth_client_id, approved_mode);
                     if approved_mode == ConnectionMode::Standard {
@@ -1123,7 +1131,10 @@ fn operator(state: &mut State, path: &str, body: &[u8], now: Instant) -> Reply {
                         },
                     );
                     audit("approved");
-                    json_reply(StatusCode::OK, json!({"approved":true,"mode":approved_mode.as_str()}))
+                    json_reply(
+                        StatusCode::OK,
+                        json!({"approved":true,"mode":approved_mode.as_str()}),
+                    )
                 }
                 Err(e) => oauth_error(e),
             }

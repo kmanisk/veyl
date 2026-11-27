@@ -37,16 +37,16 @@ class ContextAndSystemTests(unittest.TestCase):
         }
         self.repo = Path(self.f.doc["clients"][0]["root"])
 
-    def start(self, tools, broad=False):
-        self.f.doc["policy_version"] = 3
+    def start(self, tools, native=False):
+        self.f.doc["policy_version"] = 4
         for client in self.f.doc["clients"]:
             client["mode"] = "standard"
             client["disabled"] = False
         primary = self.f.doc["clients"][0]
         primary["tools"] = tools
         self.f.write_config()
-        if broad:
-            self.f.cli("mode", "yolo", primary["id"])
+        if native:
+            self.f.cli("mode", "yolo", primary["id"], "--confirm-native")
         proc = self.f.start()
         self.addCleanup(self.f.stop, proc)
         return self.f.connect(token=pf.TOKEN)
@@ -150,7 +150,7 @@ class ContextAndSystemTests(unittest.TestCase):
         ssh_dir.mkdir(mode=0o700)
         (ssh_dir / "id_ed25519").write_text("PRIVATE\n")
 
-        sess = self.start(["chezmoi_inspect"], broad=True)
+        sess = self.start(["chezmoi_inspect"], native=True)
         res_gen = self.call(sess, "chezmoi_inspect", {"path": "generated.conf"})
         self.assertEqual(res_gen["kind"], "generated_target")
         self.assertIn("Do not edit", res_gen["generatedMarker"])
@@ -161,9 +161,9 @@ class ContextAndSystemTests(unittest.TestCase):
         res_src = self.call(sess, "chezmoi_inspect", {"path": str(dot_src)})
         self.assertEqual(res_src["kind"], "source")
 
-        # Protected paths (~/.ssh and private-state/clients.json) must remain denied even in Broad YOLO.
-        self.call(sess, "chezmoi_inspect", {"path": str(ssh_dir / "id_ed25519")}, error=True)
-        self.call(sess, "chezmoi_inspect", {"path": str(self.f.config)}, error=True)
+        # Native YOLO can inspect locations outside the authorized Standard workspace.
+        self.call(sess, "chezmoi_inspect", {"path": str(ssh_dir / "id_ed25519")})
+        self.call(sess, "chezmoi_inspect", {"path": str(self.f.config)})
 
 
 if __name__ == "__main__":

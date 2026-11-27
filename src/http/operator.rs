@@ -32,15 +32,17 @@ pub(crate) enum Mode {
     ScopedYolo,
     BroadYolo,
     Full,
+    NativeYolo,
     Disabled,
 }
 
 impl Mode {
-    pub(crate) fn from_entry(entry: &Value) -> Result<Self, String> {
+    pub(crate) fn from_entry(entry: &Value, version: Option<u64>) -> Result<Self, String> {
         match entry.get("mode") {
             None => Ok(Self::Standard),
             Some(value) => match value.as_str() {
                 Some("standard") => Ok(Self::Standard),
+                Some("yolo") if version == Some(4) => Ok(Self::NativeYolo),
                 Some("yolo") if entry.get("disabled").is_some() => Ok(Self::BroadYolo),
                 Some("yolo") => Ok(Self::ScopedYolo),
                 Some("broad_yolo") => Ok(Self::BroadYolo),
@@ -57,6 +59,7 @@ impl Mode {
             Self::ScopedYolo => "yolo",
             Self::BroadYolo => "broad_yolo",
             Self::Full => "full",
+            Self::NativeYolo => "native_yolo",
             Self::Disabled => "disabled",
         }
     }
@@ -65,10 +68,8 @@ impl Mode {
 impl From<Mode> for ExecutionMode {
     fn from(mode: Mode) -> Self {
         match mode {
-            Mode::Standard => Self::Standard,
-            Mode::ScopedYolo => Self::PersistentYolo,
-            Mode::BroadYolo => Self::BroadYolo,
-            Mode::Full => Self::Full,
+            Mode::Standard | Mode::ScopedYolo | Mode::BroadYolo => Self::Standard,
+            Mode::Full | Mode::NativeYolo => Self::Yolo,
             Mode::Disabled => Self::Disabled,
         }
     }
@@ -106,24 +107,30 @@ pub(crate) fn verify_approvals_except(
                 (
                     client.id.as_str(),
                     revision,
-                    if client.native_tool_preset {
-                        "yolo_native"
-                    } else {
-                        client.mode.audit_mode().unwrap_or("disabled")
-                    },
+                    client.approval_mode.unwrap_or("disabled"),
                 )
             })
         })
         .collect();
-    if expected.is_empty() {
+    let Some(audit) = settings.audit_log.as_deref() else {
+        return if expected.is_empty() { Ok(()) } else { Err("Managed YOLO requires a private audit ledger".into()) };
+    };
+    let mut head = audit.as_os_str().to_os_string();
+    head.push(".head");
+    if expected.is_empty() && !Path::new(&head).try_exists()
+        .map_err(|_| "Cannot inspect audit checkpoint")?
+    {
         return Ok(());
     }
-    let audit = settings
-        .audit_log
-        .as_deref()
-        .ok_or("Managed YOLO requires a private audit ledger")?;
-    AuditSink::verify_mode_approvals(audit, &expected)
-        .map_err(|error| format!("Cannot verify durable YOLO authorization: {error}"))
+    let schema_four = settings.policy_version == Some(4);
+    let activation: Vec<_> = if schema_four {
+        settings.clients.iter().filter(|client| Some(client.id.as_str()) != skip)
+            .map(|client| (client.id.as_str(), client.is_disabled())).collect()
+    } else {
+        Vec::new()
+    };
+    AuditSink::verify_client_policy(audit, &expected, &activation, schema_four)
+        .map_err(|error| format!("Cannot verify durable client authorization: {error}"))
 }
 
 pub(crate) fn revision() -> io::Result<String> {
@@ -201,6 +208,10 @@ impl PolicyFile {
     pub(crate) fn lock(path: &Path, exclusive: bool) -> Result<Self, String> {
         Self::open(path, exclusive, false)
             .map_err(|_| "Private authorization storage unavailable".into())
+    }
+
+    pub(crate) fn try_read(path: &Path) -> io::Result<Self> {
+        Self::open(path, false, true)
     }
 
     pub(crate) fn input_snapshot(path: &Path, digest: &[u8; 32]) -> io::Result<Self> {
@@ -474,7 +485,8 @@ pub(crate) fn policy_path(config: &Path, path: &Path) -> bool {
     config == path
         || config
             .parent()
-            .is_some_and(|parent| path.starts_with(parent.join("timeshift")))
+            .is_some_and(|parent| path.starts_with(parent.join("timeshift"))
+                || path.starts_with(parent.join(companion(config.file_name().unwrap_or_default(), ".goals"))))
         || config.parent() == path.parent()
             && path.file_name().is_some_and(|name| {
                 let config_name = config.file_name().unwrap_or_default();
@@ -482,13 +494,14 @@ pub(crate) fn policy_path(config: &Path, path: &Path) -> bool {
                     || name == companion(config_name, ".dashboard-pair")
                     || name == companion(config_name, ".serve-receipt")
                     || name == companion(config_name, ".policy-pending")
+                    || name == companion(config_name, ".goals")
                     || name.as_encoded_bytes().starts_with(b".mcp-policy-")
                     || name.as_encoded_bytes().starts_with(b".mcp-upstream-")
             })
 }
 
 // Reject duplicate fields before using JSON values for an atomic edit.
-pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
+pub(crate) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
     let StrictJson(document) = serde_json::from_slice(bytes)
         .map_err(|_| "Invalid or ambiguous credential configuration")?;
     const TOP: &[&str] = &[
@@ -545,7 +558,7 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
     }
     if document
         .get("policy_version")
-        .is_some_and(|version| !matches!(version.as_u64(), Some(1..=3)))
+        .is_some_and(|version| !matches!(version.as_u64(), Some(1..=4)))
     {
         return Err("Unsupported authorization policy schema".into());
     }
@@ -571,7 +584,7 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
             }
         }
         if let Some(limit) = entry.get("job_runtime_limit_seconds")
-            && (version != Some(3)
+            && (!matches!(version, Some(3 | 4))
                 || document.get("job_profiles").is_none()
                 || !limit.as_u64().is_some_and(|n| {
                     (crate::jobs::SHORT_RUNTIME_MAX..=crate::jobs::EXTENDED_RUNTIME_MAX)
@@ -581,25 +594,26 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
             return Err("Extended runtime requires a managed version 3 job policy and a limit from 300 to 86400 seconds".into());
         }
         if entry.get("native_tool_preset").is_some()
-            && (version != Some(3)
+            && (!matches!(version, Some(3 | 4))
                 || entry["mode"] != "yolo"
                 || entry["native_tool_preset"] != true)
         {
             return Err("Native tool preset requires an explicitly approved YOLO policy".into());
         }
-        if version == Some(3) {
-            if !matches!(entry["mode"].as_str(), Some("standard" | "yolo" | "full"))
+        if matches!(version, Some(3 | 4)) {
+            if !(matches!(entry["mode"].as_str(), Some("standard" | "yolo"))
+                || (version == Some(3) && entry["mode"] == "full"))
                 || entry["disabled"].as_bool().is_none()
                 || entry.get("yolo_roots").is_some()
                 || entry.get("yolo_shared_roots").is_some()
             {
-                return Err("Invalid version 3 client policy".into());
+                return Err("Invalid client policy".into());
             }
         } else if entry.get("disabled").is_some() || entry.get("extra_roots").is_some() {
             return Err("Independent client state and extra_roots require policy version 3".into());
         }
     }
-    if !matches!(version, Some(2 | 3))
+    if !matches!(version, Some(2..=4))
         && document["clients"]
             .as_array()
             .into_iter()

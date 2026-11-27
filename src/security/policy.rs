@@ -122,7 +122,9 @@ pub fn authorize(input: &PolicyInput<'_>) -> Result<(), Denial> {
         | Action::McpTest
         | Action::ProposeExtension
         | Action::ListUpstreams
-        | Action::CallUpstream => Ok(()),
+        | Action::CallUpstream
+        | Action::GoalRead
+        | Action::GoalWrite => Ok(()),
         _ => {
             // No trust decision can be upgraded merely because the caller
             // requested YOLO. A signed local operator lease is not yet wired.

@@ -1,7 +1,6 @@
 //! Confined, audited execution for the 12 structured Git tools.
 
 use std::fs;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -11,7 +10,7 @@ use mcp_gateway::security::policy::ExecutionMode;
 use serde_json::{Map, Value, json};
 
 use crate::http::admission::{Client, Configuration};
-use crate::jobs::{Broad, GitToolRequest};
+use crate::jobs::GitToolRequest;
 use crate::protected_paths::{Kind, OPTIONAL_DEFAULTS, READONLY_DEFAULTS, is_mandatory};
 use crate::tools::registry::{Tool, tool_text};
 
@@ -223,11 +222,7 @@ fn is_protected(path: &Path, config: &Path, settings: &Configuration, readonly: 
     false
 }
 
-struct ResolvedRepo {
-    repo: PathBuf,
-    broad: Option<Broad>,
-    identity: Option<[u64; 2]>,
-}
+
 
 fn resolve_repo(
     requested: Option<&str>,
@@ -235,7 +230,7 @@ fn resolve_repo(
     settings: &Configuration,
     client: &Client,
     readonly: bool,
-) -> Result<ResolvedRepo, String> {
+) -> Result<PathBuf, String> {
     let base = match requested {
         None => client.root.clone(),
         Some(raw) => {
@@ -253,41 +248,13 @@ fn resolve_repo(
     }
 
     match client.mode {
-        ExecutionMode::Full => {
+        ExecutionMode::Yolo => {
             let repo = find_git_repo_bounded(&canonical, None)?;
             if is_protected(&repo, config, settings, readonly) {
                 return Err("Protected repository root".into());
             }
             let _ = open_absolute_dir(&repo).map_err(|_| "Cannot open repository directory")?;
-            Ok(ResolvedRepo {
-                repo,
-                broad: None,
-                identity: None,
-            })
-        }
-        ExecutionMode::BroadYolo => {
-            let broad = Broad::prepare(config, settings)?;
-            if broad.is_masked(&canonical) || (!readonly && broad.is_readonly(&canonical)) {
-                return Err("Repository path is protected".into());
-            }
-            let repo = find_git_repo_bounded(&canonical, None)?;
-            if broad.is_masked(&repo)
-                || (!readonly && broad.is_readonly(&repo))
-                || is_protected(&repo, config, settings, readonly)
-            {
-                return Err("Repository root is protected".into());
-            }
-            if !readonly {
-                broad
-                    .file_parent(&repo.join(".git"), true)
-                    .map_err(|_| "Repository is read-only or protected")?;
-            }
-            let meta = fs::metadata(&repo).map_err(|_| "Repository unavailable")?;
-            Ok(ResolvedRepo {
-                repo,
-                broad: Some(broad),
-                identity: Some([meta.dev(), meta.ino()]),
-            })
+            Ok(repo)
         }
         _ => {
             let mut roots: Vec<&Path> = Vec::new();
@@ -312,11 +279,7 @@ fn resolve_repo(
             if is_protected(&repo, config, settings, readonly) {
                 return Err("Protected repository root".into());
             }
-            Ok(ResolvedRepo {
-                repo,
-                broad: None,
-                identity: None,
-            })
+            Ok(repo)
         }
     }
 }
@@ -358,16 +321,12 @@ fn execute(
     let args = val.as_object().ok_or("Expected arguments object")?;
 
     let network = matches!(tool, Tool::GitPull | Tool::GitPush);
-    if network && !matches!(client.mode, ExecutionMode::BroadYolo | ExecutionMode::Full) {
-        return Err("Remote Git operations require YOLO or FULL mode".into());
+    if network && client.mode != ExecutionMode::Yolo {
+        return Err("Remote Git operations require YOLO mode".into());
     }
 
     let readonly = is_readonly_op(tool, args);
-    let ResolvedRepo {
-        repo,
-        broad,
-        identity,
-    } = resolve_repo(
+    let repo = resolve_repo(
         args.get("path").and_then(Value::as_str),
         config,
         settings,
@@ -382,12 +341,7 @@ fn execute(
             argv: vec!["add".into(), "-A".into()],
             readonly: false,
             network: false,
-            broad: if client.mode == ExecutionMode::BroadYolo {
-                broad.clone()
-            } else {
-                None
-            },
-            identity,
+            native: client.mode == ExecutionMode::Yolo,
         };
         let add_bytes =
             serde_json::to_vec(&add_spec).map_err(|_| "Cannot encode git add request")?;
@@ -424,12 +378,7 @@ fn execute(
         argv,
         readonly,
         network,
-        broad: if client.mode == ExecutionMode::BroadYolo {
-            broad
-        } else {
-            None
-        },
-        identity,
+        native: client.mode == ExecutionMode::Yolo,
     };
     let spec_bytes = serde_json::to_vec(&spec).map_err(|_| "Cannot encode git worker request")?;
     let exe = std::env::current_exe().map_err(|_| "Gateway executable unavailable")?;

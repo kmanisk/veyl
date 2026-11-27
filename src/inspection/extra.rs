@@ -41,11 +41,11 @@ pub(crate) fn run(
         None => &empty,
     };
     match tool {
-        Tool::LoadPathRules => load_path_rules(args, config, settings, client, reserved),
+        Tool::LoadPathRules => load_path_rules(args, config, client, reserved),
         Tool::ProjectSkillsList => list_skills(args, client, reserved),
         Tool::ProjectSkillLoad => load_skill(args, client, reserved),
         Tool::Remember => remember(args, config, settings, client, reserved),
-        Tool::ChezmoiInspect => chezmoi_inspect(args, config, settings, client, reserved),
+        Tool::ChezmoiInspect => chezmoi_inspect(args, config, client, reserved),
         _ => Err("Unsupported workspace context tool".into()),
     }
 }
@@ -102,7 +102,6 @@ fn read_regular_beneath(
 fn load_path_rules(
     args: &serde_json::Map<String, Value>,
     config: &Path,
-    settings: &Configuration,
     client: &Client,
     reserved: &dyn Fn(&Path) -> bool,
 ) -> Result<Value, String> {
@@ -124,19 +123,11 @@ fn load_path_rules(
         let abs = req;
         let mode = client.mode;
         if operator::policy_path(config, abs)
-            && mode != mcp_gateway::security::policy::ExecutionMode::Full
+            && mode != mcp_gateway::security::policy::ExecutionMode::Yolo
         {
             return Err("Protected path cannot be inspected".into());
         }
-        if matches!(
-            mode,
-            mcp_gateway::security::policy::ExecutionMode::BroadYolo
-        ) {
-            let broad = crate::jobs::broad::Broad::prepare(config, settings)?;
-            broad
-                .file_parent(abs, false)
-                .map_err(|_| "Protected path cannot be inspected")?;
-        } else if mode != mcp_gateway::security::policy::ExecutionMode::Full
+        if mode != mcp_gateway::security::policy::ExecutionMode::Yolo
             && !abs.starts_with(root.path())
             && !client
                 .extra_roots
@@ -933,7 +924,6 @@ fn run_readonly_cmd(
 fn chezmoi_inspect(
     args: &serde_json::Map<String, Value>,
     config: &Path,
-    settings: &Configuration,
     client: &Client,
     reserved: &dyn Fn(&Path) -> bool,
 ) -> Result<Value, String> {
@@ -957,7 +947,7 @@ fn chezmoi_inspect(
     };
     let canonical = canonical_with_tail(&requested)?;
     let mode = client.mode;
-    if mode != mcp_gateway::security::policy::ExecutionMode::Full
+    if mode != mcp_gateway::security::policy::ExecutionMode::Yolo
         && (operator::policy_path(config, &requested)
             || operator::policy_path(config, &canonical)
             || reserved(&requested)
@@ -966,13 +956,7 @@ fn chezmoi_inspect(
         return Err("Protected path cannot be inspected".into());
     }
     match mode {
-        mcp_gateway::security::policy::ExecutionMode::Full => {}
-        mcp_gateway::security::policy::ExecutionMode::BroadYolo => {
-            let broad = crate::jobs::broad::Broad::prepare(config, settings)?;
-            broad
-                .file_parent(&canonical, false)
-                .map_err(|_| "Protected path cannot be inspected")?;
-        }
+        mcp_gateway::security::policy::ExecutionMode::Yolo => {}
         _ => {
             let allowed = std::iter::once(root.path())
                 .chain(client.extra_roots.iter().map(MutationRoot::path))

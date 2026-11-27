@@ -4,6 +4,8 @@ mod anchor;
 mod chain;
 mod ledger;
 
+pub const POLICY_SCHEMA_FOUR: &str = "policy_schema_4";
+
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -208,27 +210,75 @@ impl AuditSink {
             "tool": tool,
             "phase": phase.label(),
             "unix_seconds": unix_seconds,
-            "yolo": matches!(mode, "yolo" | "broad_yolo"),
+            "yolo": matches!(mode, "yolo" | "broad_yolo" | "native_yolo"),
             "effective_mode": if mode == "yolo" { "legacy_scoped_yolo" } else { mode },
         }))
     }
 
+    /// The migration intent is a one-way compatibility boundary, even
+    /// when a crash leaves the policy file on its previous schema.
+    pub fn has_schema_four_migration(path: &Path) -> io::Result<bool> {
+        let mut migrated = false;
+        Ledger::inspect_transitions(path, |record| {
+            migrated |= record["tool"] == POLICY_SCHEMA_FOUR && record["phase"] == "intent";
+        })?;
+        Ok(migrated)
+    }
+
     pub fn verify_mode_approvals(path: &Path, expected: &[(&str, &str, &str)]) -> io::Result<()> {
+        Self::verify_client_policy(path, expected, &[], true)
+    }
+
+    pub fn verify_client_policy(
+        path: &Path,
+        expected: &[(&str, &str, &str)],
+        disabled: &[(&str, bool)],
+        schema_four: bool,
+    ) -> io::Result<()> {
         let mut approvals: std::collections::HashMap<_, _> = expected
             .iter()
             .map(|&(principal, revision, mode)| (principal, (revision, mode, false)))
             .collect();
+        let mut activation: std::collections::HashMap<_, _> = disabled
+            .iter()
+            .map(|&(principal, disabled)| (principal, (disabled, true)))
+            .collect();
+        let mut migrated = false;
         Ledger::inspect_transitions(path, |record| {
-            if record["tool"] == "yolo_transition"
-                && record["phase"] == "success"
-                && let Some((revision, mode, matched)) = record["principal"]
-                    .as_str()
-                    .and_then(|principal| approvals.get_mut(principal))
-            {
-                *matched = record["requested_mode"].as_str() == Some(*mode)
-                    && record["policy_revision"].as_str() == Some(*revision);
+            if record["tool"] == POLICY_SCHEMA_FOUR && record["phase"] == "intent" {
+                migrated = true;
+            }
+            if record["phase"] != "success" {
+                return;
+            }
+            let Some(principal) = record["principal"].as_str() else {
+                return;
+            };
+            match record["tool"].as_str() {
+                Some("yolo_transition") => {
+                    if let Some((revision, mode, matched)) = approvals.get_mut(principal) {
+                        *matched = record["requested_mode"].as_str() == Some(*mode)
+                            && record["policy_revision"].as_str() == Some(*revision);
+                    }
+                }
+                Some("schema4_client_enable" | "schema4_client_disable") => {
+                    if let Some((disabled, matched)) = activation.get_mut(principal) {
+                        *matched = *disabled == (record["tool"] == "schema4_client_disable");
+                    }
+                }
+                _ => (),
             }
         })?;
+        if migrated && !schema_four {
+            return Err(io::Error::other(
+                "Authorization policy predates audited schema 4 migration",
+            ));
+        }
+        if activation.values().any(|(_, matched)| !matched) {
+            return Err(io::Error::other(
+                "Client activation state conflicts with the audit ledger",
+            ));
+        }
         if approvals.values().any(|(_, _, matched)| !matched) {
             return Err(io::Error::other(
                 "Execution mode has no matching successful audit transition",
@@ -256,7 +306,7 @@ impl AuditSink {
             "previous_mode": previous,
             "requested_mode": requested,
             "policy_revision": revision,
-            "yolo": matches!(requested, "yolo" | "broad_yolo" | "yolo_native"),
+            "yolo": matches!(requested, "yolo" | "broad_yolo" | "yolo_native" | "native_yolo" | "native_yolo_preset"),
         }))
     }
 

@@ -152,11 +152,6 @@ fn fetch_registrations(base: &Path, profile: &Path, dir: &OwnedFd) -> Result<(bo
         .and_then(|policy| policy.snapshot())
         .ok()
         .filter(|settings| settings.managed && settings.jobs.is_some())
-        .and_then(|settings| {
-            crate::jobs::Broad::prepare(&config_path, &settings)
-                .ok()
-                .and_then(|broad| settings.clients.first().and_then(|c| broad.probe(&c.root).ok()))
-        })
         .is_some();
     Ok((false, regs, supports_yolo))
 }
@@ -199,7 +194,7 @@ pub(crate) fn managed_set_mode(
     onboarding::private_directory(&profile, true)?;
     let (live, regs, supports_yolo) = fetch_registrations(&base, &profile, &dir)?;
     if target == ConnectionMode::Yolo && !supports_yolo {
-        return Err("Broad YOLO isolation (bwrap/jobs) is unavailable for this managed profile".into());
+        return Err("Native YOLO requires a managed profile with a private job store".into());
     }
     let ids: Vec<String> = if all {
         if regs.is_empty() {

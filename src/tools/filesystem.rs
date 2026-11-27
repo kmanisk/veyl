@@ -70,28 +70,13 @@ impl MutationRoot {
     pub(crate) fn open_host_parent(path: &Path) -> io::Result<Self> {
         if rustix::process::geteuid().is_root() {
             return Err(io::Error::other(
-                "FULL file tools require a non-root gateway",
+                "YOLO file tools require a non-root gateway",
             ));
         }
         Ok(Self {
             host_parent: true,
-            ..Self::open(path)?
+            ..Self::open(&path.canonicalize()?)?
         })
-    }
-
-    pub(crate) fn open_broad_parent(
-        path: &Path,
-        protected: BTreeSet<[u64; 2]>,
-    ) -> io::Result<Self> {
-        let root = Self {
-            protected: Some(protected),
-            ..Self::open_host_parent(path)?
-        };
-        let metadata = fs::fstat(&root.directory)?;
-        if root.is_protected(&metadata) {
-            return Err(io::Error::other("Protected directory identity"));
-        }
-        Ok(root)
     }
 
     fn is_protected(&self, metadata: &Stat) -> bool {
@@ -391,7 +376,7 @@ impl Target<'_> {
     pub(super) fn check_write_access(&self, file: &File) -> Result<(), MutationError> {
         if self.root.host_parent {
             // A directory owner can replace a read-only file by rename.
-            // FULL must have permission to write the original inode as well.
+            // Native replacement must have permission to write the original inode as well.
             reopen_regular(file, OFlags::WRONLY | OFlags::NONBLOCK)
                 .map_err(|_| Rejected("Target is not writable"))?;
         }

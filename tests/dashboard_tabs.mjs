@@ -154,6 +154,17 @@ try {
   await evaluate("document.querySelector('nav a[href=\"#marketplace\"]').click()");
   await evaluate("document.querySelector('#catalog-query').value='no-such-entry';document.querySelector('#catalog-query').dispatchEvent(new Event('input'))");
   assert.equal(await evaluate("document.querySelectorAll('#catalog-cards article').length"),0);
+  await evaluate("document.querySelector('#goals-nav').click()");
+  await until(()=>evaluate("document.querySelector('#goals-list button')?.textContent === 'Browser roadmap fixture'"));
+  assert.deepEqual(await evaluate(visible),["goals"]);
+  await evaluate("document.querySelector('#goals-list button').click()");
+  await until(()=>evaluate("document.querySelector('#goal-detail').textContent.includes('Review goal')"));
+  assert.match(await evaluate("document.querySelector('#goal-detail').textContent"),/Observe persisted goal/);
+  const goalButton = label => "Array.from(document.querySelectorAll('#goal-detail button')).find(button=>button.textContent===" + JSON.stringify(label) + ")";
+  await evaluate(goalButton("Pause")+".click()");
+  await until(()=>evaluate("Boolean("+goalButton("Resume")+")"));
+  await evaluate(goalButton("Resume")+".click()");
+  await until(()=>evaluate("document.querySelector('#goal-detail').textContent.includes('running')"));
   await evaluate("document.querySelector('nav a[href=\"#audit\"]').click()");
   await send("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
   assert.deepEqual(await evaluate(visible),["audit"]);

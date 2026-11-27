@@ -1,5 +1,12 @@
 # Rust MCP Gateway — Milestone 1 Specification
 
+## Active candidate contract
+
+See [Standard and YOLO acceptance](TWO_MODE_ACCEPTANCE.md) for the two-mode
+authorization and migration contract. See [Durable development goals](../GOALS.md)
+for goal lifecycle, client-driven continuation and operator access. The
+milestone specifications below record the historical acceptance contracts.
+
 ## Scope and protocol contract
 
 The **only** transport is a foreground subprocess on newline-delimited **stdio**.

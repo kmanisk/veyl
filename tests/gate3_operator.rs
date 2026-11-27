@@ -25,12 +25,13 @@ impl Fixture {
         }
         let fixture = Self(dir);
         fixture.write(&json!({
-            "policy_version": 1,
+            "policy_version": 4,
             "audit_log": fixture.0.join("audit/events"),
             "clients": [{
                 "id": "fixture", "root": fixture.0.join("workspace"),
                 "token_sha256": "a".repeat(64), "expires_at_unix_seconds": u64::MAX,
-                "tools": ["read_file"], "mode": mode, "yolo_roots": [],
+                "tools": ["read_file"], "mode": if mode == "disabled" { "standard" } else { mode },
+                "disabled": mode == "disabled",
             }]
         }));
         fixture
@@ -59,7 +60,7 @@ impl Fixture {
     }
 
     fn mode(&self, args: &[&str]) -> Output {
-        let mut command = vec!["yolo"];
+        let mut command = vec!["mode"];
         command.extend_from_slice(args);
         command.extend_from_slice(&["--client", "fixture"]);
         self.run(&command)
@@ -86,7 +87,12 @@ fn new_mode_cli_uses_the_existing_audited_policy_transaction() {
     let f = Fixture::new("standard");
     let original = f.read();
     assert!(ok(f.run(&["mode", "get", "fixture"])).contains("mode=standard"));
-    assert!(!f.run(&["mode", "set", "fixture", "full"]).status.success());
+    assert!(
+        !f.run(&["mode", "set", "fixture", "full", "--confirm-native"])
+            .status
+            .success()
+    );
+    assert!(!f.run(&["mode", "yolo", "fixture"]).status.success());
     assert_eq!(f.read(), original);
     assert!(
         ok(f.run(&[
@@ -95,12 +101,14 @@ fn new_mode_cli_uses_the_existing_audited_policy_transaction() {
             "--client",
             "fixture",
             "--mode",
-            "full",
-            "--confirm-full"
+            "yolo",
+            "--confirm-native"
         ]))
-        .contains("mode=full")
+        .contains("mode=yolo")
     );
-    assert!(ok(f.run(&["mode", "get", "--client", "fixture"])).contains("effective_policy=full"));
+    assert!(
+        ok(f.run(&["mode", "get", "--client", "fixture"])).contains("migration_required=false")
+    );
     assert!(ok(f.run(&["mode", "set", "fixture", "standard"])).contains("mode=standard"));
     let after = f.read();
     assert_eq!(
@@ -110,63 +118,49 @@ fn new_mode_cli_uses_the_existing_audited_policy_transaction() {
     assert_eq!(after["clients"][0]["mode"], "standard");
     assert!(after["clients"][0].get("yolo_revision").is_none());
     let audit = ok(f.run(&["audit", "inspect"]));
-    assert!(audit.contains("\"requested_mode\":\"full\""));
+    assert!(audit.contains("\"requested_mode\":\"native_yolo_preset\""));
     assert!(audit.contains("\"requested_mode\":\"standard\""));
     assert!(ok(f.run(&["audit", "verify"])).contains("VERIFY_RESULT=VALID"));
 }
 
 #[test]
-fn version_three_migration_preserves_scopes_and_refuses_legacy_enable() {
+fn version_four_migration_retains_standard_grants_without_promotion() {
     let f = Fixture::new("standard");
-    let extra = f.0.join("extra");
-    DirBuilder::new().mode(0o700).create(&extra).unwrap();
-    let mut document = f.read();
-    document["clients"][0]["yolo_roots"] = json!([extra]);
-    f.write(&document);
-    ok(f.mode(&["enable"]));
-    let old_policy = f.read();
-    assert_eq!(old_policy["clients"][0]["mode"], "yolo");
+    let mut original = f.read();
+    original["policy_version"] = 1.into();
+    original["clients"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("disabled");
+    f.write(&original);
+    assert!(!f.mode(&["yolo", "--confirm-native"]).status.success());
     ok(f.run(&["mode", "migrate"]));
     let migrated = f.read();
-    assert_eq!(migrated["policy_version"], 3);
+    assert_eq!(migrated["policy_version"], 4);
     assert_eq!(migrated["clients"][0]["mode"], "standard");
-    assert_eq!(migrated["clients"][0]["extra_roots"], json!([extra]));
-    assert_eq!(migrated["clients"][0]["disabled"], false);
     assert_eq!(
         migrated["clients"][0]["token_sha256"],
-        old_policy["clients"][0]["token_sha256"]
+        original["clients"][0]["token_sha256"]
+    );
+    assert_eq!(
+        migrated["clients"][0]["tools"],
+        original["clients"][0]["tools"]
     );
     assert!(migrated["clients"][0].get("yolo_revision").is_none());
-    assert!(!f.mode(&["enable"]).status.success());
-    assert_eq!(f.read(), migrated);
-    f.write(&old_policy);
-    assert!(!f.mode(&["status"]).status.success());
-    f.write(&migrated);
-    assert!(ok(f.run(&["mode", "get", "fixture"])).contains("mode=standard"));
+    assert!(ok(f.mode(&["get"])).contains("mode=standard"));
 }
 
 #[test]
-fn version_three_independent_client_activation_preserves_mode() {
+fn disabled_clients_return_to_standard_on_enable() {
     let f = Fixture::new("standard");
-    ok(f.run(&["mode", "migrate"]));
-    ok(f.run(&["mode", "set", "fixture", "full", "--confirm-full"]));
-    let active = f.read();
-    ok(f.run(&["mode", "disable", "fixture"]));
-    let mut disabled = active.clone();
-    disabled["clients"][0]["disabled"] = true.into();
-    assert_eq!(f.read(), disabled);
-    assert!(ok(f.run(&["mode", "get", "fixture"])).contains("client_state=disabled"));
-    assert!(
-        !f.run(&["mode", "set", "fixture", "standard"])
-            .status
-            .success()
-    );
-    ok(f.run(&["mode", "enable", "fixture"]));
-    assert_eq!(f.read(), active);
+    ok(f.mode(&["yolo", "--confirm-native"]));
+    ok(f.mode(&["disable"]));
+    assert!(ok(f.mode(&["get"])).contains("client_state=disabled mode=standard"));
+    assert!(!f.mode(&["yolo", "--confirm-native"]).status.success());
+    ok(f.mode(&["enable"]));
+    assert!(ok(f.mode(&["get"])).contains("client_state=enabled mode=standard"));
+    assert!(f.read()["clients"][0].get("yolo_revision").is_none());
     assert!(ok(f.run(&["audit", "verify"])).contains("VERIFY_RESULT=VALID"));
-    ok(f.run(&["mode", "set", "fixture", "standard"]));
-    assert_eq!(f.read()["clients"][0]["mode"], "standard");
-    assert_eq!(f.read()["policy_version"], 3);
 }
 
 #[test]
@@ -237,104 +231,69 @@ fn new_user_init_and_default_commands_need_no_manual_json() {
 }
 
 #[test]
-fn reset_recovers_disabled_to_standard_and_preserves_credentials() {
+fn enable_preserves_credentials() {
     let f = Fixture::new("disabled");
-    let previous = f.read();
-    assert!(!f.mode(&["enable"]).status.success());
-    let output = ok(f.mode(&["reset"]));
-    assert!(output.contains("client=fixture client_state=enabled"));
-    assert!(output.contains("mode=standard"));
+    let mut expected = f.read();
+    let output = ok(f.mode(&["enable"]));
+    assert!(output.contains("client=fixture client_state=enabled mode=standard"));
     assert!(!output.contains(&"a".repeat(64)));
-    let mut expected = previous;
-    expected["clients"][0]["mode"] = "standard".into();
+    expected["clients"][0]["disabled"] = false.into();
     assert_eq!(f.read(), expected);
     let audit = ok(f.run(&["audit", "inspect"]));
-    assert!(audit.contains("\"previous_mode\":\"disabled\""));
-    assert!(audit.contains("\"requested_mode\":\"standard\""));
+    assert!(audit.contains("client_enable"));
     assert!(audit.contains("\"phase\":\"success\""));
-}
-
-#[test]
-fn legacy_approval_is_scoped_across_processes_and_cannot_be_replayed() {
-    let f = Fixture::new("standard");
-    assert!(ok(f.mode(&["enable"])).contains("effective_policy=legacy_scoped_yolo"));
-    let granted = f.read();
-    assert_eq!(granted["policy_version"], 1);
-    assert_eq!(granted["clients"][0]["mode"], "yolo");
-    assert_eq!(granted["clients"][0]["yolo_roots"], json!([]));
-    assert!(ok(f.mode(&["status"])).contains("effective_policy=legacy_scoped_yolo"));
-    assert!(ok(f.mode(&["set", "--mode", "standard"])).contains("mode=standard"));
-    f.write(&granted);
-    assert!(!f.mode(&["status"]).status.success());
-    ok(f.mode(&["disable"]));
 }
 
 #[test]
 fn interrupted_policy_requires_recovery_to_standard() {
     let f = Fixture::new("standard");
-    ok(f.mode(&["enable"]));
+    ok(f.mode(&["yolo", "--confirm-native"]));
     let marker = f.0.join(".clients.json.policy-pending");
     fs::write(&marker, "fixture").unwrap();
     fs::set_permissions(&marker, fs::Permissions::from_mode(0o600)).unwrap();
-    assert!(!f.mode(&["status"]).status.success());
-    assert!(!f.mode(&["enable"]).status.success());
-    assert!(ok(f.mode(&["reset"])).contains("mode=standard"));
+    assert!(!f.mode(&["get"]).status.success());
+    assert!(!f.mode(&["yolo", "--confirm-native"]).status.success());
+    assert!(ok(f.mode(&["standard"])).contains("mode=standard"));
     assert!(!marker.exists());
 }
 
 #[test]
 fn malformed_legacy_mode_cannot_be_activated() {
-    let f = Fixture::new("yolo");
-    assert!(!f.mode(&["status"]).status.success());
-    let f = Fixture::new("full");
-    assert!(!f.mode(&["status"]).status.success());
+    for mode in ["yolo", "full"] {
+        let f = Fixture::new(mode);
+        assert!(!f.mode(&["get"]).status.success());
+    }
 }
 
 #[test]
-fn full_requires_confirmed_mode_specific_approval_and_disallows_replay() {
+fn native_preset_requires_a_mode_specific_approval_and_disallows_replay() {
     let f = Fixture::new("standard");
-    let standard = f.read();
-    assert!(!f.mode(&["set", "--mode", "full"]).status.success());
-    assert_eq!(f.read(), standard);
-    assert!(ok(f.mode(&["set", "--mode", "full", "--confirm-full"])).contains("mode=full"));
-    let full = f.read();
-    assert_eq!(full["policy_version"], 2);
-    assert!(ok(f.mode(&["status"])).contains("effective_policy=full"));
-    let mut forged = full.clone();
-    forged["clients"][0]["mode"] = "yolo".into();
+    ok(f.mode(&["yolo", "--confirm-native"]));
+    let approved = f.read();
+    let mut forged = approved.clone();
+    forged["clients"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("native_tool_preset");
     f.write(&forged);
-    assert!(!f.mode(&["status"]).status.success());
-    f.write(&full);
-    assert!(!f.mode(&["enable"]).status.success());
-    ok(f.mode(&["reset"]));
-    assert_eq!(f.read()["policy_version"], 2);
-    f.write(&full);
-    assert!(!f.mode(&["status"]).status.success());
-}
-
-#[test]
-fn disabled_client_cannot_select_full_even_with_confirmation() {
-    let f = Fixture::new("disabled");
-    let original = f.read();
-    assert!(
-        !f.mode(&["set", "--mode", "full", "--confirm-full"])
-            .status
-            .success()
-    );
-    assert_eq!(f.read(), original);
+    assert!(!f.mode(&["get"]).status.success());
+    f.write(&approved);
+    ok(f.mode(&["standard"]));
+    f.write(&approved);
+    assert!(!f.mode(&["get"]).status.success());
 }
 
 #[test]
 fn audit_anchor_pins_a_prefix_across_append_and_rotation() {
     let f = Fixture::new("disabled");
-    ok(f.mode(&["reset"]));
+    ok(f.mode(&["enable"]));
     let anchor = f.0.join("anchor.json");
     let path = anchor.to_str().unwrap();
     assert!(ok(f.run(&["audit", "export-head", "--out", path])).contains("EXPORTED"));
     let original = fs::read(&anchor).unwrap();
     let checkpoint: Value = serde_json::from_slice(&original).unwrap();
     assert_eq!(checkpoint["format_version"], 1);
-    assert!(checkpoint["sequence"].as_u64().unwrap() >= 2);
+    assert!(checkpoint["sequence"].as_u64().unwrap() >= 1);
     assert_eq!(checkpoint["ledger_identity"].as_str().unwrap().len(), 64);
     assert_eq!(
         fs::metadata(&anchor).unwrap().permissions().mode() & 0o777,
@@ -347,11 +306,11 @@ fn audit_anchor_pins_a_prefix_across_append_and_rotation() {
     );
     assert_eq!(fs::read(&anchor).unwrap(), original);
     ok(f.run(&["audit", "rotate"]));
-    ok(f.mode(&["enable"]));
+    ok(f.mode(&["yolo", "--confirm-native"]));
     assert!(ok(f.run(&["audit", "verify", "--anchor", path])).contains("VERIFY_RESULT=VALID"));
 
     let other = Fixture::new("disabled");
-    ok(other.mode(&["reset"]));
+    ok(other.mode(&["enable"]));
     let other_anchor = other.0.join("anchor.json");
     ok(other.run(&[
         "audit",

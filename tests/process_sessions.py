@@ -65,7 +65,7 @@ class ProcessSessions(unittest.TestCase):
         f.config = state / "clients.json"
         f.audit = state / "audit.jsonl"
         f.audit.touch(mode=0o600)
-        f.doc.update(policy_version=3, audit_log=str(f.audit), job_state_dir=str(jobs),
+        f.doc.update(policy_version=4, audit_log=str(f.audit), job_state_dir=str(jobs),
                      job_profiles={
                          "shell": {"executable": "/usr/bin/sh", "args": ["-s"],
                                    "timeout_seconds": 86400, "extended_runtime": True,
@@ -123,7 +123,8 @@ class ProcessSessions(unittest.TestCase):
     def logs(self, job, **offsets):
         return self.call("job_logs", dict(job_id=job, **offsets))
 
-    def mode(self, name, client="primary", *flags):
+    def mode(self, name, client="primary"):
+        flags = ["--confirm-native"] if name == "yolo" else []
         subprocess.run([product.BIN, "mode", name, client, "--config", self.f.config, *flags],
                        env=dict(os.environ, HOME=str(self.f.base)), check=True,
                        capture_output=True, timeout=10)
@@ -348,27 +349,25 @@ class ProcessSessions(unittest.TestCase):
         self.assertEqual(self.end(job)["exit_code"], 0)
         self.assertEqual(self.logs(job)["stdout"], "admitted")
 
-    def test_yolo_preset_and_full_do_not_add_interactive_grants(self):
+    def test_yolo_preset_adds_native_interactive_grants(self):
         self.edit_client(lambda client: client.update(tools=["job_status", "job_cancel"]))
         self.mode("yolo")
         _, listing = self.f.rpc("tools/list", self.session, product.TOKEN)
         names = {tool["name"] for tool in listing["result"]["tools"]}
-        self.assertIn("task_run", names)
-        self.assertFalse(names & {"process_start", "process_input", "process_resize", "shell_status", "shell_reset"})
-        self.call("process_start", {"profile": "shell"}, error=True)
+        self.assertTrue({"task_run", "process_start", "process_resize", "shell_status"} <= names)
+        job = self.start()
+        self.assertEqual(self.call("job_cancel", {"job_id": job})["state"], "canceled")
         self.mode("standard")
-        self.edit_client(lambda client: client["tools"].extend(["process_start", "process_input"]))
-        self.mode("full", "primary", "--confirm-full")
         self.call("process_start", {"profile": "shell"}, error=True)
 
-    def test_broad_protection_and_forged_datagrams(self):
+    def test_native_descriptor_hygiene_and_forged_datagrams(self):
         self.mode("yolo")
         job = self.start()
         state = self.f.config.parent
-        code = ("import os,socket; assert not os.path.exists(" + repr(str(state / "clients.json")) + ");"
+        code = ("import os,socket; assert os.path.exists(" + repr(str(state / "clients.json")) + ");"
                 "[print(os.readlink('/proc/self/fd/'+f)) for f in os.listdir('/proc/self/fd') if "
                 "os.path.exists('/proc/self/fd/'+f)];"
-                "socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)")
+                "socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM); print('native ready')")
         command = "python3 -c " + shlex.quote(code) + "\n"
         self.send(job, 0, command)
         _, endpoint = self.channel_identity(job)
@@ -381,7 +380,7 @@ class ProcessSessions(unittest.TestCase):
             with self.assertRaises(socket.timeout):
                 attacker.recv(512)
         output = self.await_result(lambda: self.logs(job),
-                                   lambda logs: "Operation not permitted" in logs["stderr"])
+                                   lambda logs: "native ready" in logs["stdout"])
         self.assertNotIn("socket:[", output["stdout"], output)
         self.assertNotIn("AssertionError", output["stderr"], output)
         self.assertEqual(self.call("process_input", {"job_id": job})["next_sequence"], 1)

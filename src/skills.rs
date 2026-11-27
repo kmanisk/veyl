@@ -192,6 +192,7 @@ impl Skills {
         tool: Tool,
         args: Option<&Value>,
         grants: &BTreeSet<String>,
+        native: bool,
     ) -> Value {
         let args = match args {
             Some(Value::Object(args)) => Some(args),
@@ -200,6 +201,22 @@ impl Skills {
         };
         match tool {
             Tool::SkillsList if args.is_none_or(serde_json::Map::is_empty) => {
+                if native {
+                    return match self.catalog() {
+                        Ok(entries) => {
+                            let entries: Vec<_> = entries.into_iter().filter(|entry| {
+                                entry["enabled"] == true && entry["validation_error"].is_null()
+                            }).collect();
+                            let value = json!({"skills":entries}).to_string();
+                            if value.len() > 60_000 {
+                                tool_text(true, "Skill metadata exceeds the response limit")
+                            } else {
+                                tool_text(false, &value)
+                            }
+                        }
+                        Err(error) => tool_text(true, &error),
+                    };
+                }
                 let mut skills = Vec::new();
                 let mut bytes = 0;
                 for name in grants.difference(&self.disabled) {
@@ -222,7 +239,7 @@ impl Skills {
                     .and_then(|args| args.get("name"))
                     .and_then(Value::as_str);
                 let Some(name) = name.filter(|name| {
-                    valid_name(name) && grants.contains(*name) && !self.disabled.contains(*name)
+                    valid_name(name) && (native || grants.contains(*name)) && !self.disabled.contains(*name)
                 }) else {
                     return tool_text(true, "Skill unavailable or not granted");
                 };

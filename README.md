@@ -24,7 +24,7 @@ Cargo's bin directory must be on PATH.
 ## Connect a remote client — legacy bearer/secret-path compatibility
 
 The commands below describe the legacy bearer/secret-path compatibility path.
-For `0.6.1-beta`, prefer direct OAuth MCP over a public HTTPS
+For `0.7.0-beta`, prefer direct OAuth MCP over a public HTTPS
 endpoint (see the OAuth section below). No Veyl-hosted account, relay or
 standalone ChatGPT plugin is required by the direct architecture.
 
@@ -78,15 +78,13 @@ prerequisites on port 8443 or 10000, starts an owner-private profile in
 copies the HTTPS `/mcp` URL to your clipboard when available, and opens the
 local dashboard (`--no-ui` suppresses browser launch). During local approval
 in the dashboard you can keep **Standard** (default) or explicitly select
-**YOLO** (broad host-user access with `~/.veyl-login`, `~/.ssh`, and
-configured protected paths masked and `~/.bashrc` / `.git/hooks` kept
-read-only).
+**YOLO** (native access as the gateway user, including Veyl state).
 
 Manage persisted per-connection modes and disconnect remote clients locally:
 
 ```sh
 veyl mode                          # list connected OAuth clients and modes
-veyl mode yolo <CLIENT_ID>         # escalate (revokes old Standard tokens; re-auth required)
+veyl mode yolo <CLIENT_ID> --confirm-native  # Reauthorize the remote client
 veyl mode standard <CLIENT_ID>     # downgrade (denies elevated operations immediately)
 veyl logout --client <CLIENT_ID>   # revoke one OAuth connection
 veyl logout --all                  # revoke all managed OAuth connections and stop Funnel
@@ -225,7 +223,7 @@ The existing package generator is retained for future use; no plugin
 installation is required for direct MCP.
 Direct OAuth MCP onboarding (`veyl login`, `veyl logout`), per-connection
 Standard/YOLO mode selection, and interactive/upstream controls are included in
-the `0.6.1-beta` release candidate.
+the `0.7.0-beta` release candidate.
 See [the direct remote plan](docs/development/DIRECT_REMOTE_PLAN.md).
 
 ## Dashboard and monitor
@@ -243,13 +241,20 @@ Enter for readable Activity command/target details (d toggles JSON), and l for j
 local dashboard's Capture button) for a bounded, temporary command/response trace.
 The durable audit remains metadata-only.
 
+## Upgrading to 0.7.0-beta
+
+Keep the verified single-executable bundle for forward recovery. Policy
+migration is an audited local step and disables latent native authority
+for disabled clients. It requires a schema-4-compatible executable
+afterward. See [execution modes and recovery](docs/BROAD-YOLO.md).
+
 ## Daily use
 
 Veyl 0.4.0-beta adds opt-in native text checkpoint history, preview and guarded restore. See [TimeShift](https://github.com/kmanisk/veyl/blob/v0.4.0-beta/docs/development/TIMESHIFT.md).
 
-Veyl v0.4.0-beta includes unified permission modes (`Standard`, `YOLO` with
-native tool preset and `deny_tools`, `FULL` with confirmation), confined ad-hoc
-and durable commands (`exec_command`, `task_run` with optional isolated worktrees),
+Veyl has two permission modes. Standard uses explicit scoped grants and
+Linux sandboxing. YOLO uses native host-user execution after local
+confirmation. Both support durable commands (`exec_command`, `task_run` with optional isolated worktrees),
 persistent pipe/PTY sessions (`process_start`, `process_input`, `process_resize`,
 `shell_status`, `shell_reset`), structured Git workflows, workspace context/rule/skill
 helpers, extension/upstream management with verified one-click marketplace runtime
@@ -269,15 +274,15 @@ live local-timezone AM/PM millisecond monitoring. TimeShift covers opt-in native
 | `veyl portable` | Switch from service to foreground |
 | `veyl mode` | List client modes |
 | `veyl mode get` | Show the selected client's mode and enabled state |
-| `veyl mode yolo` | Select sandboxed developer access and the native tool preset |
+| `veyl mode yolo --confirm-native` | Authorize native host-user execution and applicable tools |
 | `veyl mode standard` | Select workspace-restricted access with explicit tool grants |
-| `veyl mode full --confirm-full` | Select unsandboxed host-user execution |
+| `veyl goal list` | List durable development goals |
 | `veyl mode disable` | Disable client access |
 | `veyl mode enable` | Restore client access |
 | `veyl help` | Show commands |
 
-Mode changes take effect at the next admission. Disabling a client preserves
-its selected mode. Mode commands select the only configured client automatically
+Mode changes take effect at the next admission. Disabling a client revokes
+its native grant. Mode commands select the only configured client automatically
 or prompt you to choose when several exist. Scripts must supply a client ID when
 there is more than one. `veyl mode set CLIENT <mode>` is also supported.
 See [execution modes and migration](docs/BROAD-YOLO.md) for existing policies,
@@ -289,7 +294,7 @@ before starting the service.
 [Linux and upgrades](docs/LINUX.md) · [Client setup](docs/CLIENTS.md) ·
 [Dashboard](docs/DASHBOARD.md) · [Tailscale](docs/TAILSCALE.md) ·
 [Skills](docs/SKILLS.md) · [Upstream MCP](docs/UPSTREAM-MCP.md) ·
-[Execution modes](docs/BROAD-YOLO.md)
+[Execution modes](docs/BROAD-YOLO.md) · [Durable goals](docs/GOALS.md)
 
 Veyl is a beta-stage Linux product. Core gateway functions, dashboards,
 skills and durable jobs work; additional subsystem diagnostics, complete

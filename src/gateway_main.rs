@@ -13,6 +13,8 @@ mod inspection;
 #[cfg(target_os = "linux")]
 mod jobs;
 #[cfg(target_os = "linux")]
+mod goals;
+#[cfg(target_os = "linux")]
 #[path = "platform/linux/cli.rs"]
 mod linux_cli;
 #[cfg(target_os = "linux")]
@@ -68,6 +70,7 @@ Getting started
 Daily use
   ui [--remote]                                  Open and pair the dashboard
   dashboard                                      Alias for ui
+  goal                                           Manage durable development goals
   tui | monitor                                  Open the terminal monitor
   service on | status                            Manage the user service
   run                                            Run in the foreground
@@ -75,7 +78,7 @@ Daily use
   update [--check | --reinstall | --from-dir DIR] Update installed user binaries
   mode                                           List client modes
   mode get [CLIENT]                              Show a client mode and state
-  mode standard|yolo|full [CLIENT]               Change a client mode
+  mode standard|yolo [CLIENT]                    Change a client mode
   mode enable|disable [CLIENT]                   Enable or disable a client
 
 Administration

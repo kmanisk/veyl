@@ -42,6 +42,8 @@ pub(super) struct Launch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<super::session::OAuthBinding>,
     pub scoped: bool,
+    #[serde(default)]
+    pub native_home: Option<PathBuf>,
     pub yolo: bool,
     pub isolated: bool,
     pub broad: Option<super::broad::Broad>,
@@ -61,10 +63,6 @@ pub(crate) fn run_worker() -> io::Result<()> {
         return Err(invalid());
     }
     let launch: Launch = serde_json::from_slice(&input)?;
-    launch.profile.check_limits()?;
-    if launch.profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX && !launch.scoped {
-        return Err(invalid());
-    }
     let store = Store::open(&launch.store, false)?;
     let job = store.job(&launch.job_id)?;
     job.check_worker_lease(io::stdout())?;
@@ -76,6 +74,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
     let (mut stdout_log, mut stderr_log, spawned) = {
         let _transaction = store.lock(false)?;
         let mut receipt = job.read()?;
+        launch.profile.check_limits(receipt.full)?;
         if receipt.state != State::Starting
             || receipt.runner.is_some()
             || receipt.launch_nonce != launch.nonce
@@ -85,7 +84,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
             || launch.session.as_ref().is_some_and(|session| {
                 session.pty != launch.profile.pty || session.root != launch.root
             })
-            || (launch.session.is_some() && (!launch.isolated || !launch.scoped || receipt.full))
+            || (launch.session.is_some() && !receipt.full && (!launch.isolated || !launch.scoped))
             || if receipt.ephemeral_worktree {
                 receipt.worktree_path.as_deref() != Some(launch.root.path())
                     || receipt.worktree_repo.is_none()
@@ -100,6 +99,13 @@ pub(crate) fn run_worker() -> io::Result<()> {
             || receipt.isolated != launch.isolated
             || receipt.broad != launch.broad
             || receipt.sandbox_roots != launch.sandbox_roots
+        {
+            return Err(invalid());
+        }
+        if (!receipt.full && (launch.profile.timeout_seconds == 0
+            || launch.profile.cpu_percent == 0 || launch.profile.memory_bytes == 0
+            || launch.profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX && !launch.scoped))
+            || (receipt.full && ((launch.profile.cpu_percent != 0 || launch.profile.memory_bytes != 0) && !launch.scoped))
         {
             return Err(invalid());
         }
@@ -124,12 +130,10 @@ pub(crate) fn run_worker() -> io::Result<()> {
             return finish(&job, &mut audit, receipt, State::Failed);
         }
         if receipt.oauth_family {
-            let oauth_yolo = launch.yolo
-                && launch.broad.is_some()
-                && !receipt.full
+            let oauth_yolo = receipt.full
                 && !receipt.oauth_bounded_workspace
                 && launch.oauth.is_some();
-            let oauth_standard = !launch.yolo && launch.broad.is_none();
+            let oauth_standard = !receipt.full && !launch.yolo && launch.broad.is_none();
             let interactive_valid = launch.profile.interactive
                 && launch
                     .session
@@ -139,16 +143,14 @@ pub(crate) fn run_worker() -> io::Result<()> {
                         super::session::verify_oauth_grant_mode(oauth, oauth_yolo).is_ok()
                     });
             if !super::oauth_owner(&receipt.client_id)
-                || !launch.isolated
-                || !launch.scoped
-                || receipt.full
+                || (!oauth_yolo && (!launch.isolated || !launch.scoped))
                 || !(oauth_yolo || oauth_standard)
                 || !launch.sandbox_roots.is_empty()
-                || launch.profile.extended_runtime
-                || launch.profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX
-                || launch.profile.cpu_percent > 100
-                || launch.profile.memory_bytes > super::config::default_memory()
-                || launch.profile.max_output_bytes > super::config::MAX_OUTPUT
+                || (!oauth_yolo && (launch.profile.extended_runtime
+                    || launch.profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX
+                    || launch.profile.cpu_percent > 100
+                    || launch.profile.memory_bytes > super::config::default_memory()
+                    || launch.profile.max_output_bytes > super::config::MAX_OUTPUT))
                 || (!interactive_valid
                     && (launch.profile.interactive
                         || launch.profile.pty
@@ -223,12 +225,15 @@ pub(crate) fn run_worker() -> io::Result<()> {
             };
             &mut sandbox.command
         } else {
-            standard = Command::new(&launch.profile.executable);
+            standard = Command::new(executable);
             standard
-                .args(&launch.profile.args)
+                .args(args)
                 .env_clear()
                 .env("PATH", "/usr/bin:/bin")
                 .env("LC_ALL", "C");
+            if let Some(home) = launch.native_home.as_ref().filter(|_| receipt.full) {
+                standard.env("HOME", home).env("PATH", format!("{}/.local/bin:{}/.cargo/bin:/usr/local/bin:/usr/bin:/bin", home.display(), home.display()));
+            }
             &mut standard
         };
         let terminal = if launch.profile.pty {
@@ -264,7 +269,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
             let Some(oauth) = binding.oauth.as_ref() else {
                 return finish(&job, &mut audit, receipt, State::Failed);
             };
-            let Ok(grant_guard) = super::session::verify_oauth_grant_mode(oauth, receipt.yolo) else {
+            let Ok(grant_guard) = super::session::verify_oauth_grant_mode(oauth, receipt.full) else {
                 return finish(&job, &mut audit, receipt, State::Failed);
             };
             // The durable read can take time; check the original deadline again.
@@ -272,7 +277,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
                 return finish(&job, &mut audit, receipt, State::Failed);
             }
             Some((Some(guard), grant_guard))
-        } else if receipt.oauth_family && receipt.yolo {
+        } else if receipt.oauth_family && receipt.full {
             if receipt.oauth_launch.is_some() {
                 return finish(&job, &mut audit, receipt, State::Failed);
             }
@@ -289,11 +294,19 @@ pub(crate) fn run_worker() -> io::Result<()> {
             }
             None
         };
+        let native_guard = if let Some(authority) = receipt.native_authority.as_ref() {
+            match authority.guard(&receipt.client_id) {
+                Ok(guard) => Some(guard),
+                Err(_) => return finish(&job, &mut audit, receipt, State::Failed),
+            }
+        } else {
+            None
+        };
         let mut child = match command.process_group(0).spawn() {
             Ok(child) => child,
             Err(_) => return finish(&job, &mut audit, receipt, State::Failed),
         };
-        drop(launch_guards);
+        drop((launch_guards, native_guard));
         let pid = child.id();
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
@@ -311,19 +324,23 @@ pub(crate) fn run_worker() -> io::Result<()> {
         (
             stdout,
             stderr,
-            (process, stdout_pipe, stderr_pipe, start, channel),
+            (process, stdout_pipe, stderr_pipe, start, channel, receipt),
         )
     };
 
-    let (mut process, mut stdout, mut stderr, start, channel) = spawned;
+    let (mut process, mut stdout, mut stderr, start, channel, admitted) = spawned;
     let outcome = supervise(
         &job,
         &audit,
         &mut process,
         (&mut stdout_log, &mut stdout),
         (&mut stderr_log, &mut stderr),
-        start + Duration::from_secs(launch.profile.timeout_seconds),
+        (launch.profile.timeout_seconds != 0).then(|| start + Duration::from_secs(launch.profile.timeout_seconds)),
         channel.zip(launch.session.as_ref()),
+        || admitted.native_authority.as_ref().is_none_or(|authority| authority.guard(&admitted.client_id).is_ok())
+            && (!admitted.full || !admitted.oauth_family || admitted.oauth.as_ref()
+                .is_some_and(|oauth| super::session::verify_oauth_grant_mode(oauth, true).is_ok())),
+
     );
     let supervision_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     drop(process);
@@ -347,14 +364,16 @@ pub(crate) fn run_worker() -> io::Result<()> {
     finish(&job, &mut audit, receipt, state)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn supervise(
     job: &JobDir<'_>,
     audit: &AuditSink,
     child: &mut OwnedProcess,
     (stdout_log, stdout): (&mut Log, &mut Option<std::process::ChildStdout>),
     (stderr_log, stderr): (&mut Log, &mut Option<std::process::ChildStderr>),
-    deadline: Instant,
+    deadline: Option<Instant>,
     mut input: Option<(Channel, &super::session::Binding)>,
+    authorized: impl Fn() -> bool,
 ) -> io::Result<(State, std::process::ExitStatus)> {
     if let Some(pipe) = stdout.as_ref() {
         nonblocking(pipe)?;
@@ -365,6 +384,8 @@ fn supervise(
         stderr_log.ended = true;
     }
     let mut cancel_poll = Instant::now();
+    let mut authorization_poll = cancel_poll + Duration::from_secs(1);
+    let mut consecutive_denials = 0;
     let mut stop = None;
     let mut killed = false;
     let mut status = None;
@@ -386,9 +407,16 @@ fn supervise(
         let now = Instant::now();
         if stop.is_none() {
             let check_cancel = now >= cancel_poll;
-            let state = if check_cancel && job.read()?.cancel_requested {
+            let revoked = now >= authorization_poll && {
+                authorization_poll = now + Duration::from_secs(1);
+                // A local writer can temporarily hold the policy lock. Retry
+                // at the next bounded check before stopping an existing job.
+                consecutive_denials = if authorized() { 0 } else { consecutive_denials + 1 };
+                consecutive_denials >= 2
+            };
+            let state = if revoked || check_cancel && job.read()?.cancel_requested {
                 Some(State::Cancelled)
-            } else if now >= deadline {
+            } else if deadline.is_some_and(|deadline| now >= deadline) {
                 Some(State::TimedOut)
             } else if child.leader_exited()? {
                 Some(State::Exited)

@@ -79,8 +79,12 @@ fn workspace_capacity_ok(bytes: u64, inodes: u64) -> bool {
 }
 
 pub fn bounded_oauth_workspace(path: &Path) -> io::Result<()> {
-    let denied = || io::Error::new(io::ErrorKind::PermissionDenied,
-        "Public writable OAuth requires a private dedicated tmpfs mount (max 256 MiB, 16384 inodes, nosuid,nodev)");
+    let denied = || {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Public writable OAuth requires a private dedicated tmpfs mount (max 256 MiB, 16384 inodes, nosuid,nodev)",
+        )
+    };
     let root = open_absolute_dir(path)?;
     let stat = fs::fstat(&root)?;
     let parent = open_absolute_dir(path.parent().ok_or_else(denied)?)?;
@@ -90,7 +94,13 @@ pub fn bounded_oauth_workspace(path: &Path) -> io::Result<()> {
         || stat.st_dev == fs::fstat(&parent)?.st_dev
         || stat.st_uid != rustix::process::geteuid().as_raw()
         || stat.st_mode & 0o7777 != 0o700
-        || !workspace_capacity_ok(stats.f_blocks.checked_mul(stats.f_frsize).ok_or_else(denied)?, stats.f_files)
+        || !workspace_capacity_ok(
+            stats
+                .f_blocks
+                .checked_mul(stats.f_frsize)
+                .ok_or_else(denied)?,
+            stats.f_files,
+        )
     {
         return Err(denied());
     }
@@ -104,13 +114,18 @@ pub fn bounded_oauth_workspace(path: &Path) -> io::Result<()> {
         if fields.len() < 6 {
             return Err(denied());
         }
-        let decoded = fields[4].replace("\\040", " ").replace("\\011", "\t")
-            .replace("\\012", "\n").replace("\\134", "\\");
+        let decoded = fields[4]
+            .replace("\\040", " ")
+            .replace("\\011", "\t")
+            .replace("\\012", "\n")
+            .replace("\\134", "\\");
         let mount = Path::new(&decoded);
         if mount == path {
             let options = fields[5].split(',').collect::<Vec<_>>();
-            if fields[3] != "/" || after.split_ascii_whitespace().next() != Some("tmpfs")
-                || !options.contains(&"nosuid") || !options.contains(&"nodev")
+            if fields[3] != "/"
+                || after.split_ascii_whitespace().next() != Some("tmpfs")
+                || !options.contains(&"nosuid")
+                || !options.contains(&"nodev")
             {
                 return Err(denied());
             }
@@ -209,9 +224,14 @@ mod oauth_workspace_capacity_tests {
     use super::*;
     #[test]
     fn capacity_and_inode_limits_must_both_be_finite() {
-        assert!(workspace_capacity_ok(OAUTH_WORKSPACE_MAX_BYTES, OAUTH_WORKSPACE_MAX_INODES));
+        assert!(workspace_capacity_ok(
+            OAUTH_WORKSPACE_MAX_BYTES,
+            OAUTH_WORKSPACE_MAX_INODES
+        ));
         for (bytes, inodes) in [
-            (0, 100), (100, 0), (OAUTH_WORKSPACE_MAX_BYTES + 1, 100),
+            (0, 100),
+            (100, 0),
+            (OAUTH_WORKSPACE_MAX_BYTES + 1, 100),
             (100, OAUTH_WORKSPACE_MAX_INODES + 1),
         ] {
             assert!(!workspace_capacity_ok(bytes, inodes));

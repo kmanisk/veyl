@@ -142,7 +142,9 @@ pub struct Tokens {
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionMode {
     #[default]
+    #[serde(alias = "yolo")]
     Standard,
+    #[serde(rename = "native_yolo")]
     Yolo,
 }
 
@@ -161,6 +163,21 @@ impl ConnectionMode {
             _ => None,
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn persisted_old_oauth_yolo_has_only_standard_authority() {
+    assert_eq!(
+        serde_json::from_str::<ConnectionMode>(r#""yolo""#).unwrap(),
+        ConnectionMode::Standard
+    );
+    let native = serde_json::to_string(&ConnectionMode::Yolo).unwrap();
+    assert_eq!(native, r#""native_yolo""#);
+    assert_eq!(
+        serde_json::from_str::<ConnectionMode>(&native).unwrap(),
+        ConnectionMode::Yolo
+    );
 }
 
 /// Identity, not execution permission. Native policy must revalidate this
@@ -877,9 +894,14 @@ mod tests {
         let mut store = GrantStore::default();
         let std_req = store.begin(request(), now).unwrap();
         let std_code = store.approve_local(&std_req, "local-a", now).unwrap();
-        let std_tokens = store.exchange(&std_code.code, &registered(), VERIFIER, now).unwrap();
+        let std_tokens = store
+            .exchange(&std_code.code, &registered(), VERIFIER, now)
+            .unwrap();
         assert_eq!(
-            store.authenticate(&std_tokens.access_token, RESOURCE, now).unwrap().mode,
+            store
+                .authenticate(&std_tokens.access_token, RESOURCE, now)
+                .unwrap()
+                .mode,
             ConnectionMode::Standard
         );
 
@@ -887,22 +909,33 @@ mod tests {
         let yolo_code = store
             .approve_local_with_mode(&yolo_req, "local-a", ConnectionMode::Yolo, now)
             .unwrap();
-        let yolo_tokens = store.exchange(&yolo_code.code, &registered(), VERIFIER, now).unwrap();
+        let yolo_tokens = store
+            .exchange(&yolo_code.code, &registered(), VERIFIER, now)
+            .unwrap();
         assert_eq!(
-            store.authenticate(&yolo_tokens.access_token, RESOURCE, now).unwrap().mode,
+            store
+                .authenticate(&yolo_tokens.access_token, RESOURCE, now)
+                .unwrap()
+                .mode,
             ConnectionMode::Yolo
         );
         let refreshed = store
             .refresh(&yolo_tokens.refresh_token, "chat", RESOURCE, now)
             .unwrap();
         assert_eq!(
-            store.authenticate(&refreshed.access_token, RESOURCE, now).unwrap().mode,
+            store
+                .authenticate(&refreshed.access_token, RESOURCE, now)
+                .unwrap()
+                .mode,
             ConnectionMode::Yolo
         );
 
         assert!(store.downgrade_oauth_client("chat"));
         assert_eq!(
-            store.authenticate(&refreshed.access_token, RESOURCE, now).unwrap().mode,
+            store
+                .authenticate(&refreshed.access_token, RESOURCE, now)
+                .unwrap()
+                .mode,
             ConnectionMode::Standard
         );
         assert_eq!(
@@ -919,9 +952,14 @@ mod tests {
         let old_code = store
             .approve_local_with_mode(&old_req, "local-a", ConnectionMode::Yolo, now)
             .unwrap();
-        let old_tokens = store.exchange(&old_code.code, &registered(), VERIFIER, now).unwrap();
+        let old_tokens = store
+            .exchange(&old_code.code, &registered(), VERIFIER, now)
+            .unwrap();
         assert_eq!(
-            store.authenticate(&old_tokens.access_token, RESOURCE, now).unwrap().mode,
+            store
+                .authenticate(&old_tokens.access_token, RESOURCE, now)
+                .unwrap()
+                .mode,
             ConnectionMode::Yolo
         );
 
@@ -930,20 +968,30 @@ mod tests {
             .approve_local_with_mode(&std_req, "local-a", ConnectionMode::Standard, now)
             .unwrap();
         assert!(store.downgrade_oauth_client("chat"));
-        let _std_tokens = store.exchange(&std_code.code, &registered(), VERIFIER, now).unwrap();
+        let _std_tokens = store
+            .exchange(&std_code.code, &registered(), VERIFIER, now)
+            .unwrap();
 
         let new_req = store.begin(request(), now).unwrap();
         let new_code = store
             .approve_local_with_mode(&new_req, "local-a", ConnectionMode::Yolo, now)
             .unwrap();
-        let new_tokens = store.exchange(&new_code.code, &registered(), VERIFIER, now).unwrap();
+        let new_tokens = store
+            .exchange(&new_code.code, &registered(), VERIFIER, now)
+            .unwrap();
         assert_eq!(
-            store.authenticate(&new_tokens.access_token, RESOURCE, now).unwrap().mode,
+            store
+                .authenticate(&new_tokens.access_token, RESOURCE, now)
+                .unwrap()
+                .mode,
             ConnectionMode::Yolo
         );
         // Old family stays permanently Standard even after fresh YOLO grant.
         assert_eq!(
-            store.authenticate(&old_tokens.access_token, RESOURCE, now).unwrap().mode,
+            store
+                .authenticate(&old_tokens.access_token, RESOURCE, now)
+                .unwrap()
+                .mode,
             ConnectionMode::Standard
         );
     }

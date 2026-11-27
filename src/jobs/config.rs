@@ -57,8 +57,8 @@ fn default_output_limit() -> usize {
 }
 
 impl Profile {
-    pub(super) fn validate(&mut self) -> io::Result<()> {
-        self.check_limits()?;
+    pub(super) fn validate(&mut self, native: bool) -> io::Result<()> {
+        self.check_limits(native)?;
         let path = fs::canonicalize(&self.executable)?;
         if !fs::metadata(&path).is_ok_and(|meta| meta.is_file() && meta.mode() & 0o111 != 0) {
             return Err(invalid());
@@ -67,7 +67,7 @@ impl Profile {
         Ok(())
     }
 
-    pub fn check_limits(&self) -> io::Result<()> {
+    pub fn check_limits(&self, native: bool) -> io::Result<()> {
         if (self.pty && !self.interactive)
             || !Path::new(&self.executable).is_absolute()
             || self.executable.len() > MAX_ARG_BYTES
@@ -78,15 +78,15 @@ impl Profile {
                 .iter()
                 .any(|arg| arg.len() > MAX_ARG_BYTES || arg.contains('\0'))
             || self.args.iter().map(String::len).sum::<usize>() > MAX_ARGV_BYTES
-            || !(1..=if self.extended_runtime {
+            || !(u64::from(!native)..=if self.extended_runtime {
                 EXTENDED_RUNTIME_MAX
             } else {
                 SHORT_RUNTIME_MAX
             })
                 .contains(&self.timeout_seconds)
             || !(1..=MAX_PROFILE_OUTPUT).contains(&self.max_output_bytes)
-            || !(10..=1600).contains(&self.cpu_percent)
-            || !(16 * 1024 * 1024..=16 * 1024 * 1024 * 1024).contains(&self.memory_bytes)
+            || !(native && self.cpu_percent == 0 || (10..=1600).contains(&self.cpu_percent))
+            || !(native && self.memory_bytes == 0 || (16 * 1024 * 1024..=16 * 1024 * 1024 * 1024).contains(&self.memory_bytes))
         {
             return Err(invalid());
         }
@@ -215,7 +215,7 @@ pub(crate) fn parse_settings(bytes: &[u8]) -> Result<(PathBuf, Profiles), String
         {
             return Err("Invalid job profile name".into());
         }
-        profile.validate().map_err(|_| "Invalid job profile")?;
+        profile.validate(false).map_err(|_| "Invalid job profile")?;
     }
     Ok((state, Profiles(document.job_profiles)))
 }
@@ -324,7 +324,7 @@ pub(crate) fn oauth_profiles(bytes:&[u8], allow_interactive: bool)->Result<serde
         if name.is_empty() || name.len()>64 || !name.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'_'|b'-')) {
             return Err("Invalid OAuth job profile name".into());
         }
-        profile.validate().map_err(|_|"Invalid OAuth job profile")?;
+        profile.validate(false).map_err(|_|"Invalid OAuth job profile")?;
     }
     Profiles(input.job_profiles).oauth_summary(allow_interactive)
 }
@@ -399,16 +399,16 @@ mod runtime_tests {
         assert_eq!(profile.memory_bytes, 256 * 1024 * 1024);
         assert_eq!(profile.max_output_bytes, 4096);
         profile.cpu_percent = 9;
-        assert!(profile.check_limits().is_err());
+        assert!(profile.check_limits(false).is_err());
         profile.cpu_percent = 1600;
         profile.memory_bytes = 16 * 1024 * 1024 * 1024;
         profile.max_output_bytes = MAX_PROFILE_OUTPUT;
-        assert!(profile.check_limits().is_ok());
+        assert!(profile.check_limits(false).is_ok());
         profile.memory_bytes += 1;
-        assert!(profile.check_limits().is_err());
+        assert!(profile.check_limits(false).is_err());
         profile.memory_bytes = 16 * 1024 * 1024;
         profile.max_output_bytes += 1;
-        assert!(profile.check_limits().is_err());
+        assert!(profile.check_limits(false).is_err());
     }
 
     #[test]
@@ -424,17 +424,17 @@ mod runtime_tests {
             cpu_percent: default_cpu(),
             memory_bytes: default_memory(),
         };
-        assert!(profile.check_limits().is_ok());
+        assert!(profile.check_limits(false).is_ok());
         profile.timeout_seconds = 301;
-        assert!(profile.check_limits().is_err());
+        assert!(profile.check_limits(false).is_err());
         profile.extended_runtime = true;
-        assert!(profile.check_limits().is_ok());
+        assert!(profile.check_limits(false).is_ok());
         profile.timeout_seconds = EXTENDED_RUNTIME_MAX;
-        assert!(profile.check_limits().is_ok());
+        assert!(profile.check_limits(false).is_ok());
         profile.timeout_seconds += 1;
-        assert!(profile.check_limits().is_err());
+        assert!(profile.check_limits(false).is_err());
         profile.timeout_seconds = 0;
-        assert!(profile.check_limits().is_err());
+        assert!(profile.check_limits(false).is_err());
         let old: Profile = serde_json::from_value(serde_json::json!({
             "executable": "/usr/bin/true", "args": [], "timeout_seconds": 300
         }))

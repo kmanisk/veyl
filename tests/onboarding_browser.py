@@ -34,6 +34,12 @@ def main():
             subprocess.run([binary,"diagnostics",action,"dev"],env=env,check=True,capture_output=True)
         config = home / ".local/state/veyl/clients.json"
         document = json.loads(config.read_text())
+        subprocess.run([binary, "goal", "create", "--client", "dev", "--config", config],
+                       env=env, input=json.dumps({"description": "Browser roadmap fixture",
+                                                  "request_id": "browser-goal",
+                                                  "acceptance_criteria": [{"description": "Observe persisted goal"}],
+                                                  "roadmap": [{"id": "review", "description": "Review goal"}]}),
+                       text=True, check=True, capture_output=True)
         admin_port = port()
         mcp_port = port()
         document["admin_listen"] = f"127.0.0.1:{admin_port}"

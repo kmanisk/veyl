@@ -57,7 +57,7 @@ fn create_profile(profile:&Path,root:&Path,scope:ProfileScope)->Result<(),String
     let native=random_id::<32>().map_err(|_|"Secure randomness unavailable")?;
     let expiry=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"Invalid system clock")?.as_secs()
         .checked_add(365*24*60*60).ok_or("Invalid expiry")?;
-    let mut doc=json!({"policy_version":3,"audit_log":profile.join("audit/events.jsonl"),
+    let mut doc=json!({"policy_version":4,"audit_log":profile.join("audit/events.jsonl"),
         "admin_listen":"127.0.0.1:0","clients":[{"id":CLIENT,"root":root,
         "token_sha256":format!("{:x}",Sha256::digest(native.as_bytes())),
         "expires_at_unix_seconds":expiry,"mode":"standard","disabled":false,

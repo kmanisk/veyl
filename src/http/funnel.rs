@@ -199,7 +199,7 @@ pub(super) fn authenticate(
     settings.clients.iter().position(|client| {
         client.id == public.client
             && !client.is_disabled()
-            && client.mode == ExecutionMode::BroadYolo
+            && client.mode == ExecutionMode::Yolo
             && now < client.expires_at
     })
 }

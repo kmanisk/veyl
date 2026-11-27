@@ -30,12 +30,15 @@ def make_bundle(directory: pathlib.Path, hardlink_from: pathlib.Path | None = No
         dest = directory / name
         if name in ("veyl", "mcp-gateway") and broken_gateway:
             ver = subprocess.check_output([src_bins / "veyl", "--version"], text=True).split()[1]
+            persistent_format = subprocess.check_output(
+                [src_bins / "veyl", "--persistent-format"], text=True).strip()
             c_src = directory / f"broken-{name}.c"
             c_src.write_text(
                 '#include <stdio.h>\n'
                 '#include <string.h>\n'
                 'int main(int argc, char **argv) {\n'
                 f'  if (argc == 2 && strcmp(argv[1], "--version") == 0) {{ puts("{name} {ver}"); return 0; }}\n'
+                f'  if (argc == 2 && strcmp(argv[1], "--persistent-format") == 0) {{ puts("{persistent_format}"); return 0; }}\n'
                 '  return 1;\n'
                 '}\n'
             )
@@ -93,7 +96,7 @@ assert not (portable_home / ".veyl-update-backups/active.json").exists()
 print("Portable no-manager update with >32 MiB hardlinked bundle passed.", flush=True)
 
 # 2. Simulate interrupted 'replacing' journal on veyl-monitor and test --recover
-old_bytes = b"\x7fELF-previous-monitor"
+old_bytes = (portable_home / ".local/bin/veyl-monitor").read_bytes()
 new_bytes = b"\x7fELF-partial-monitor"
 (portable_home / ".local/bin/veyl-monitor").write_bytes(new_bytes)
 (portable_home / ".local/bin/veyl-monitor").chmod(0o755)

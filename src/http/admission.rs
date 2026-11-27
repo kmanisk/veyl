@@ -44,6 +44,8 @@ pub struct Client {
     #[cfg(target_os = "linux")]
     pub yolo_revision: Option<String>,
     #[cfg(target_os = "linux")]
+    pub(crate) approval_mode: Option<&'static str>,
+    #[cfg(target_os = "linux")]
     pub extra_roots: Vec<MutationRoot>,
     #[cfg(target_os = "linux")]
     pub mutation_root: Option<MutationRoot>,
@@ -51,6 +53,8 @@ pub struct Client {
     pub job_root: Option<JobRoot>,
     #[cfg(target_os = "linux")]
     pub job_runtime_limit_seconds: u64,
+    #[cfg(target_os = "linux")]
+    pub native_default_timeout: Option<u64>,
     #[cfg(target_os = "linux")]
     pub job_cpu_percent_limit: u64,
     #[cfg(target_os = "linux")]
@@ -85,13 +89,10 @@ impl Client {
     pub(super) fn oauth_yolo_override(
         &self,
         settings: &Configuration,
-        config_path: &Path,
     ) -> Result<Self, &'static str> {
         if self.is_disabled() || !settings.managed || settings.jobs.is_none() {
             return Err("YOLO override unavailable for this policy");
         }
-        crate::jobs::Broad::prepare(config_path, settings)
-            .map_err(|_| "Broad YOLO isolation unavailable")?;
         let jobs = settings.jobs.is_some();
         let skills = settings.skills.is_some();
         let mut tools: HashSet<Tool> = Tool::ALL
@@ -123,20 +124,20 @@ impl Client {
             actions,
             tools,
             native_tool_preset: true,
-            mode: ExecutionMode::BroadYolo,
+            mode: ExecutionMode::Yolo,
             disabled: false,
             explicit_extra_roots: false,
             skills: self.skills.clone(),
-            upstreams: crate::upstream::Grants::default(),
-            yolo_revision: self.yolo_revision.clone(),
+            upstreams: settings.upstreams.native_grants(),
+            yolo_revision: None,
+            approval_mode: None,
             extra_roots: Vec::new(),
             mutation_root,
-            job_runtime_limit_seconds: self
-                .job_runtime_limit_seconds
-                .min(crate::jobs::SHORT_RUNTIME_MAX),
-            job_cpu_percent_limit: self.job_cpu_percent_limit.min(100),
-            job_memory_bytes_limit: self.job_memory_bytes_limit.min(256 * 1024 * 1024),
-            job_output_limit_bytes: self.job_output_limit_bytes.min(65_536),
+            job_runtime_limit_seconds: self.native_default_timeout.unwrap_or(crate::jobs::EXTENDED_RUNTIME_MAX),
+            native_default_timeout: self.native_default_timeout,
+            job_cpu_percent_limit: 0,
+            job_memory_bytes_limit: 0,
+            job_output_limit_bytes: self.job_output_limit_bytes,
             job_retention_count: self.job_retention_count,
             timeshift_retention_count: self.timeshift_retention_count,
             job_extra_roots: Vec::new(),
@@ -167,6 +168,8 @@ pub struct Configuration {
     pub(crate) upstreams: crate::upstream::Catalog,
     #[cfg(target_os = "linux")]
     pub managed: bool,
+    #[cfg(target_os = "linux")]
+    pub policy_version: Option<u64>,
     #[cfg(target_os = "linux")]
     pub jobs: Option<(PathBuf, Profiles)>,
     #[cfg(target_os = "linux")]
@@ -261,7 +264,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
     for entry in entries {
         let field = |key: &str| entry.get(key).and_then(Value::as_str);
         #[cfg(target_os = "linux")]
-        let mode = Mode::from_entry(entry)?;
+        let mode = Mode::from_entry(entry, document["policy_version"].as_u64())?;
         #[cfg(not(target_os = "linux"))]
         let mode = if entry.get("mode").is_none() {
             ExecutionMode::Standard
@@ -270,7 +273,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         };
         #[cfg(target_os = "linux")]
         let yolo_revision = match (mode, entry.get("yolo_revision")) {
-            (Mode::ScopedYolo | Mode::BroadYolo | Mode::Full, Some(value)) => Some(
+            (Mode::ScopedYolo | Mode::BroadYolo | Mode::Full | Mode::NativeYolo, Some(value)) => Some(
                 value
                     .as_str()
                     .filter(|id| {
@@ -282,7 +285,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
                     .ok_or("Invalid YOLO policy revision")?
                     .to_owned(),
             ),
-            (Mode::ScopedYolo | Mode::BroadYolo | Mode::Full, None) => {
+            (Mode::ScopedYolo | Mode::BroadYolo | Mode::Full | Mode::NativeYolo, None) => {
                 return Err("Privileged mode requires a policy revision".into());
             }
             (_, Some(_)) => return Err("Inactive client has retained a YOLO revision".into()),
@@ -316,7 +319,19 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         if !root.is_dir() {
             return Err("client root must be an existing directory".into());
         }
-        let native_tool_preset = entry["native_tool_preset"] == true;
+        #[cfg(target_os = "linux")]
+        let approval_mode = yolo_revision.as_ref().map(|_| {
+            match (mode, entry["native_tool_preset"] == true) {
+                (Mode::BroadYolo, true) => "yolo_native",
+                (Mode::NativeYolo, true) => "native_yolo_preset",
+                _ => mode.label(),
+            }
+        });
+        let native_tool_preset = document["policy_version"] == 4 && entry["native_tool_preset"] == true;
+        #[cfg(target_os = "linux")]
+        let native_limits = mode == Mode::NativeYolo && native_tool_preset;
+        #[cfg(target_os = "linux")]
+        let native_execution = matches!(mode, Mode::Full | Mode::NativeYolo);
         let (names, actions, denied_actions) = effective_tools(
             entry,
             native_tool_preset,
@@ -395,12 +410,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         )?;
         #[cfg(target_os = "linux")]
         let job_extra_roots =
-            if has_job_grant && (mode == Mode::ScopedYolo || document["policy_version"] == 3) {
-                let key = if document["policy_version"] == 3 {
-                    "extra_roots"
-                } else {
-                    "yolo_roots"
-                };
+            if has_job_grant && matches!(document["policy_version"].as_u64(), Some(3 | 4)) {
+                let key = "extra_roots";
                 let roots = super::scope::root_paths(entry, key)?;
                 if let Some((_, profiles)) = &jobs {
                     for root in &roots {
@@ -415,7 +426,14 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
                 Vec::new()
             };
         #[cfg(target_os = "linux")]
-        let upstream_grants = crate::upstream::Grants::parse(entry, &upstreams)?;
+        let upstream_grants = {
+            let explicit = crate::upstream::Grants::parse(entry, &upstreams)?;
+            if native_tool_preset && explicit.servers.is_empty() {
+                upstreams.native_grants()
+            } else {
+                explicit
+            }
+        };
         clients.push(Client {
             id: id.to_string(),
             digest,
@@ -427,7 +445,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             mode: mode.into(),
             disabled: entry["disabled"].as_bool().unwrap_or(false),
             #[cfg(target_os = "linux")]
-            explicit_extra_roots: document["policy_version"] == 3 && mode == Mode::Standard,
+            explicit_extra_roots: matches!(document["policy_version"].as_u64(), Some(3 | 4))
+                && mode == Mode::Standard,
             #[cfg(target_os = "linux")]
             skills: crate::skills::parse_names(entry.get("skills"))?,
             #[cfg(target_os = "linux")]
@@ -435,26 +454,30 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             #[cfg(target_os = "linux")]
             yolo_revision,
             #[cfg(target_os = "linux")]
+            approval_mode,
+            #[cfg(target_os = "linux")]
             extra_roots,
             #[cfg(target_os = "linux")]
             job_extra_roots,
             #[cfg(target_os = "linux")]
             mutation_root,
             #[cfg(target_os = "linux")]
+            native_default_timeout: entry["job_runtime_limit_seconds"].as_u64(),
+            #[cfg(target_os = "linux")]
             job_runtime_limit_seconds: entry
                 .get("job_runtime_limit_seconds")
                 .and_then(Value::as_u64)
-                .unwrap_or(crate::jobs::SHORT_RUNTIME_MAX),
+                .unwrap_or(if native_limits { crate::jobs::EXTENDED_RUNTIME_MAX } else { crate::jobs::SHORT_RUNTIME_MAX }),
             #[cfg(target_os = "linux")]
             job_cpu_percent_limit: entry
                 .get("job_cpu_percent_limit")
                 .and_then(Value::as_u64)
-                .unwrap_or(100),
+                .unwrap_or(if native_execution { 0 } else { 100 }),
             #[cfg(target_os = "linux")]
             job_memory_bytes_limit: entry
                 .get("job_memory_bytes_limit")
                 .and_then(Value::as_u64)
-                .unwrap_or(256 * 1024 * 1024),
+                .unwrap_or(if native_execution { 0 } else { 256 * 1024 * 1024 }),
             #[cfg(target_os = "linux")]
             job_output_limit_bytes: entry
                 .get("job_output_limit_bytes")
@@ -526,6 +549,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         runtime_settings,
         #[cfg(target_os = "linux")]
         managed: document.get("policy_version").is_some(),
+        #[cfg(target_os = "linux")]
+        policy_version: document["policy_version"].as_u64(),
         #[cfg(target_os = "linux")]
         jobs,
         #[cfg(target_os = "linux")]

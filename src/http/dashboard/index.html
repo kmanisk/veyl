@@ -38,6 +38,7 @@
       <a href="#health" role="tab">Overview</a>
       <a href="#audit" role="tab">Activity monitor</a>
       <a href="#jobs" role="tab">Running jobs</a>
+      <a id="goals-nav" href="#goals" role="tab">Goals</a>
       <a id="diagnostics-nav" href="#diagnostics">System diagnostics</a>
       <a href="#marketplace">Marketplace</a>
       <a href="#custom">Custom</a>
@@ -104,6 +105,16 @@
         </form>
         <div id="diagnostics-summary" class="diagnostic-grid"></div>
         <details class="diagnostic-raw"><summary>Raw JSON</summary><pre id="diagnostics-output">Loading diagnostics…</pre></details>
+      </section>
+      <section aria-labelledby="goals" class="panel">
+        <h1 id="goals">Goals</h1>
+        <div class="actions">
+          <button type="button" id="goals-refresh">Refresh</button>
+          <button type="button" id="goals-next" hidden>Next page</button>
+        </div>
+        <p id="goal-message" role="status"></p>
+        <ul id="goals-list"></ul>
+        <div id="goal-detail"></div>
       </section>
       <section aria-labelledby="jobs" class="panel">
         <h2 id="jobs">Jobs</h2>
@@ -264,14 +275,14 @@
       </section>
       <section aria-labelledby="protection" class="panel">
         <h2 id="protection">Access &amp; security</h2>
-        <p class="muted">Active isolation mode, system protection boundaries, credential masks, and read-only invariants.</p>
+        <p class="muted">Standard commands use an offline workspace sandbox. Native YOLO commands use the gateway user’s OS permissions, including access to Veyl state.</p>
         <div class="protection-grid">
           <div class="section-card">
             <h3>State &amp; runtime directories</h3>
             <dl id="protected-summary" class="metrics"></dl>
           </div>
           <div class="section-card">
-            <h3>Masked user files &amp; credentials</h3>
+            <h3>Legacy sandbox mask rules</h3>
             <div class="table">
               <table>
                 <thead><tr><th scope="col">Protected path</th><th scope="col">Enforcement</th><th scope="col">Scope</th></tr></thead>
@@ -280,7 +291,7 @@
             </div>
           </div>
           <div class="section-card">
-            <h3>Read-only system &amp; hook paths</h3>
+            <h3>Legacy sandbox read-only rules</h3>
             <div class="table">
               <table>
                 <thead><tr><th scope="col">Protected path</th><th scope="col">Enforcement</th><th scope="col">Scope</th></tr></thead>

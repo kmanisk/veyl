@@ -32,7 +32,7 @@ class DynamicJobs(unittest.TestCase):
         f.audit = state / "audit.jsonl"
         f.audit.touch(mode=0o600)
         f.doc.update(
-            policy_version=3, audit_log=str(f.audit), job_state_dir=str(jobs),
+            policy_version=4, audit_log=str(f.audit), job_state_dir=str(jobs),
             job_profiles={"probe": {"executable": "/usr/bin/true", "args": [],
                                     "timeout_seconds": 8, "max_output_bytes": 128}},
         )
@@ -72,13 +72,13 @@ class DynamicJobs(unittest.TestCase):
         self.assertEqual(self.call("job_status", {"job_id": standard["job_id"]})["exit_code"], 0)
         self.call("exec_command", {"command": "true", "cwd": str(f.base)}, error=True)
 
-        subprocess.run([product.BIN, "mode", "yolo", "primary", "--config", f.config],
+        subprocess.run([product.BIN, "mode", "yolo", "primary", "--confirm-native", "--config", f.config],
                        env=dict(os.environ, HOME=str(f.base)), check=True, capture_output=True, timeout=10)
-        command = ("test -e " + shlex.quote(str(outside)) + " && test ! -e "
-                   + shlex.quote(str(f.config)) + " && printf masked")
+        command = ("test -e " + shlex.quote(str(outside)) + " && test -e "
+                   + shlex.quote(str(f.config)) + " && printf native")
         broad = self.call("exec_command", {"command": command, "timeout_seconds": 8})
         self.assertEqual(broad["exit_code"], 0, broad)
-        self.assertEqual(broad["stdout"], "masked")
+        self.assertEqual(broad["stdout"], "native")
 
         args = {"command": "printf start; sleep 1; printf done", "wait_seconds": 0,
                 "timeout_seconds": 8, "request_id": "same"}

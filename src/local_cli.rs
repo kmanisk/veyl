@@ -285,7 +285,7 @@ pub(crate) fn init(args: &[OsString]) -> Result<(), String> {
     let secret = credential()?;
     let digest = format!("{:x}", Sha256::digest(secret.as_bytes()));
     let mut document = serde_json::json!({
-        "policy_version":3,
+        "policy_version":4,
         "audit_log":state.join("audit/events.jsonl"),
         "job_state_dir":state.join("jobs"),
         "skills_dir":state.join("skills"),
@@ -298,7 +298,9 @@ pub(crate) fn init(args: &[OsString]) -> Result<(), String> {
             "tools":["read_file","search_files","git_inspect","system_info","service_status",
                 "system_inspect","write_file","apply_patch","start_job","job_status","job_logs","cancel_job",
                 "list_jobs","skills_list","skills_read","list_directory","directory_tree",
-                "file_info","edit_file","create_directory","exec_command","job_wait","task_run"]
+                "file_info","edit_file","create_directory","exec_command","job_wait","task_run",
+                "goal_create","goal_get","goal_list","goal_update","goal_checkpoint","goal_next",
+                "goal_pause","goal_resume","goal_complete","goal_cancel"]
         }]
     });
     let mut connector = None;
@@ -394,6 +396,7 @@ pub(crate) fn init(args: &[OsString]) -> Result<(), String> {
             "set".into(),
             "chatgpt".into(),
             "yolo".into(),
+            "--confirm-native".into(),
             "--config".into(),
             state.join("clients.json").into_os_string(),
         ])?;

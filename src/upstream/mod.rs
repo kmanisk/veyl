@@ -173,6 +173,14 @@ enum Transport {
 }
 
 impl Catalog {
+    pub(crate) fn native_grants(&self) -> Grants {
+        Grants {
+            servers: self.0.iter().filter(|(_, server)| !server.disabled)
+                .map(|(id, _)| id.clone()).collect(),
+            ..Grants::default()
+        }
+    }
+
     /// OAuth preview uses explicit per-tool grants, no implicit workspace,
     /// runtime bundle, credential, private CA or arbitrary network route.
     /// Providers are operator-trusted, not a tenant-isolation mechanism.

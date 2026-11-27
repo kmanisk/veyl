@@ -34,7 +34,6 @@ pub(super) struct Native {
     pub(super) bounded_workspace: bool,
     verifier: [u8; 32],
     root: PathBuf,
-    config_path: PathBuf,
     durable_policy: Option<[u8; 32]>,
     durable_root: Option<(u64, u64)>,
     pub durable_state_dir: Option<PathBuf>,
@@ -59,13 +58,13 @@ fn eligible_client(client: &Client, now: u64, scope: Scope) -> bool {
         && (!(scope.commands || scope.interactive) || scope.jobs && client.job_runtime_limit_seconds<=300
             && client.job_cpu_percent_limit<=100 && client.job_memory_bytes_limit<=268435456
             && client.job_output_limit_bytes<=65536)
-        && client.actions.iter().all(|a| matches!(a, Action::ListTools | Action::ReadFile)
+        && client.actions.iter().all(|a| matches!(a, Action::ListTools | Action::ReadFile | Action::GoalRead | Action::GoalWrite)
             || scope.edit && matches!(a, Action::WriteFile | Action::ApplyPatch)
             || scope.tools && *a == Action::SearchFiles
             || scope.jobs && matches!(a,Action::RunShortJob|Action::StartJob|Action::JobStatus|Action::JobLogs|Action::CancelJob|Action::ListJobs)
             || scope.interactive && matches!(a,Action::ProcessStart|Action::ProcessInput|Action::ProcessResize|Action::ShellStatus|Action::ShellReset)
             || scope.upstreams && matches!(a,Action::ListUpstreams|Action::CallUpstream))
-        && client.tools.iter().all(|t| *t == Tool::ReadFile
+        && client.tools.iter().all(|t| *t == Tool::ReadFile || t.is_goal()
             || scope.edit && matches!(t, Tool::WriteFile | Tool::ApplyPatch | Tool::EditFile)
             || scope.tools && matches!(t, Tool::CreateDirectory | Tool::ListDirectory | Tool::DirectoryTree | Tool::FileInfo | Tool::SearchFiles)
             || scope.jobs && matches!(t,Tool::RunCommand|Tool::JobStart|Tool::JobStatus|Tool::JobLogs|Tool::JobCancel|Tool::ListJobs|Tool::JobWait)
@@ -90,7 +89,7 @@ impl Native {
         let providers=selected.and_then(|client|current.as_ref().and_then(|(_,settings)|settings.upstreams.oauth_summary(&client.upstreams).ok()));
         let eligible=selected.is_some() && state.mutations.available()
             && (!self.workspace_jobs || profiles.is_some() && state.jobs.as_ref().is_some_and(crate::jobs::Jobs::oauth_launch_available))
-            && (!self.workspace_interactive || state.jobs.as_ref().is_some_and(crate::jobs::Jobs::sessions_available))
+            && (!self.workspace_interactive || state.jobs.as_ref().is_some_and(|jobs| jobs.sessions_available(false)))
             && (!self.workspace_upstreams || providers.is_some());
         let tools=selected.map(|client| {
             let mut names:Vec<_>=client.tools.iter().map(|t|t.name()).collect();
@@ -139,12 +138,8 @@ impl Native {
                 let client = selected?;
                 if !settings.managed
                     || settings.jobs.is_none()
-                    || !state.jobs.as_ref().is_some_and(crate::jobs::Jobs::oauth_launch_available)
+                    || !state.jobs.as_ref().is_some_and(crate::jobs::Jobs::available)
                 {
-                    return None;
-                }
-                let broad = crate::jobs::Broad::prepare(state.policy.path(), settings).ok()?;
-                if broad.probe(&client.root).is_err() {
                     return None;
                 }
                 let jobs = settings.jobs.is_some();
@@ -158,40 +153,14 @@ impl Native {
                     .map(|tool| tool.name())
                     .collect();
                 yolo_tools.sort_unstable();
-                let protected_summary = serde_json::json!({
-                    "state_masked": state.policy.path().parent().map(|p| p.display().to_string()),
-                    "control_plane_masked": crate::protected_paths::CONTROL_PLANE_DIRS,
-                    "masked_home_defaults": crate::protected_paths::OPTIONAL_DEFAULTS,
-                    "readonly_home_defaults": crate::protected_paths::READONLY_DEFAULTS,
-                    "custom_masked": settings
-                        .protected_paths
-                        .selected(crate::protected_paths::Kind::Optional)
-                        .iter()
-                        .map(|r| r.path.display().to_string())
-                        .collect::<Vec<_>>(),
-                    "custom_readonly": settings
-                        .protected_paths
-                        .selected(crate::protected_paths::Kind::ReadOnly)
-                        .iter()
-                        .map(|r| r.path.display().to_string())
-                        .collect::<Vec<_>>(),
-                });
                 Some(serde_json::json!({
                     "root": self.root,
                     "mode": "yolo",
                     "yolo": true,
-                    "broad_host_access": true,
+                    "native_host_access": true,
                     "network_enabled": true,
                     "tools": yolo_tools,
-                    "protected_paths": protected_summary,
-                    "resource_ceilings": {
-                        "runtime_seconds_max": client.job_runtime_limit_seconds.min(300),
-                        "cpu_percent_max": client.job_cpu_percent_limit.min(100),
-                        "memory_bytes_max": client.job_memory_bytes_limit.min(268435456),
-                        "output_bytes_per_stream_max": client.job_output_limit_bytes.min(65536),
-                        "memory_swap_max": 0,
-                        "tasks_max": 128
-                    }
+                    "warning": "Commands run as the Veyl user and can access Veyl state and other data available to that user."
                 }))
             })
         } else {
@@ -341,7 +310,6 @@ impl Native {
             bounded_workspace,
             verifier: client.credential_digest(),
             root: client.root.clone(),
-            config_path: config_path.to_owned(),
             durable_policy,
             durable_root,
             durable_state_dir,
@@ -387,7 +355,7 @@ impl Native {
             if !self.managed_login || self.durable_state_dir.is_none() {
                 return Err("OAuth YOLO unavailable for this profile");
             }
-            Ok(Some(base.oauth_yolo_override(settings, &self.config_path)?))
+            Ok(Some(base.oauth_yolo_override(settings)?))
         } else {
             Ok(None)
         }

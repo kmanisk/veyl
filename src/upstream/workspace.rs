@@ -158,7 +158,7 @@ impl Grant {
         // An explicit provider grant can only narrow an already approved client root.
         // No implicit broad-YOLO or FULL filesystem delegation to third-party code.
         let extra_allowed = client.explicit_extra_roots
-            || matches!(client.mode, ExecutionMode::BroadYolo | ExecutionMode::Full);
+            || client.mode == ExecutionMode::Yolo;
         let anchor = client
             .mutation_root
             .iter()

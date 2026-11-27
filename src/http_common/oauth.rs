@@ -5,7 +5,9 @@ use serde_json::{Value, json};
 use std::net::IpAddr;
 
 use crate::core::credential::token_shape;
-use crate::core::oauth::{AuthorizationRequest, Binding, ConnectionMode, Error, GrantStore, bounded};
+use crate::core::oauth::{
+    AuthorizationRequest, Binding, ConnectionMode, Error, GrantStore, bounded,
+};
 use crate::core::session::random_id;
 
 const MAX_CLIENTS: usize = 128;

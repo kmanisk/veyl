@@ -1,5 +1,68 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current gate: staged 0.7.0-beta recovery checkpoint
+
+Use `../release-0.7.0-beta/veyl` and its SHA256SUMS, not the superseded
+0.6.1-beta preview. Both migration defects from the BridgeDev review are
+fixed and independently retested. 12 focused cases, nested systemd forward
+recovery and three additional BridgeDev black-box scenarios passed. Codex
+149 Rust tests and clean Clippy; current integration logs 162 pass/1 skip.
+See STATUS.md and the release receipts. AGY replacement gate remains open
+because generated drafts failed on interface assumptions, not confirmed
+candidate defects. Historical 28 pins intact, 228/293 legacy cases pass.
+Require exact candidate approval and independent gate closure before main
+promotion, production migration or publication. Do not restore an old
+executable against schema 4; use the verified new bundle for forward
+recovery. Native ChatGPT YOLO requires separate audited local approval.
+
+## Unified YOLO and durable goals candidate
+
+Isolated implementation from `a807b61`. Production has 29 terminal jobs and
+uses legacy sandboxed YOLO for its native ChatGPT grant. Production routing,
+policy, service and installed executable remain in place. See
+[TWO_MODE_ACCEPTANCE.md](TWO_MODE_ACCEPTANCE.md) for the replacement contract.
+
+The candidate reads previous sandboxed YOLO as Standard and retains audited
+FULL grants with their explicit tools. A local schema-4 migration and
+`--confirm-native` distinguish new native grants from earlier approvals.
+The managed OAuth fixture verified Standard, separate native consent and
+downgrade. The native fixtures verified filesystem and loopback network
+access, local Git status, pipe and PTY input, and restart persistence.
+
+The Codex cleanup removed `bridge_dev_v2`, `veyl_broad_test` and
+`veyl_test` from the app-owned configuration. A fresh Codex app-server
+discovered production Veyl's 14 tools. The private backup is
+`~/.codex/config.toml.before-veyl-mcp-cleanup-20261127T142719Z`.
+
+Goal checkpoints, ownership, revision conflict, linked job logs and local
+operator controls passed the regression fixtures, including browser
+navigation and dashboard pause/resume. The replacement locked gate remains
+an independent AGY handoff. Candidate and production may both report
+0.6.1-beta, so use artifact digests to distinguish them.
+
+Operator preview is `../candidate/veyl`. Use `../candidate/SHA256SUMS`
+and `../candidate-receipt.json` to identify the exact executable and source.
+See [STATUS.md](STATUS.md) for test, performance and deployment evidence.
+Repeat the focused local preview from this worktree with synthetic fixtures:
+
+```sh
+export MCP_GATEWAY_BIN="$PWD/../candidate/veyl"
+export VEYL_BASELINE_BIN="$HOME/.local/bin/veyl"
+python3 -B tests/unified_yolo.py -v
+python3 -B tests/durable_goals.py -v
+python3 -B tests/unified_oauth_yolo.py "$MCP_GATEWAY_BIN"
+```
+
+AGY should review the exact artifact against
+[TWO_MODE_ACCEPTANCE.md](TWO_MODE_ACCEPTANCE.md), own the replacement locked
+gate, and preserve all old pins. Exact operator acceptance and the real
+ChatGPT candidate round trip remain open. Protocol and recovery tests run
+on disposable state with separate credentials. Plan the production
+transition and rollback against the audited schema-4 migration. The
+existing public ChatGPT client needs fresh local native authorization
+during an accepted migration. The published version and production
+routing stay in place until the operator approves promotion.
+
 ## Current gate: 0.6.1-beta single executable released and running
 
 Production, GitHub Latest, and crates.io are all verified at 0.6.1-beta. Release tag `v0.6.1-beta` corresponds to `ac2c3f8cb9fdf21e1b2858fafeeecaf11c95e7db`. One ELF per installed bin directory, compatibility symlinks, unchanged service/configuration and grants, full audit chain preserved. GitHub release has exactly `veyl` and `SHA256SUMS` as uploaded assets. Both match the accepted bundle. See STATUS.md for evidence and rollback locations. Prior acceptance-pending sections are historical. Remaining work is real external client interoperability and practical BridgeDev parity; keep BridgeDev as fallback. One privileged Funnel test was skipped in this release's acceptance; Android not verified.

@@ -54,7 +54,7 @@ class TimeShift(unittest.TestCase):
     def test_signed_checkpoint_restore_restart_and_clear(self):
         _, reply = self.f.rpc("tools/list",self.session)
         names = {t["name"] for t in reply["result"]["tools"]}
-        self.assertEqual(len(names),84)
+        self.assertEqual(len(names), 94)
         self.assertTrue(REWIND <= names)
         self.write("second version\n")
         records = self.history()["checkpoints"]
@@ -229,21 +229,20 @@ class TimeShift(unittest.TestCase):
         self.assertTrue(self.restore(checkpoint)["isError"])
         self.assertEqual(self.file.read_text(),"second")
 
-    def test_explicit_grant_and_yolo(self):
+    def test_explicit_standard_timeshift_grants(self):
         # Operator revokes restore/clear but retains capture/history.
         self.f.stop(self.process)
         self.f.doc["clients"][0]["tools"] = sorted(set(self.f.doc["clients"][0]["tools"]) - {"rewind_restore","rewind_clear"})
         self.f.write_config()
         self.process = self.f.start()
         self.session = self.f.connect()
-        self.f.cli("mode","yolo","primary")
-        self.write("broad edit")
+        self.write("scoped edit")
         id = self.history()["checkpoints"][0]["checkpoint"]
         self.assertTrue(self.restore(id)["isError"])
         self.denied("rewind_clear",{"path":self.path,"checkpoint":id,"confirm":True})
         _, reply = self.f.rpc("tools/list",self.session)
         self.assertEqual({t["name"] for t in reply["result"]["tools"]} & REWIND,{"rewind"})
-        # Broad native read must never expose the store.
+        # Standard file access must never expose the store.
         self.denied("read_file",{"path":str(self.store/"key")})
 
 

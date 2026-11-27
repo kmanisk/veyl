@@ -42,7 +42,7 @@ class GitToolsTests(unittest.TestCase):
         git(self.repo, "commit", "-m", "initial")
 
     def start(self, tools, broad=False):
-        self.f.doc["policy_version"] = 3
+        self.f.doc["policy_version"] = 4
         for client in self.f.doc["clients"]:
             client["mode"] = "standard"
             client["disabled"] = False
@@ -50,7 +50,7 @@ class GitToolsTests(unittest.TestCase):
         primary["tools"] = tools
         self.f.write_config()
         if broad:
-            self.f.cli("mode", "yolo", primary["id"])
+            self.f.cli("mode", "yolo", primary["id"], "--confirm-native")
         proc = self.f.start()
         self.addCleanup(self.f.stop, proc)
         return self.f.connect(token=pf.TOKEN)
@@ -132,7 +132,7 @@ class GitToolsTests(unittest.TestCase):
 
         self.assertFalse(marker.exists(), "Git hook or external helper unexpectedly executed!")
 
-    def test_exact_per_tool_grants_and_yolo_preset_exclusion(self):
+    def test_standard_exact_grants_and_yolo_git_preset(self):
         sess = self.start(["git_status"])
         self.call(sess, "git_status", {})
         for denied in ("git_diff", "git_log", "git_add", "git_commit"):
@@ -141,7 +141,7 @@ class GitToolsTests(unittest.TestCase):
         yolo_sess = self.start(["read_file"], broad=True)
         listed = {t["name"] for t in self.f.rpc("tools/list", yolo_sess, pf.TOKEN)[1]["result"]["tools"]}
         self.assertTrue({"git_status", "git_diff", "git_log"}.issubset(listed))
-        self.assertFalse(listed & {"git_add", "git_commit", "git_reset", "git_push", "git_pull"})
+        self.assertTrue({"git_add", "git_commit", "git_reset", "git_push", "git_pull"} <= listed)
 
     def test_broad_yolo_remote_push_and_pull_loopback_http(self):
         backend = Path("/usr/lib/git-core/git-http-backend")

@@ -10,7 +10,7 @@ per-connection Standard/YOLO selection, exact scope, sandbox constraints,
 and acceptance. Choose Streamable HTTP, OAuth DCR, PKCE S256 and scope `mcp`.
 Every newly registered OAuth connection defaults to Standard; the local
 operator can select YOLO during dashboard approval or switch modes via
-`veyl mode yolo|standard <CLIENT_ID>` (or `veyl logout --client <ID>` /
+`veyl mode yolo <CLIENT_ID> --confirm-native` or `veyl mode standard <CLIENT_ID>` (or `veyl logout --client <ID>` /
 `veyl logout --all`). Escalation revokes prior Standard grants and requires
 fresh OAuth authorization; downgrade or revocation immediately denies
 elevated admissions and job launches. No separate ChatGPT plugin, cloud relay
@@ -29,15 +29,14 @@ dashboard address is separate.
 
 ## Shared mode selection
 
-For policy version 3, a local operator can explicitly set the same mode for every enabled client:
+For policy version 4, a local operator can explicitly set the same mode for every enabled client:
 
 ```sh
-veyl mode yolo --all
+veyl mode yolo --all --confirm-native
 veyl mode standard --all
-veyl mode full --all --confirm-full
 ```
 
-The batch is atomic and audited. Existing client identities, credentials, explicit denials, roots and upstream approvals remain independent. Disabled clients stay disabled and retain their selected modes. Future clients do not inherit elevation automatically. An interrupted batch fails closed; recover with `veyl mode standard --all`, which removes elevation from all entries including disabled clients while preserving disabled state. Older policy schemas require explicit migration first. A single-client mode change continues to affect only that client.
+The batch is atomic and audited. Existing client identities, credentials, explicit denials, roots and upstream approvals remain independent. Disabled clients stay disabled. Future clients do not inherit elevation automatically. An interrupted batch fails closed; recover with `veyl mode standard --all`, which removes elevation from all entries including disabled clients while preserving disabled state. Older policy schemas require explicit migration first. A single-client mode change continues to affect only that client.
 
 ## Codex
 

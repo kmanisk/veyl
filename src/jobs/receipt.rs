@@ -34,6 +34,8 @@ pub(super) struct Receipt {
     pub oauth: Option<super::session::OAuthBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_launch: Option<super::session::LaunchAuthority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_authority: Option<super::session::NativeAuthority>,
     pub cwd: std::path::PathBuf,
     pub timeout_seconds: u64,
     pub max_output_bytes: usize,
@@ -92,6 +94,7 @@ impl Receipt {
             "output_truncated": self.stdout_truncated || self.stderr_truncated,
             "resource_ceilings": super::resources::status(self.resource_ceilings_enforced, self.cpu_percent, self.memory_bytes)
         });
+        if self.full { status["execution_mode"] = json!("yolo"); }
         status["ephemeral_worktree"] = json!(self.ephemeral_worktree);
         if self.ephemeral_worktree {
             status["worktree_cleaned"] = json!(self.worktree_cleaned);
@@ -99,8 +102,8 @@ impl Receipt {
         if let Some(session) = &self.session {
             status["transport"] = json!(session.transport());
         }
-        if self.session.is_some() || self.timeout_seconds > super::config::SHORT_RUNTIME_MAX {
-            status["timeout_seconds"] = json!(self.timeout_seconds);
+        if self.full || self.session.is_some() || self.timeout_seconds > super::config::SHORT_RUNTIME_MAX {
+            status["timeout_seconds"] = json!((self.timeout_seconds != 0).then_some(self.timeout_seconds));
         }
         if let Some(duration) = self.execution_duration_ms {
             status["execution_duration_ms"] = json!(duration);

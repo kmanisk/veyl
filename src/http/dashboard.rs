@@ -735,6 +735,55 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         .await;
         return result;
     }
+    if path == "/api/dashboard/goals" {
+        if remote {
+            return forbidden();
+        }
+        let (tool, args) = if method == Method::GET {
+            if let Some(id) = parameter(&query, "goal_id") {
+                (Tool::GoalGet, json!({"goal_id":id}))
+            } else {
+                (Tool::GoalList, json!({"cursor":parameter(&query, "cursor")}))
+            }
+        } else if method == Method::POST
+            && mcp_gateway::http_common::one(request.headers(), "origin") == Some(format!("http://{local}").as_str())
+        {
+            let Ok(body) = body(request).await else { return bad(); };
+            let tool = match body["action"].as_str() {
+                Some("pause") => Tool::GoalPause,
+                Some("resume") => Tool::GoalResume,
+                Some("cancel") if body["confirm"] == true => Tool::GoalCancel,
+                _ => return bad(),
+            };
+            (tool, json!({"goal_id":body["goal_id"],"revision":body["revision"]}))
+        } else {
+            return forbidden();
+        };
+        let job_id = parameter(&query, "job_id").map(str::to_owned);
+        if job_id.is_some() && tool != Tool::GoalGet {
+            return bad();
+        }
+        let state = state.clone();
+        return match tokio::task::spawn_blocking(move || {
+            let (_policy, settings) = state.policy.read()?;
+            let goal = crate::goals::operator_call(state.policy.path(), &settings, None, tool, args)?;
+            if let Some(job_id) = job_id {
+                if !goal["jobs"].as_array().is_some_and(|jobs| jobs.iter().any(|job| job == &job_id)) {
+                    return Err(String::from("Job is unavailable for this goal"));
+                }
+                let jobs = state.jobs.as_ref().ok_or("Jobs unavailable")?;
+                let owner = goal["owner"].as_str().ok_or("Goal owner unavailable")?;
+                jobs.owned_tool(Tool::JobLogs, &job_id, owner, &serde_json::Map::new())
+                    .map_err(|_| "Job logs unavailable".into())
+            } else {
+                Ok(goal)
+            }
+        }).await {
+            Ok(Ok(value)) => ok(value),
+            Ok(Err(error)) => json_response(Status::BAD_REQUEST, json!({"error":error}), None),
+            Err(_) => unavailable(),
+        };
+    }
     if method == Method::GET && path == "/api/dashboard/jobs" {
         let Some(client) = parameter(&query, "client") else {
             return bad();
@@ -825,7 +874,7 @@ async fn pair_with_ids(
     cookie(reply, &session, SESSION_TTL.as_secs())
 }
 
-async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
+async fn status(state: &Arc<State>, admin: &Admin, csrf: String) -> Reply {
     let mut counts = HashMap::new();
     {
         let sessions = state.sessions.lock().await;
@@ -875,8 +924,9 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
         Some((count, tools)) => (Some(count), tools),
         None => (None, Vec::new()),
     };
-    let config = admin.config.clone();
-    with_policy(admin, move |settings| {
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || {
+        let (_policy, settings) = state.policy.read().map_err(|_| Status::SERVICE_UNAVAILABLE)?;
         let clients: Vec<_> = settings.clients.iter().map(|client| json!({
             "id": client.id,
             "disabled": client.is_disabled(),
@@ -891,13 +941,12 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
             "upstream_workspaces": client.upstreams.workspace_metadata(),
             "expired": client.expires_at <= unix_seconds()
         })).collect();
-        let audit = settings.audit_log.as_deref().map(|path| if AuditSink::inspect(path, false).is_ok() { "verified" } else { "unavailable" });
-        let broad = settings.clients.iter().any(|client| client.mode == ExecutionMode::BroadYolo);
-        let layout = if broad {
-            if crate::state_cli::Layout::admission(&config, &settings).is_ok() { "Valid" } else { "Invalid" }
-        } else {
-            "Broad YOLO inactive"
-        };
+        // Polling checks the live ledger binding. Full verification remains an
+        // explicit audit operation, outside the status refresh path.
+        let audit = settings.audit_log.as_ref().map(|_| {
+            if state.mutations.available() { "available" } else { "unavailable" }
+        });
+        let native_yolo = settings.clients.iter().any(|client| client.mode == ExecutionMode::Yolo);
         use crate::protected_paths::{Kind, OPTIONAL_DEFAULTS, READONLY_DEFAULTS};
         let protected = |kind| settings.protected_paths.selected(kind).iter()
             .map(|rule| &rule.path).collect::<Vec<_>>();
@@ -921,12 +970,12 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
             "oauth_preview": oauth_preview,
             "configuration": {
                 "authorization": if settings.managed { "Managed" } else { "Legacy" },
-                "broad_state_layout": layout,
+                "native_yolo": native_yolo,
                 "configured_job_profiles": settings.jobs.is_some(),
                 "configured_skills_store": settings.skills.is_some(),
             },
             "protected_paths": {
-                "state_directory": broad.then(|| config.parent()).flatten(),
+                "state_directory": null,
                 "default_masked": OPTIONAL_DEFAULTS,
                 "default_readonly": READONLY_DEFAULTS,
                 "extra_masked": protected(Kind::Optional),
@@ -934,7 +983,8 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
                 "skills_directory": settings.skills.as_ref().map(|skills| skills.path()),
             },
         }))
-    }).await
+    }).await.unwrap_or(Err(Status::SERVICE_UNAVAILABLE))
+        .map_or_else(|_| unavailable(), ok)
 }
 
 async fn with_policy(

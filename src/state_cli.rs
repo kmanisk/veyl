@@ -147,18 +147,6 @@ impl Layout {
         Err("State directory changed during inspection".into())
     }
 
-    pub(crate) fn admission(config: &Path, settings: &Configuration) -> Result<Self, String> {
-        let root = config.parent().ok_or("Missing dedicated state root")?;
-        let layout = Self::inspect(root)?;
-        layout.validate_links()?;
-        layout.verify_settings(config, settings)?;
-        Ok(layout)
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-
     pub(crate) fn into_root(self) -> OwnedFd {
         self.root
     }
@@ -386,10 +374,6 @@ fn protected_inventory(
 
 pub(crate) fn verify_private_aliases(path: &Path, masked: bool) -> io::Result<()> {
     protected_inventory(path, masked, false).map(|_| ())
-}
-
-pub(crate) fn protected_objects(path: &Path, masked: bool) -> io::Result<BTreeSet<[u64; 2]>> {
-    protected_inventory(path, masked, true)
 }
 
 fn changed(stat: &Stat) -> (i64, i64) {

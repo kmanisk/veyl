@@ -30,7 +30,7 @@ class DurableIdentityIntegration(unittest.TestCase):
             env["HOME"] = str(home)
         return subprocess.run([str(BIN), *args], capture_output=True, text=True, env=env, timeout=20)
 
-    def setup_policy(self, base: Path):
+    def setup_policy(self, base: Path, policy_version=4):
         home = base / "home"
         home.mkdir(mode=0o700)
         root = base / "workspace"
@@ -47,7 +47,7 @@ class DurableIdentityIntegration(unittest.TestCase):
         config = state / "clients.json"
         token = "4c" * 32
         doc = {
-            "policy_version": 3,
+            "policy_version": policy_version,
             "audit_log": str(audit_log),
             "job_state_dir": str(jobs_dir),
             "job_profiles": {"ok": {"executable": "/usr/bin/true", "args": [], "timeout_seconds": 5}},
@@ -73,7 +73,7 @@ class DurableIdentityIntegration(unittest.TestCase):
         home, root, audit_log, config = self.setup_policy(base)
 
         # Trigger real audited policy mode transition (Standard -> Yolo -> Standard) to create ledger + records.
-        r = self.cli("mode", "yolo", "dev", "--config", str(config), home=home)
+        r = self.cli("mode", "yolo", "dev", "--confirm-native", "--config", str(config), home=home)
         self.assertEqual(r.returncode, 0, r.stderr)
         anchor = base / "anchor.json"
         r = self.cli("audit", "export-head", "--config", str(config), "--out", str(anchor), home=home)

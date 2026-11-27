@@ -660,19 +660,16 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let client = settings
+        settings
             .clients
             .iter()
             .find(|client| {
                 public.is_some_and(|public| client.id == public.client)
                     && !client.disabled
-                    && client.mode == mcp_gateway::security::policy::ExecutionMode::BroadYolo
+                    && client.mode == mcp_gateway::security::policy::ExecutionMode::Yolo
                     && now < client.expires_at
             })
-            .ok_or("Funnel needs its approved, unexpired Broad YOLO client")?;
-        crate::jobs::broad::Broad::prepare(&path, &settings)?
-            .probe(&client.root)
-            .map_err(|_| "Broad YOLO sandbox preflight failed")?;
+            .ok_or("Funnel needs its locally approved, unexpired native YOLO client")?;
     }
     let routes = if !add || disable_funnel {
         let Some(known) = receipt.clone() else {

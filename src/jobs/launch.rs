@@ -53,16 +53,13 @@ impl Jobs {
             mcp_gateway::security::linux_fs::bounded_oauth_workspace(root.path())?;
         }
         if policy.oauth_family {
-            if self.scopes.is_none() {
+            if !policy.full && self.scopes.is_none() {
                 return Err(io::Error::from(ErrorKind::Unsupported));
             }
             let interactive_allowed = profile.interactive
                 && policy.session.as_ref().is_some_and(|session| session.oauth.is_some());
-            let oauth_yolo = policy.yolo
-                && policy.broad.is_some()
-                && !policy.full
+            let oauth_yolo = policy.full
                 && !policy.oauth_bounded_workspace
-                && policy.workspace_mounts.is_none()
                 && oauth_binding.is_some();
             let oauth_standard = !policy.yolo
                 && !policy.full
@@ -71,20 +68,20 @@ impl Jobs {
                 && policy.workspace_mounts.is_some_and(|r| r.is_empty());
             if !super::oauth_owner(owner)
                 || !(oauth_yolo || oauth_standard)
-                || profile.extended_runtime
+                || (!oauth_yolo && profile.extended_runtime)
                 || (!interactive_allowed && (profile.interactive || profile.pty || policy.session.is_some()))
             {
                 return Err(invalid());
             }
-            if profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX
+            if !oauth_yolo && (profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX
                 || profile.cpu_percent > policy.job_cpu_percent_limit.min(100)
                 || profile.memory_bytes > policy.job_memory_bytes_limit.min(super::config::default_memory())
-                || profile.max_output_bytes > policy.job_output_limit_bytes.min(super::config::MAX_OUTPUT)
+                || profile.max_output_bytes > policy.job_output_limit_bytes.min(super::config::MAX_OUTPUT))
             {
                 return Err(invalid());
             }
             use std::os::unix::fs::MetadataExt;
-            if !std::fs::metadata(&profile.executable)
+            if !oauth_yolo && !std::fs::metadata(&profile.executable)
                 .is_ok_and(|m| m.is_file() && m.uid() == 0 && m.mode() & 0o6022 == 0)
             {
                 return Err(invalid());
@@ -94,9 +91,8 @@ impl Jobs {
             }
         }
         let session = if profile.interactive {
-            if self.scopes.is_none()
-                || policy.full
-                || (policy.broad.is_none() && policy.workspace_mounts.is_none())
+            if !policy.full && (self.scopes.is_none()
+                || (policy.broad.is_none() && policy.workspace_mounts.is_none()))
             {
                 return Err(io::Error::from(ErrorKind::Unsupported));
             }
@@ -154,6 +150,7 @@ impl Jobs {
                         || receipt.memory_bytes != profile.memory_bytes
                         || receipt.yolo != policy.yolo
                         || receipt.full != policy.full
+                        || receipt.native_authority != policy.native_authority.map(super::session::NativeAuthority::new)
                         || receipt.broad.as_ref() != policy.broad
                         || receipt.isolated
                             != (policy.workspace_mounts.is_some() || policy.broad.is_some())
@@ -189,9 +186,9 @@ impl Jobs {
             ));
         }
         // Longer unattended work needs a manager-side time and resource backstop.
-        if profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX
+        if !policy.full && profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX
             && (self.scopes.is_none()
-                || (!policy.full && policy.broad.is_none() && policy.workspace_mounts.is_none()))
+                || (policy.broad.is_none() && policy.workspace_mounts.is_none()))
         {
             return Err(io::Error::from(ErrorKind::Unsupported));
         }
@@ -199,6 +196,9 @@ impl Jobs {
             return Err(io::Error::from(ErrorKind::WouldBlock));
         }
 
+        if policy.full && (profile.cpu_percent != 0 || profile.memory_bytes != 0) && self.scopes.is_none() {
+            return Err(io::Error::from(ErrorKind::Unsupported));
+        }
         let job_id = random_hex()?;
         let mut worktree = worktree_repo
             .map(|repo| super::worktree::Worktree::create(repo, &job_id))
@@ -224,6 +224,7 @@ impl Jobs {
             session,
             oauth: oauth_binding,
             oauth_launch: policy.session.and_then(super::session::LaunchAuthority::new),
+            native_authority: policy.native_authority.map(super::session::NativeAuthority::new),
             cwd: root.path().to_owned(),
             timeout_seconds: profile.timeout_seconds,
             max_output_bytes: profile.max_output_bytes,
@@ -269,6 +270,9 @@ impl Jobs {
             wt.disarm();
         }
 
+        // A transient scope, when available, also survives systemd restarting
+        // the gateway service. Native jobs need no resource quotas for it.
+        let scope = self.scopes.as_ref();
         let launch = Launch {
             store: self.store.path().to_owned(),
             audit: self.audit_path.clone(),
@@ -280,13 +284,14 @@ impl Jobs {
             nonce: receipt.launch_nonce.clone(),
             session: receipt.session.clone(),
             oauth: receipt.oauth.clone(),
-            scoped: self.scopes.is_some(),
+            scoped: scope.is_some(),
+            native_home: policy.full.then(|| std::env::var_os("HOME")).flatten().map(Into::into),
             yolo: receipt.yolo,
             isolated: receipt.isolated,
             broad: receipt.broad.clone(),
             sandbox_roots,
         };
-        if start_runner(launch, lease, self.scopes.as_ref()).is_err() {
+        if start_runner(launch, lease, scope).is_err() {
             let mut failed = receipt;
             self.reconcile(&job, &mut failed)?;
             return Err(invalid());

@@ -23,7 +23,7 @@ class MigrationRollback(unittest.TestCase):
         holder = fixture.make_btrfs_temp_base()
         self.addCleanup(holder.cleanup)
         self.base = Path(holder.name)
-        self.home, _, self.audit, original = fixture.DurableIdentityIntegration().setup_policy(self.base)
+        self.home, _, self.audit, original = fixture.DurableIdentityIntegration().setup_policy(self.base, policy_version=3)
         state = self.home / ".local/state/veyl"
         state.parent.mkdir(parents=True, mode=0o700)
         doc = json.loads(original.read_text())
