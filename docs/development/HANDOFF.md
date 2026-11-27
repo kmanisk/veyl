@@ -1,5 +1,22 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current gate: Independent AGY acceptance PASS for `0.6.1-beta` (`single-binary.WbADoDZC`); explicit operator acceptance required before release
+
+- **Version**: `0.6.1-beta` (`Cargo.toml`, `Cargo.lock`, `README.md`; single compiled binary target `veyl`)
+- **Base commit**: `46527bfd94974703a30237b2df71d2cdaec9d54e` (uncommitted `single-binary.WbADoDZC/source` working tree ready for commit on `main` upon approval)
+- **Bundle**: `/home/onyx/.local/share/veyl-development/candidates/single-binary.WbADoDZC/release-0.6.1-beta/` (`veyl` `11462664` bytes, sha256 `b534c40338a9a52e2d9e7805ee551051bbb88ce0655cbffdc23d37b9ffea9a39`, and `SHA256SUMS` ONLY)
+- **Manifest**: `/home/onyx/.local/share/veyl-development/candidates/single-binary.WbADoDZC/SOURCE_SHA256SUMS-0.6.1-beta`
+- **Source archive**: `/home/onyx/.local/share/veyl-development/candidates/single-binary.WbADoDZC/veyl-0.6.1-beta-source.tar.gz`
+- **Crate preflight**: `/home/onyx/Projects/veyl/target/package/veyl-0.6.1-beta.crate` (`cargo package --offline --locked --allow-dirty --no-verify`)
+- **Independent AGY verification summary** (see `STATUS.md`):
+  - Clippy clean (0 warnings), Rust suite **153/153 PASS**, Locked + three-modes **293/293 PASS** (`28/28` pins intact, including `--features test-hooks` `locked_audit_chain.py` **13/13** and `locked_three_modes.py` **6/6**).
+  - Single-ELF migration `0.6.0-beta -> 0.6.1-beta` (`tests/durable_update_service.sh ... single-binary`) **PASS** (4/4 scenarios), `durable_update_rollback.py` **3/3**, `systemd_lifecycle.sh` **PASS**, `updater_lifecycle.sh` **PASS**, `gate3_runtime.py` **PASS**, `durable_identity.py` **3/3**, `durable_identity_loopback.py` **PASS**, `oauth_bounded_workspace.py` **1/1**, `oauth_funnel.py` **4 PASS, 1 skipped** (host tmpfs positive), all 33 remaining OAuth/connector/browser/gateway integration suites **PASS**.
+- **Release gate (`AGENTS.md`)**: production `mcp-gateway` and canonical `~/Projects/veyl` remain unchanged until explicit operator acceptance is given to install `~/.local/bin/veyl` (with `mcp-gateway`, `veyl-monitor` compatibility symlinks), verify live production health/grants/audit, commit & push `main`, publish GitHub release `v0.6.1-beta` (assets `veyl` + `SHA256SUMS` only, marked Latest), and publish `veyl 0.6.1-beta` to `crates.io`.
+
+## Historical gate: single-binary distribution candidate
+
+`../single-elf-preview.x1SxkMfo/` contains a single optimized ELF and SHA256SUMS. Build, 44 focused cases, four isolated systemd upgrade/rollback checks, direct paired monitor, and locked pin checks passed. See STATUS.md for exact evidence. GitHub Latest corrected to published 0.6.0-beta. Current production and release tag unchanged. Full Rust/locked suites and new version authorization remain before next release. Preserve legacy release compatibility.
+
 ## Current gate: 0.6.0-beta released and running
 
 Release tag `v0.6.0-beta` and published crate `veyl 0.6.0-beta` correspond to accepted code commit `f204dc257b1bdd8bde8c11811d84bf5b6e58a9cd`. The release assets and installed binaries match the approved bundle. The production service is active, all grants and audit history preserved, and the durable v2 checkpoint is verified against the pre-upgrade anchor. See STATUS.md for evidence. Earlier acceptance-pending sections below are historical. Next gate: real external-client interoperability, limited opt-in Veyl workflow trials, and measured BridgeDev parity. Preserve rollback and existing BridgeDev access.

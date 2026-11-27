@@ -50,7 +50,7 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        Command::new(env!("CARGO_BIN_EXE_veyl"))
             .args(args)
             .arg("--config")
             .arg(self.config())
@@ -177,7 +177,7 @@ fn new_user_init_and_default_commands_need_no_manual_json() {
     DirBuilder::new().mode(0o700).create(&home).unwrap();
     let workspace = f.0.join("workspace");
     let invoke = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        Command::new(env!("CARGO_BIN_EXE_veyl"))
             .env("HOME", &home)
             .args(args)
             .output()

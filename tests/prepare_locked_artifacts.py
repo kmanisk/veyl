@@ -86,8 +86,8 @@ def checked_artifact(value, target):
 
 
 def stage_build(destination, identity, locked, hooks=False):
-    arguments = ["build", "--bin", "mcp-gateway", "--features", "test-hooks"] if hooks else [
-        "build", "--bins", "--lib"]
+    arguments = ["build", "--bin", "veyl", "--features", "test-hooks"] if hooks else [
+        "build", "--bin", "veyl", "--lib"]
     arguments.append("--message-format=json")
     def execute(command, env, paths):
         if source_identity() != identity or pins() != locked:
@@ -106,7 +106,7 @@ def stage_build(destination, identity, locked, hooks=False):
         layout = destination / ("target/test-hooks/debug" if hooks else "target/debug")
         layout.mkdir(parents=True, mode=0o700)
         for name in (("mcp-gateway",) if hooks else BINS):
-            artifact = candidate_artifact(messages, name, "bin")
+            artifact = candidate_artifact(messages, "veyl", "bin")
             features = artifact.get("features", [])
             if ("test-hooks" in features) != hooks:
                 raise ValueError("Wrong test-hook feature set")
@@ -117,12 +117,12 @@ def stage_build(destination, identity, locked, hooks=False):
         if hooks:
             # The shared final executable name is reused when switching Cargo
             # features. Restore normal outputs while still owning the guard.
-            restore = ["cargo", "build", "--offline", "--locked", "-j", "1", "--bins", "--lib"]
+            restore = ["cargo", "build", "--offline", "--locked", "-j", "1", "--bin", "veyl", "--lib"]
             result = guard.supervise(restore, env, paths)
             if result != 0:
                 return result
             for name in BINS:
-                if digest(target / "debug" / name) != digest(destination / "target/debug" / name):
+                if digest(target / "debug" / "veyl") != digest(destination / "target/debug" / name):
                     raise ValueError("Normal artifact restore did not match staged binary")
             return 0
         library = candidate_artifact(messages, "mcp_gateway", "lib")

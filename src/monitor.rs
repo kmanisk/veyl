@@ -15,7 +15,7 @@ use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
 
-const HELP: &str = "Usage: veyl dashboard pair --config PATH | veyl-monitor --listen 127.0.0.1:PORT [--client ID] [--view health|clients|jobs|logs|activity|audit|skills|upstreams|integrations] [--job ID]\n    Use --cancel JOB --client ID --confirm for non-interactive cancellation.";
+const HELP: &str = "Usage: veyl dashboard pair --config PATH | veyl monitor --listen 127.0.0.1:PORT [--client ID] [--view health|clients|jobs|logs|activity|audit|skills|upstreams|integrations] [--job ID]\n    Use --cancel JOB --client ID --confirm for non-interactive cancellation.";
 struct Monitor {
     rt: tokio::runtime::Runtime,
     addr: SocketAddrV4,
@@ -173,14 +173,14 @@ fn render(value: &Value) {
     );
 }
 
-fn run() -> Result<(), String> {
+pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
     let mut addr = None;
     let mut view = None;
     let mut client = None;
     let mut job = None;
     let mut cancel = None;
     let mut confirm = false;
-    let mut args = std::env::args().skip(1);
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" => {
@@ -263,7 +263,7 @@ fn run() -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-#[path = "monitor_tui/mod.rs"]
+#[path = "bin/monitor_tui/mod.rs"]
 mod tui;
 
 #[cfg(target_os = "linux")]
@@ -347,11 +347,4 @@ fn line_monitor(monitor: &Monitor, mut client: Option<String>) -> Result<(), Str
         }
     }
     Ok(())
-}
-
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("veyl-monitor: {error}");
-        std::process::exit(2);
-    }
 }

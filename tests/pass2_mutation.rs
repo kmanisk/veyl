@@ -74,7 +74,7 @@ struct Gateway(Child);
 impl Gateway {
     fn start(fixture: &Fixture) -> (Self, SocketAddr) {
         let mut server = Self(
-            Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+            Command::new(env!("CARGO_BIN_EXE_veyl"))
                 .args(["http", "--listen", "127.0.0.1:0", "--config"])
                 .arg(fixture.0.join("clients.json"))
                 .stdin(Stdio::null())

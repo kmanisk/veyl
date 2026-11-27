@@ -3,6 +3,7 @@
 mod android_http;
 #[cfg(target_os = "linux")]
 mod audit_cli;
+mod connector;
 #[cfg(target_os = "linux")]
 mod file_access;
 #[cfg(target_os = "linux")]
@@ -20,6 +21,7 @@ mod linux_command;
 mod local_cli;
 #[cfg(target_os = "linux")]
 mod mode_cli;
+mod monitor;
 #[cfg(target_os = "linux")]
 mod oauth_cli;
 #[cfg(target_os = "linux")]
@@ -79,6 +81,7 @@ Daily use
 Administration
   diagnostics, skills, mcp-servers, marketplace, audit, state, serve, protected-paths
   oauth                                          Local OAuth preview consent
+  connector                                      Experimental loopback connector
 
 Advanced transport
   platform                                       Show compiled platform capabilities\n  platform-probe [--root DIR]                    Experimental foreground MCP probe\n  --root DIR                                     MCP over stdio (Linux legacy)
@@ -89,6 +92,27 @@ Use veyl --version to display the installed version.";
 
 fn main() {
     let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    let invoked = std::env::args_os()
+        .next()
+        .and_then(|p| std::path::Path::new(&p).file_name().map(|n| n.to_owned()));
+    let alias = invoked.as_deref().and_then(std::ffi::OsStr::to_str);
+    if alias == Some("veyl-monitor") || args.first().is_some_and(|a| a == "--monitor-worker") {
+        if alias != Some("veyl-monitor") {
+            args.remove(0);
+        }
+        if let Err(error) = text_args(args).and_then(monitor::run) {
+            eprintln!("veyl monitor: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if alias == Some("veyl-connector") {
+        if let Err(error) = text_args(args).and_then(connector::run) {
+            eprintln!("veyl connector: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
     if args.first().is_some_and(|arg| arg == "tui") {
         args[0] = "monitor".into();
     }
@@ -123,6 +147,7 @@ fn main() {
                     | "yolo"
                     | "http"
                     | "oauth"
+                    | "connector"
             )
         )
     };
@@ -149,7 +174,19 @@ fn main() {
     }
 }
 
+fn text_args(args: Vec<std::ffi::OsString>) -> Result<Vec<String>, String> {
+    args.into_iter()
+        .map(|a| {
+            a.into_string()
+                .map_err(|_| "Expected UTF-8 arguments".to_owned())
+        })
+        .collect()
+}
+
 fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
+    if args.first().is_some_and(|a| a == "connector") {
+        return text_args(args.into_iter().skip(1).collect()).and_then(connector::run);
+    }
     let invoked_as_veyl = std::env::args_os().next().is_some_and(|p| {
         std::path::Path::new(&p)
             .file_name()
@@ -169,7 +206,15 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
             if invoked_as_veyl {
                 "veyl"
             } else {
-                env!("CARGO_BIN_NAME")
+                if std::env::args_os().next().is_some_and(|p| {
+                    std::path::Path::new(&p)
+                        .file_name()
+                        .is_some_and(|n| n == "mcp-gateway")
+                }) {
+                    "mcp-gateway"
+                } else {
+                    "veyl"
+                }
             },
             env!("CARGO_PKG_VERSION")
         );

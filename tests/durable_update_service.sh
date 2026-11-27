@@ -4,6 +4,10 @@ set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 old=$(realpath "$1")
 new=$(realpath "$2")
+test_script=durable_update_service.py
+if [[ "${3:-}" == single-binary ]]; then
+    test_script=single_binary_upgrade.py
+fi
 fixture=$(mktemp -d /tmp/veyl-durable-updater.XXXXXXXX)
 cleanup() {
     python3 -B - "$fixture" <<'PY'
@@ -30,7 +34,7 @@ if ! systemd-run --user --unit="$job" --collect --wait --pipe \
     --property=RuntimeMaxSec=120s -- /usr/bin/bwrap --dev-bind / / --unshare-net \
     /usr/bin/env -i PATH=/usr/bin HOME="$fixture/home" XDG_CONFIG_HOME="$fixture/home/.config" XDG_RUNTIME_DIR="$fixture/run" \
     SYSTEMD_UNIT_PATH="$fixture/units:$fixture/home/.config/systemd/user" LANG=C.UTF-8 \
-    /usr/bin/dbus-run-session -- /usr/bin/python3 -B "$repo/tests/durable_update_service.py" "$fixture" "$old" "$new"; then
+    /usr/bin/dbus-run-session -- /usr/bin/python3 -B "$repo/tests/$test_script" "$fixture" "$old" "$new"; then
     if [[ -f "$fixture/nested-manager.log" ]]; then tail -40 "$fixture/nested-manager.log"; fi
     exit 1
 fi

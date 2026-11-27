@@ -1,6 +1,6 @@
 [package]
 name = "veyl"
-version = "0.6.0-beta"
+version = "0.6.1-beta"
 edition = "2024"
 default-run = "veyl"
 description = "A lightweight Linux MCP gateway with durable jobs, skills, and native monitoring"
@@ -19,18 +19,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "veyl"
 path = "src/main.rs"
-
-[[bin]]
-name = "mcp-gateway"
-path = "src/legacy_main.rs"
-
-[[bin]]
-name = "veyl-monitor"
-path = "src/bin/veyl-monitor.rs"
-
-[[bin]]
-name = "veyl-connector"
-path = "src/bin/veyl-connector.rs"
 
 [features]
 test-hooks = []

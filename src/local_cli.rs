@@ -559,7 +559,7 @@ pub(crate) fn monitor(exe: &Path, args: &[OsString]) -> Result<(), String> {
         .iter()
         .any(|arg| arg == "--listen" || arg == "--help" || arg == "--version")
     {
-        let error = Command::new(exe).args(args).exec();
+        let error = Command::new(exe).arg("--monitor-worker").args(args).exec();
         return Err(format!("Cannot launch monitor: {error}"));
     }
     let mut config = None;
@@ -592,6 +592,7 @@ pub(crate) fn monitor(exe: &Path, args: &[OsString]) -> Result<(), String> {
         (crate::http::dashboard::issue_pairing(&policy)?, listen)
     };
     let mut child = Command::new(exe)
+        .arg("--monitor-worker")
         .arg("--listen")
         .arg(listen.to_string())
         .args(forwarded)

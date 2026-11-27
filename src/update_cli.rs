@@ -213,7 +213,21 @@ fn bundle(local: Option<&Path>, version: &str) -> Result<Vec<Vec<u8>>, String> {
         }
     };
     let manifest = get("SHA256SUMS", 32 * 1024)?;
-    NAMES
+    // Legacy bundles carry three independent ELFs. New bundles contain
+    // only veyl; the updater maintains old invocation names as relative
+    // aliases, not duplicate distributed binaries.
+    let legacy = std::str::from_utf8(&manifest)
+        .map_err(|_| "Invalid SHA256SUMS")?
+        .lines()
+        .filter_map(|line| line.split_once(char::is_whitespace))
+        .any(|(_, name)| {
+            matches!(
+                name.trim_start().trim_start_matches('*'),
+                "mcp-gateway" | "veyl-monitor"
+            )
+        });
+    let names = if legacy { &NAMES[..] } else { &NAMES[..1] };
+    names
         .iter()
         .map(|name| {
             let limit = if local.is_some() {
@@ -226,6 +240,77 @@ fn bundle(local: Option<&Path>, version: &str) -> Result<Vec<Vec<u8>>, String> {
             Ok(bytes)
         })
         .collect()
+}
+
+#[derive(PartialEq, Eq)]
+enum Installed {
+    Regular(Vec<u8>, u32),
+    Alias,
+}
+
+fn alias_name(name: &std::ffi::OsStr) -> bool {
+    name == "mcp-gateway" || name == "veyl-monitor"
+}
+
+/// Accept only our exact relative aliases; never follow an arbitrary
+/// symlink in an installation or staging directory.
+fn is_alias(parent: &OwnedFd, name: &std::ffi::OsStr, stat: &at::Stat) -> Result<bool, String> {
+    if !alias_name(name)
+        || at::FileType::from_raw_mode(stat.st_mode) != at::FileType::Symlink
+        || stat.st_uid != rustix::process::geteuid().as_raw()
+        || stat.st_nlink != 1
+    {
+        return Ok(false);
+    }
+    let target = at::readlinkat(parent, name, Vec::new())
+        .map_err(|_| "Cannot inspect compatibility alias")?;
+    let after = at::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|_| "Compatibility alias changed")?;
+    Ok(target.to_bytes() == b"veyl"
+        && (stat.st_dev, stat.st_ino, stat.st_ctime, stat.st_ctime_nsec)
+            == (
+                after.st_dev,
+                after.st_ino,
+                after.st_ctime,
+                after.st_ctime_nsec,
+            ))
+}
+
+fn read_installed(path: &Path) -> Result<Option<Installed>, String> {
+    let dir = open_operator_dir(path.parent().ok_or("Invalid install path")?)
+        .map_err(|_| "Cannot inspect install directory")?;
+    let name = path.file_name().ok_or("Invalid install name")?;
+    match at::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) if at::FileType::from_raw_mode(stat.st_mode) == at::FileType::Symlink => {
+            if !is_alias(&dir, name, &stat)? {
+                return Err("Refusing unknown compatibility symlink".into());
+            }
+            Ok(Some(Installed::Alias))
+        }
+        Ok(_) => {
+            Ok(read_owned(path, LOCAL_LIMIT)?.map(|(data, mode)| Installed::Regular(data, mode)))
+        }
+        Err(rustix::io::Errno::NOENT) => Ok(None),
+        Err(_) => Err("Cannot inspect installed binary".into()),
+    }
+}
+
+pub(crate) fn verified_gateway_alias(path: &Path) -> Result<bool, String> {
+    if path.file_name().is_none_or(|n| n != "mcp-gateway") {
+        return Ok(false);
+    }
+    let dir = open_operator_dir(path.parent().ok_or("Invalid install path")?)
+        .map_err(|_| "Cannot inspect compatibility directory")?;
+    let name = path.file_name().unwrap();
+    match at::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => is_alias(&dir, name, &stat),
+        Err(rustix::io::Errno::NOENT) => Ok(false),
+        Err(_) => Err("Cannot inspect compatibility alias".into()),
+    }
+}
+
+fn make_alias(dir: &OwnedFd, name: &std::ffi::OsStr) -> Result<(), String> {
+    at::symlinkat("veyl", dir, name).map_err(|_| "Cannot stage compatibility alias".into())
 }
 
 fn write_at(dir: &OwnedFd, name: &std::ffi::OsStr, bytes: &[u8], mode: u32) -> Result<(), String> {
@@ -305,6 +390,14 @@ impl PrivateStage {
         at::fsync(&stage.parent).map_err(|_| "Cannot sync update parent")?;
         Ok(stage)
     }
+    fn alias(&mut self, name: &str) -> Result<PathBuf, String> {
+        let name = OsString::from(name);
+        self.names.push(name.clone());
+        make_alias(&self.directory, &name)?;
+        at::fsync(&*self.directory).map_err(|_| "Cannot sync compatibility alias")?;
+        Ok(self.path.join(name))
+    }
+
     fn write(&mut self, name: &str, bytes: &[u8], mode: u32) -> Result<PathBuf, String> {
         let name = std::ffi::OsString::from(name);
         // Register before writing so a partially written file is cleaned.
@@ -347,6 +440,7 @@ struct Change {
     dest_dir: Arc<OwnedFd>,
     stage_dir: Arc<OwnedFd>,
     installed: bool,
+    original_alias: bool,
 }
 impl Change {
     fn new(dest: PathBuf, staged: PathBuf, backup: Option<PathBuf>) -> Result<Self, String> {
@@ -365,6 +459,7 @@ impl Change {
             dest_dir,
             stage_dir,
             installed: false,
+            original_alias: false,
         })
     }
     fn replace(&mut self) -> Result<(), String> {
@@ -381,7 +476,15 @@ impl Change {
     fn restore(&mut self) -> Result<(), String> {
         if self.installed {
             let name = self.dest.file_name().unwrap();
-            if let Some(backup) = &self.backup {
+            if self.original_alias {
+                let temp = self.staged.with_extension("restore");
+                let tmp_name = temp.file_name().unwrap();
+                make_alias(&self.stage_dir, tmp_name)?;
+                if at::renameat(&*self.stage_dir, tmp_name, &*self.dest_dir, name).is_err() {
+                    let _ = at::unlinkat(&*self.stage_dir, tmp_name, AtFlags::empty());
+                    return Err("Cannot restore compatibility alias".into());
+                }
+            } else if let Some(backup) = &self.backup {
                 let (bytes, mode) =
                     read_owned(backup, LOCAL_LIMIT)?.ok_or("Rollback backup missing")?;
                 let temp = self.staged.with_extension("restore");
@@ -483,6 +586,8 @@ struct ManifestEntry {
     backup: Option<PathBuf>,
     original_mode: Option<u32>,
     original_sha256: Option<String>,
+    #[serde(default)]
+    original_alias: bool,
 }
 
 fn update_lock(home: &Path) -> Result<OwnedFd, String> {
@@ -620,10 +725,21 @@ fn clean_private_dir(parent_path: &Path, name: &std::ffi::OsStr) -> Result<(), S
         let name = std::ffi::OsStr::from_bytes(name_c.to_bytes());
         let m = at::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW)
             .map_err(|_| "Cannot inspect cleanup file")?;
-        if at::FileType::from_raw_mode(m.st_mode) != at::FileType::RegularFile
-            || m.st_uid != rustix::process::geteuid().as_raw()
-            || m.st_nlink != 1
-        {
+        let regular = at::FileType::from_raw_mode(m.st_mode) == at::FileType::RegularFile
+            && m.st_uid == rustix::process::geteuid().as_raw()
+            && m.st_nlink == 1;
+        // Compatibility symlinks exist only inside known bin staging dirs.
+        let allowed_alias = parent_path.file_name().is_some_and(|n| n == "bin")
+            && (is_alias(&dir, name, &m)?
+                || (matches!(
+                    name.to_str(),
+                    Some("mcp-gateway.restore" | "veyl-monitor.restore")
+                ) && at::FileType::from_raw_mode(m.st_mode) == at::FileType::Symlink
+                    && m.st_uid == rustix::process::geteuid().as_raw()
+                    && m.st_nlink == 1
+                    && at::readlinkat(&dir, name, Vec::new())
+                        .is_ok_and(|p| p.to_bytes() == b"veyl")));
+        if !regular && !allowed_alias {
             return Err("Unsafe update cleanup file".into());
         }
         at::unlinkat(&dir, name, AtFlags::empty()).map_err(|_| "Cannot remove cleanup file")?;
@@ -781,7 +897,16 @@ fn recover(home: &Path) -> Result<(), String> {
         {
             return Err("Invalid rollback destination".into());
         }
-        let original = if let Some(path) = &e.backup {
+        let original = if e.original_alias {
+            if !alias_name(e.destination.file_name().ok_or("Invalid alias name")?)
+                || e.backup.is_some()
+                || e.original_mode.is_some()
+                || e.original_sha256.is_some()
+            {
+                return Err("Invalid compatibility alias in rollback manifest".into());
+            }
+            Some(Installed::Alias)
+        } else if let Some(path) = &e.backup {
             if path.parent() != Some(j.backup_dir.as_path()) || path.file_name().is_none() {
                 return Err("Invalid rollback backup path".into());
             }
@@ -793,7 +918,7 @@ fn recover(home: &Path) -> Result<(), String> {
             {
                 return Err("Rollback backup checksum or mode mismatch".into());
             }
-            Some((data, mode))
+            Some(Installed::Regular(data, mode))
         } else {
             if e.original_mode.is_some() || e.original_sha256.is_some() {
                 return Err("Invalid rollback manifest".into());
@@ -824,8 +949,15 @@ fn recover(home: &Path) -> Result<(), String> {
             .filter(|(dest, _)| dest.parent() == Some(dir.as_path()))
         {
             let name = dest.file_name().unwrap();
-            if let Some((data, mode)) = original {
-                stage.write(name.to_str().unwrap(), data, *mode)?;
+            if let Some(original) = original {
+                match original {
+                    Installed::Regular(data, mode) => {
+                        stage.write(name.to_str().unwrap(), data, *mode)?;
+                    }
+                    Installed::Alias => {
+                        stage.alias(name.to_str().unwrap())?;
+                    }
+                }
                 at::renameat(&*stage.directory, name, &dest_fd, name)
                     .map_err(|_| "Cannot restore backup")?;
             } else {
@@ -856,6 +988,10 @@ fn install(
     payloads: &[Vec<u8>],
     expected_version: Option<&str>,
 ) -> Result<(), String> {
+    if !matches!(payloads.len(), 1 | 3) {
+        return Err("Invalid update bundle layout".into());
+    }
+    let unified = payloads.len() == 1;
     let mut dirs = Vec::new();
     for dir in [home.join(".local/bin"), home.join(".cargo/bin")] {
         let mut found = false;
@@ -934,16 +1070,29 @@ fn install(
     let mut manifest = Vec::new();
     for (index, dir) in dirs.iter().enumerate() {
         let mut stage = PrivateStage::create(dir.join(format!(".veyl-update-{nonce}")))?;
-        for (name, bytes) in NAMES.iter().zip(payloads) {
+        for (i, name) in NAMES.iter().enumerate() {
             let dest = dir.join(name);
-            let original = read_owned(&dest, LOCAL_LIMIT)?;
-            let original_path = if let Some((data, mode)) = &original {
-                Some(backup.write(&format!("{index}-{name}.old"), data, *mode)?)
+            let original = read_installed(&dest)?;
+            let original_alias = original == Some(Installed::Alias);
+            let regular = match &original {
+                Some(Installed::Regular(data, mode)) => Some((data, *mode)),
+                _ => None,
+            };
+            let original_path = if let Some((data, mode)) = regular {
+                Some(backup.write(&format!("{index}-{name}.old"), data, mode)?)
             } else {
                 None
             };
-            manifest.push(serde_json::json!({"destination":dest,"backup":original_path,"original_mode":original.as_ref().map(|(_,mode)|*mode),"original_sha256":original.as_ref().map(|(data,_)|format!("{:x}",Sha256::digest(data)))}));
-            let staged = stage.write(name, bytes, 0o755)?;
+            let mut entry = serde_json::json!({"destination":dest,"backup":original_path,"original_mode":regular.map(|(_,mode)|mode),"original_sha256":regular.map(|(data,_)|format!("{:x}",Sha256::digest(data)))});
+            if original_alias {
+                entry["original_alias"] = true.into();
+            }
+            manifest.push(entry);
+            let staged = if unified && i != 0 {
+                stage.alias(name)?
+            } else {
+                stage.write(name, &payloads[i], 0o755)?
+            };
             stage.names.push(
                 staged
                     .with_extension("restore")
@@ -951,7 +1100,9 @@ fn install(
                     .unwrap()
                     .to_owned(),
             );
-            changes.push(Change::new(dest, staged, original_path)?);
+            let mut change = Change::new(dest, staged, original_path)?;
+            change.original_alias = original_alias;
+            changes.push(change);
         }
         sync_dir(dir)?;
         stages.push(stage);
@@ -995,18 +1146,29 @@ fn install(
     // Recheck staged data and the original files after draining admitted calls.
     // Never overwrite an installation that changed while the update was prepared.
     for (i, change) in changes.iter().enumerate() {
-        if read_owned(&change.staged, LOCAL_LIMIT)?
-            .is_none_or(|(data, _)| data != payloads[i % NAMES.len()])
-        {
+        let position = i % NAMES.len();
+        let valid = match read_installed(&change.staged)? {
+            Some(Installed::Alias) => unified && position != 0,
+            Some(Installed::Regular(data, mode)) => {
+                (!unified || position == 0) && mode == 0o755 && data == payloads[position]
+            }
+            None => false,
+        };
+        if !valid {
             return Err("Staged binary changed during update".into());
         }
-        let original = change
-            .backup
-            .as_ref()
-            .map(|p| read_owned(p, LOCAL_LIMIT))
-            .transpose()?
-            .flatten();
-        if read_owned(&change.dest, LOCAL_LIMIT)? != original {
+        let original = if change.original_alias {
+            Some(Installed::Alias)
+        } else {
+            change
+                .backup
+                .as_ref()
+                .map(|p| read_owned(p, LOCAL_LIMIT))
+                .transpose()?
+                .flatten()
+                .map(|(data, mode)| Installed::Regular(data, mode))
+        };
+        if read_installed(&change.dest)? != original {
             return Err("Installed binary changed during staging".into());
         }
     }

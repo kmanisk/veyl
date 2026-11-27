@@ -479,8 +479,17 @@ fn local_state(args: &[String]) -> Result<(), String> {
         }
     }
 }
-pub fn run() -> Result<(), String> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
+pub fn run(args: Vec<String>) -> Result<(), String> {
+    if args == ["--version"] {
+        println!("veyl-connector {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if args == ["--help"] || args == ["-h"] {
+        println!(
+            "Usage: veyl connector preview PORT | heartbeat PORT | state-init DIR | state-pair DIR | state-revoke DIR ID | serve PORT DIR | oauth-preview PORT ADMIN_PORT ORIGIN [DIR] | oauth-state-init DIR ORIGIN"
+        );
+        return Ok(());
+    }
     match args.as_slice() {
         #[cfg(target_os = "linux")]
         [mode, port, admin_port, origin] if mode == "oauth-preview" => {

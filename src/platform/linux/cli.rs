@@ -127,18 +127,17 @@ pub(super) fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
             );
             return Ok(());
         }
-        let exe = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("veyl-monitor")))
-            .filter(|p| p.is_file())
-            .unwrap_or_else(|| std::path::PathBuf::from("veyl-monitor"));
+        let exe = std::env::current_exe().map_err(|_| "Cannot resolve Veyl executable")?;
         return local_cli::monitor(&exe, &args[1..]);
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "dashboard") {
         return http::dashboard::run(&args[1..]);
     }
-    if args.first().is_some_and(|arg| arg == "login" || arg == "logout") {
+    if args
+        .first()
+        .is_some_and(|arg| arg == "login" || arg == "logout")
+    {
         return crate::oauth_cli::managed_login(&args);
     }
     if args.first().is_some_and(|arg| arg == "oauth") {

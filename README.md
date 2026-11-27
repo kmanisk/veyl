@@ -8,10 +8,10 @@ commands, durable jobs, native diagnostics, skills and upstream MCP servers.
 
 ## Install
 
-Install the Linux beta from [GitHub Releases](https://github.com/kmanisk/veyl/releases). Download the Linux x86_64 bundle and `SHA256SUMS` into a private folder, verify `sha256sum -c SHA256SUMS`, and use the **verified new bundle's** `/absolute/path/to/bundle/veyl update --from-dir /absolute/path/to/bundle` for an existing installation. The 0.6 audit checkpoint migration requires the new updater; an older updater cannot safely reverse the schema change and is refused before migration. Keep the verified bundle until completion and use its `veyl update --recover` for interrupted transactions. The updater restores a verified legacy checkpoint format only when the current chain extends the original prefix and the policy remains unchanged; it refuses incompatible new history instead of discarding records. The managed updater continues to install only `veyl`, `mcp-gateway`, and `veyl-monitor`. The separate `veyl-connector` binary is an experimental foreground loopback preview, not an automatically installed or started service. To build this release from source:
+Install the Linux beta from [GitHub Releases](https://github.com/kmanisk/veyl/releases). Download the Linux x86_64 bundle and `SHA256SUMS` into a private folder, verify `sha256sum -c SHA256SUMS`, and use the **verified new bundle's** `/absolute/path/to/bundle/veyl update --from-dir /absolute/path/to/bundle` for an existing installation. The 0.6 audit checkpoint migration requires the new updater; an older updater cannot safely reverse the schema change and is refused before migration. Keep the verified bundle until completion and use its `veyl update --recover` for interrupted transactions. The updater restores a verified legacy checkpoint format only when the current chain extends the original prefix and the policy remains unchanged; it refuses incompatible new history instead of discarding records. Veyl builds and distributes a single executable, `veyl`. The terminal monitor runs as `veyl monitor` (or `veyl tui`) and the experimental foreground loopback connector runs as `veyl connector`. The updater migrates legacy `mcp-gateway` and `veyl-monitor` installations to relative compatibility symlinks pointing at `veyl`, preserving the existing generated systemd unit. For the first migration, use the verified new bundle executable, not the older installed updater. Keep the new bundle for interrupted recovery. Release assets consist of `veyl`, `SHA256SUMS`, and GitHub's automatic source archives. No duplicate source bundles or separate monitor/connector executables are needed. To install the checked-out source:
 
 ```sh
-cargo install --git https://github.com/kmanisk/veyl --tag v0.6.0-beta --locked --bins
+cargo install --path . --locked --bin veyl
 ```
 
 Veyl is open source under the MIT license. Source code and prebuilt Linux
@@ -24,7 +24,7 @@ Cargo's bin directory must be on PATH.
 ## Connect a remote client — legacy bearer/secret-path compatibility
 
 The commands below describe the legacy bearer/secret-path compatibility path.
-For `0.6.0-beta`, prefer direct OAuth MCP over a public HTTPS
+For `0.6.1-beta`, prefer direct OAuth MCP over a public HTTPS
 endpoint (see the OAuth section below). No Veyl-hosted account, relay or
 standalone ChatGPT plugin is required by the direct architecture.
 
@@ -225,7 +225,7 @@ The existing package generator is retained for future use; no plugin
 installation is required for direct MCP.
 Direct OAuth MCP onboarding (`veyl login`, `veyl logout`), per-connection
 Standard/YOLO mode selection, and interactive/upstream controls are included in
-the `0.6.0-beta` release candidate.
+the `0.6.1-beta` release candidate.
 See [the direct remote plan](docs/development/DIRECT_REMOTE_PLAN.md).
 
 ## Dashboard and monitor

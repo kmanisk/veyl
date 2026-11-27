@@ -116,7 +116,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         .parse()
         .map_err(|_| "Expected a fixed IPv4 loopback listen address")?;
     let executable = env::current_exe().map_err(|_| "Gateway executable unavailable")?;
-    let unit = render(&executable, &config, address)?;
+    let unit = render_existing(&target, &executable, &config, address)?;
     if action == "validate" {
         verify_approvals(&PolicyFile::preview(&config)?)?;
         println!("Configuration valid for {}", address);
@@ -212,19 +212,40 @@ pub(crate) fn portable(args: &[OsString]) -> Result<(), String> {
     let config = config.ok_or("Missing configuration")?;
     let listen = listen.ok_or("Missing listener")?;
     let executable = env::current_exe().map_err(|_| "Gateway executable unavailable")?;
-    let expected = render(&executable, &config, listen)?;
     verify_approvals(&PolicyFile::preview(&config)?)?;
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|p| valid_path(p))
         .ok_or("HOME must be absolute")?;
     let target = home.join(".config/systemd/user").join(UNIT);
+    let expected = render_existing(&target, &executable, &config, listen)?;
     if owned_unit(&target, expected.as_bytes(), false).map_err(|error| error.to_string())? {
         lifecycle("stop", &target, expected.as_bytes())?;
         lifecycle("disable", &target, expected.as_bytes())?;
         println!("Veyl user service stopped and disabled. Use veyl service on to restore it.");
     }
     crate::http::run(args.to_vec())
+}
+
+/// Keep an exact previously generated unit usable through the migrated
+/// gateway alias. Never accept an arbitrary symlink or altered unit.
+fn render_existing(
+    target: &Path,
+    executable: &Path,
+    config: &Path,
+    address: SocketAddrV4,
+) -> Result<String, String> {
+    let standard = render(executable, config, address)?;
+    if executable.file_name().is_some_and(|name| name == "veyl") {
+        let alias = executable.with_file_name("mcp-gateway");
+        if crate::update_cli::verified_gateway_alias(&alias)? {
+            let legacy = render(&alias, config, address)?;
+            if owned_unit(target, legacy.as_bytes(), false).is_ok_and(|found| found) {
+                return Ok(legacy);
+            }
+        }
+    }
+    Ok(standard)
 }
 
 fn render(executable: &Path, config: &Path, address: SocketAddrV4) -> Result<String, String> {

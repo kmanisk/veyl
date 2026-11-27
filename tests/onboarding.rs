@@ -16,7 +16,7 @@ static SERIAL_LOCK: Mutex<()> = Mutex::new(());
 fn branded_help_is_available_without_configuration() {
     let fixture = Fixture::new();
     let alias = fixture.0.join("veyl");
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_mcp-gateway"), &alias).unwrap();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_veyl"), &alias).unwrap();
     for binary in [PathBuf::from(env!("CARGO_BIN_EXE_veyl")), alias] {
         let run = |args: &[&str]| {
             Command::new(&binary)
@@ -152,7 +152,7 @@ fn fresh_public_setup_provisions_distinct_clients_and_connector() {
     DirBuilder::new().mode(0o700).create(&home).unwrap();
     let workspace = f.0.join("workspace");
     let invoke = |args: &[&str]| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_veyl"));
         cmd.env("HOME", &home).args(args);
         unsafe {
             cmd.pre_exec(|| {
@@ -211,7 +211,7 @@ fn repeated_and_invalid_setup_rejected_without_overwriting() {
     DirBuilder::new().mode(0o700).create(&home).unwrap();
     let workspace = f.0.join("workspace");
     let invoke = |args: &[&str]| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_veyl"));
         cmd.env("HOME", &home).args(args);
         unsafe {
             cmd.pre_exec(|| {
@@ -279,7 +279,7 @@ fn mode_transitions_and_full_confirmation_workflow() {
     DirBuilder::new().mode(0o700).create(&home).unwrap();
     let workspace = f.0.join("workspace");
     let invoke = |args: &[&str]| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_veyl"));
         cmd.env("HOME", &home).args(args);
         unsafe {
             cmd.pre_exec(|| {
@@ -354,7 +354,7 @@ fn connect_validates_connector_and_rejects_tampering() {
     DirBuilder::new().mode(0o700).create(&home).unwrap();
     let workspace = f.0.join("workspace");
     let invoke = |args: &[&str]| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_veyl"));
         cmd.env("HOME", &home).args(args);
         unsafe {
             cmd.pre_exec(|| {

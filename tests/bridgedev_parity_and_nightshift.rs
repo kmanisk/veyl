@@ -99,7 +99,7 @@ struct Gateway(Child);
 impl Gateway {
     fn start(fixture: &Fixture) -> (Self, SocketAddr) {
         use std::os::unix::process::CommandExt;
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_veyl"));
         cmd.args(["http", "--listen", "127.0.0.1:0", "--config"])
             .arg(fixture.0.join("clients.json"))
             .stdin(Stdio::null())
