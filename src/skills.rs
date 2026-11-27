@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::http::admission::Configuration;
-use crate::protected_paths::{is_mandatory, validate_path};
+use crate::protected_paths::{is_mandatory_for_skills, validate_path};
 use crate::tools::MutationRoot;
 use crate::tools::registry::{Tool, tool_text};
 
@@ -36,7 +36,7 @@ impl Skills {
         };
         let path = PathBuf::from(path.as_str().ok_or("Invalid skills directory")?);
         validate_path(&path)?;
-        if is_mandatory(config, settings, &path)
+        if is_mandatory_for_skills(config, settings, &path)
             || settings.clients.iter().any(|client| {
                 overlaps(&path, &client.root)
                     || client

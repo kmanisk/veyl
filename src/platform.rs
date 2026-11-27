@@ -21,5 +21,7 @@ pub fn report() -> Value {
     })
 }
 
+#[cfg(target_os = "linux")]
+pub mod private_store;
 #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
 pub mod private_workspace;

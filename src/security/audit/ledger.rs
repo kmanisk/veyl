@@ -18,6 +18,7 @@ use super::{
     AuditLimits, StageProof, check_directory, check_file, check_file_mode, invalid_audit,
     same_inode,
 };
+use crate::security::durable_id::DurableObjectId;
 use crate::security::linux_fs::{open_operator_dir, publish_new, reopen_regular};
 
 const PRIVATE_FILE: Mode = Mode::RUSR.union(Mode::WUSR);
@@ -42,16 +43,111 @@ pub(super) struct Ledger {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Head {
+struct HeadV1 {
     version: u8,
     active: [u64; 2],
     tip: Tip,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct HeadV2 {
+    version: u8,
+    active: [u64; 2],
+    durable: DurableObjectId,
+    tip: Tip,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Head {
+    version: u8,
+    active: [u64; 2],
+    durable: Option<DurableObjectId>,
+    tip: Tip,
+}
+
+impl Head {
+    fn from_bytes(data: &[u8]) -> io::Result<Self> {
+        let raw: Value = serde_json::from_slice(data)?;
+        match raw.get("version").and_then(Value::as_u64) {
+            Some(1) => {
+                let parsed: HeadV1 = serde_json::from_value(raw)?;
+                if parsed.active[1] == 0 {
+                    return Err(invalid_audit());
+                }
+                Ok(Self {
+                    version: 1,
+                    active: parsed.active,
+                    durable: None,
+                    tip: parsed.tip,
+                })
+            }
+            Some(2) => {
+                let parsed: HeadV2 = serde_json::from_value(raw)?;
+                if !parsed.durable.is_valid() || parsed.durable.inode != parsed.active[1] {
+                    return Err(invalid_audit());
+                }
+                Ok(Self {
+                    version: 2,
+                    active: parsed.active,
+                    durable: Some(parsed.durable),
+                    tip: parsed.tip,
+                })
+            }
+            _ => Err(invalid_audit()),
+        }
+    }
+
+    fn to_vec(&self) -> io::Result<Vec<u8>> {
+        match (self.version, &self.durable) {
+            (2, Some(durable)) => serde_json::to_vec(&HeadV2 {
+                version: 2,
+                active: self.active,
+                durable: durable.clone(),
+                tip: self.tip.clone(),
+            })
+            .map_err(io::Error::from),
+            (1, None) => serde_json::to_vec(&HeadV1 {
+                version: 1,
+                active: self.active,
+                tip: self.tip.clone(),
+            })
+            .map_err(io::Error::from),
+            _ => Err(invalid_audit()),
+        }
+    }
+
+    fn matches_segment(&self, segment: &Segment) -> bool {
+        match (self.version, &self.durable) {
+            (2, Some(expected)) => expected.matches_live(&segment.durable),
+            (1, None) => segment.identity() == self.active,
+            _ => false,
+        }
+    }
+
+    fn legacy_device_mismatch(&self, segment: &Segment) -> bool {
+        self.version == 1
+            && self.durable.is_none()
+            && segment.durable.fs.is_persistent()
+            && segment.durable.inode == self.active[1]
+            && segment.identity()[0] != self.active[0]
+    }
+
+    fn for_segment(segment: &Segment, tip: Tip) -> Self {
+        Self {
+            version: 2,
+            active: segment.identity(),
+            durable: Some(segment.durable.clone()),
+            tip,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Segment {
     name: OsString,
     info: [u64; 8],
+    durable: DurableObjectId,
     through: Option<u64>,
 }
 
@@ -110,10 +206,12 @@ impl Ledger {
                 ));
             }
             if head.as_ref().is_some_and(|head| {
-                active.identity() != head.active
+                !head.matches_segment(&active)
                     && !ledger.interrupted_rotation(&segments, Some(head), &head.tip)
             }) {
-                return Err(invalid_audit());
+                return Err(head
+                    .as_ref()
+                    .map_or_else(invalid_audit, |h| mismatch_error(h, &active)));
             }
             segments.push(active);
             let (inspection, verified) =
@@ -165,6 +263,110 @@ impl Ledger {
         let mut ledger = Self::bind(path, AuditLimits::default(), false)?;
         ledger.read_only_active = true;
         ledger.transaction(|ledger| ledger.verify(false, |_, _| {}).map(|_| ()))
+    }
+
+    pub(super) fn recover_legacy_identity(
+        path: &Path,
+        limits: AuditLimits,
+    ) -> io::Result<Inspection> {
+        let ledger = Self::bind(path, limits, false)?;
+        ledger.transaction(|ledger| {
+            let head = ledger.read_head()?.ok_or_else(invalid_audit)?;
+            if head.version != 1 || head.durable.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "audit checkpoint is already versioned or does not support identity recovery",
+                ));
+            }
+            let active = ledger.segment(&ledger.name)?.ok_or_else(invalid_audit)?;
+            if !active.durable.fs.is_persistent() || active.durable.inode != head.active[1] {
+                return Err(invalid_audit());
+            }
+            let mut segments = ledger.archives()?;
+            segments.push(active.clone());
+            let (_, verified) = ledger.scan(&segments, Some(&head), false, false, |_, _| {})?;
+            if verified.head.tip != head.tip {
+                return Err(invalid_audit());
+            }
+            let upgraded = Head::for_segment(&active, verified.head.tip.clone());
+            ledger.write_head(&upgraded)?;
+            let mut migrated = verified;
+            migrated.head = upgraded;
+            ledger.append_locked(
+                migrated,
+                serde_json::json!({
+                    "principal": "local_operator",
+                    "tool": "audit_identity_recovery",
+                    "phase": "success",
+                    "unix_seconds": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    "recovered_from_version": 1,
+                    "previous_device": head.active[0],
+                    "current_device": active.identity()[0],
+                }),
+            )?;
+            ledger.verify(false, |_, _| {})
+        })
+    }
+
+    pub(super) fn legacy_rollback_tip(path: &Path) -> io::Result<Option<(u64, String)>> {
+        let ledger = Self::bind(path, AuditLimits::default(), false)?;
+        ledger.transaction(|ledger| {
+            let head = ledger.read_head()?.ok_or_else(invalid_audit)?;
+            let verified = ledger.verify(false, |_, _| {})?;
+            Ok((head.version == 1).then_some((verified.sequence, verified.hash)))
+        })
+    }
+
+    /// Restore the old reader's checkpoint format, never its historical tip.
+    /// Called only by the local updater using a verified pre-update prefix.
+    pub(super) fn restore_legacy_tip(path: &Path, previous: &(u64, String)) -> io::Result<()> {
+        let ledger = Self::bind(path, AuditLimits::default(), false)?;
+        ledger.transaction(|ledger| {
+            let head = ledger.read_head()?.ok_or_else(invalid_audit)?;
+            let segments = ledger.segments()?;
+            let active = segments.last().ok_or_else(invalid_audit)?;
+            if !head.matches_segment(active) {
+                return Err(mismatch_error(&head, active));
+            }
+            let mut prefix = previous.0 == 0 && previous.1 == Tip::default().hash;
+            let mut incompatible = false;
+            let (inspection, verified) =
+                ledger.scan(&segments, Some(&head), false, true, |tip, record| {
+                    if tip.sequence == previous.0 && tip.hash == previous.1 {
+                        prefix = true;
+                    }
+                    if record
+                        .get("staging")
+                        .and_then(|proof| proof.get("fs"))
+                        .is_some()
+                    {
+                        incompatible = true;
+                    }
+                })?;
+            if !prefix
+                || incompatible
+                || !inspection.stages.is_empty()
+                || verified.head.tip != head.tip
+            {
+                return Err(io::Error::other(
+                    "Cannot safely restore legacy audit checkpoint: incompatible history or prefix",
+                ));
+            }
+            let legacy = Head {
+                version: 1,
+                active: active.identity(),
+                durable: None,
+                tip: head.tip,
+            };
+            if head.version == 2 {
+                ledger.write_head(&legacy)?;
+            }
+            ledger.verify(false, |_, _| {})?;
+            Ok(())
+        })
     }
 
     pub(super) fn export_anchor(path: &Path) -> io::Result<Anchor> {
@@ -341,6 +543,7 @@ impl Ledger {
         self.check_location()?;
         let stat = fs::fstat(&file)?;
         let active = identity(&stat);
+        let durable = DurableObjectId::probe(&file, &stat)?;
         if stat.st_size as u64 != current.len() + length {
             return Err(invalid_audit());
         }
@@ -348,8 +551,9 @@ impl Ledger {
             return Err(invalid_audit());
         }
         let next = Head {
-            version: 1,
+            version: 2,
             active,
+            durable: Some(durable),
             tip,
         };
         self.write_head(&next)?;
@@ -391,27 +595,32 @@ impl Ledger {
         let next = self.create(&self.name)?;
         next.sync_all()?;
         fs::fsync(&self.directory)?;
+        let stat = fs::fstat(&next)?;
         let head = Head {
-            active: identity(&fs::fstat(&next)?),
-            ..verified.head.clone()
+            version: 2,
+            active: identity(&stat),
+            durable: Some(DurableObjectId::probe(&next, &stat)?),
+            tip: verified.head.tip.clone(),
         };
         self.write_head(&head)?;
         Ok(())
     }
 
     fn current_snapshot(&self, segments: Vec<Segment>, head: Head) -> io::Result<Snapshot> {
-        if segments.last().map(Segment::identity) != Some(head.active) {
-            return Err(invalid_audit());
+        let active = segments.last().ok_or_else(invalid_audit)?;
+        if !head.matches_segment(active) {
+            return Err(mismatch_error(&head, active));
         }
         let mut cache = self.cache.lock().map_err(|_| invalid_audit())?;
         if let Some(snapshot) = cache
             .as_ref()
-            .filter(|snapshot| snapshot.head == head && snapshot.segments == segments)
+            .filter(|snapshot| snapshot.head.tip == head.tip && snapshot.segments == segments)
         {
             return Ok(snapshot.clone());
         }
         let (_, verified) = self.scan(&segments, Some(&head), false, false, |_, _| {})?;
-        if verified.head != head {
+        let observed_active = verified.segments.last().ok_or_else(invalid_audit)?;
+        if verified.head.tip != head.tip || !head.matches_segment(observed_active) {
             // A complete uncheckpointed append is recoverable on startup.
             // A running writer must stop after a persistence failure.
             return Err(io::Error::other(
@@ -429,11 +638,13 @@ impl Ledger {
     fn verify(&self, collect: bool, visit: impl FnMut(&Tip, &Value)) -> io::Result<Inspection> {
         let head = self.read_head()?.ok_or_else(invalid_audit)?;
         let segments = self.segments()?;
-        if segments.last().map(Segment::identity) != Some(head.active) {
-            return Err(invalid_audit());
+        let active = segments.last().ok_or_else(invalid_audit)?;
+        if !head.matches_segment(active) {
+            return Err(mismatch_error(&head, active));
         }
         let (inspection, verified) = self.scan(&segments, Some(&head), false, collect, visit)?;
-        if verified.head != head {
+        let observed_active = verified.segments.last().ok_or_else(invalid_audit)?;
+        if verified.head.tip != head.tip || !head.matches_segment(observed_active) {
             return Err(io::Error::other(
                 "audit checkpoint requires startup recovery",
             ));
@@ -444,7 +655,7 @@ impl Ledger {
     fn interrupted_rotation(&self, archives: &[Segment], head: Option<&Head>, tip: &Tip) -> bool {
         head.is_some_and(|head| {
             archives.last().is_some_and(|segment| {
-                segment.identity() == head.active
+                head.matches_segment(segment)
                     && segment.through == Some(head.tip.sequence)
                     && tip == &head.tip
             })
@@ -531,8 +742,8 @@ impl Ledger {
         {
             return Err(chain::broken(tip.sequence.saturating_add(1)));
         }
-        let active = observed.last().map_or([0; 2], Segment::identity);
-        if recover && expected.is_some_and(|head| head.active != active) {
+        let active_segment = observed.last().ok_or_else(invalid_audit)?;
+        if recover && expected.is_some_and(|head| !head.matches_segment(active_segment)) {
             let archives: Vec<_> = observed
                 .iter()
                 .filter(|segment| segment.through.is_some())
@@ -540,9 +751,12 @@ impl Ledger {
                 .collect();
             let archive_tip = expected.map(|head| &head.tip).ok_or_else(invalid_audit)?;
             if !self.interrupted_rotation(&archives, expected, archive_tip) {
-                return Err(invalid_audit());
+                return Err(
+                    expected.map_or_else(invalid_audit, |h| mismatch_error(h, active_segment))
+                );
             }
         }
+        let head = Head::for_segment(active_segment, tip.clone());
         Ok((
             Inspection {
                 sequence: tip.sequence,
@@ -555,11 +769,7 @@ impl Ledger {
             },
             Snapshot {
                 segments: observed,
-                head: Head {
-                    version: 1,
-                    active,
-                    tip,
-                },
+                head,
                 bytes: total,
             },
         ))
@@ -604,9 +814,15 @@ impl Ledger {
         match fs::statat(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW) {
             Ok(stat) => {
                 check_file_mode(&stat, self.segment_mode(name))?;
+                let dir_stat = fs::fstat(&self.directory)?;
+                if stat.st_dev != dir_stat.st_dev {
+                    return Err(invalid_audit());
+                }
+                let durable = DurableObjectId::probe(&self.directory, &stat)?;
                 Ok(Some(Segment {
                     name: name.to_owned(),
                     info: info(&stat),
+                    durable,
                     through: None,
                 }))
             }
@@ -630,7 +846,11 @@ impl Ledger {
             flags,
             self.segment_mode(&segment.name),
         )?;
-        if info(&fs::fstat(&file)?) != segment.info {
+        let stat = fs::fstat(&file)?;
+        if info(&stat) != segment.info {
+            return Err(invalid_audit());
+        }
+        if DurableObjectId::probe(&file, &stat)? != segment.durable {
             return Err(invalid_audit());
         }
         Ok(file)
@@ -651,11 +871,7 @@ impl Ledger {
         if data.len() as u64 > MAX_HEAD_BYTES {
             return Err(invalid_audit());
         }
-        let head: Head = serde_json::from_slice(&data)?;
-        if head.version != 1 {
-            return Err(invalid_audit());
-        }
-        Ok(Some(head))
+        Ok(Some(Head::from_bytes(&data)?))
     }
 
     fn write_head(&self, head: &Head) -> io::Result<()> {
@@ -665,7 +881,7 @@ impl Ledger {
             Err(error) => return Err(error.into()),
         }
         let mut file = self.create(&temporary)?;
-        file.write_all(&serde_json::to_vec(head)?)?;
+        file.write_all(&head.to_vec()?)?;
         file.sync_all()?;
         fs::renameat(
             &self.directory,
@@ -679,6 +895,17 @@ impl Ledger {
 
     fn create(&self, name: &OsStr) -> io::Result<File> {
         create_file(&self.directory, name)
+    }
+}
+
+fn mismatch_error(head: &Head, active: &Segment) -> io::Error {
+    if head.legacy_device_mismatch(active) {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "legacy v1 audit checkpoint device mismatch; verify ledger and run `veyl audit recover-identity`",
+        )
+    } else {
+        invalid_audit()
     }
 }
 
@@ -760,4 +987,191 @@ fn open_file_mode(
     let file = reopen_regular(handle, flags | OFlags::NONBLOCK)?;
     check_file_mode(&fs::fstat(&file)?, mode)?;
     Ok(file.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::security::audit::{AuditAction, AuditPhase, AuditSink};
+    use crate::security::durable_id::DurableFs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn make_dir(parent: &Path, prefix: &str) -> PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = parent.join(format!("{prefix}-{}-{n}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        dir
+    }
+
+    #[test]
+    fn head_v2_matches_across_device_renumbering_and_rejects_substitutions() {
+        let persistent = DurableObjectId {
+            fs: DurableFs::Persistent {
+                fs_type: 0x9123_683e,
+                fsid: 0x8211_e602_69c0_bd23,
+            },
+            inode: 20901595,
+        };
+        let tip = Tip::default();
+        let recorded_v2 = Head {
+            version: 2,
+            active: [58, 20901595],
+            durable: Some(persistent.clone()),
+            tip: tip.clone(),
+        };
+        let encoded = recorded_v2.to_vec().unwrap();
+        let decoded = Head::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded, recorded_v2);
+
+        let after_reboot = Segment {
+            name: OsString::from("audit.jsonl"),
+            info: [56, 20901595, 0, 0, 0, 0, 0, 0o100600],
+            durable: persistent.clone(),
+            through: None,
+        };
+        assert!(decoded.matches_segment(&after_reboot));
+
+        let snapshot_subvol = Segment {
+            name: OsString::from("audit.jsonl"),
+            info: [57, 20901595, 0, 0, 0, 0, 0, 0o100600],
+            durable: DurableObjectId {
+                fs: DurableFs::Persistent {
+                    fs_type: 0x9123_683e,
+                    fsid: 0x8211_e603_69c0_bd23,
+                },
+                inode: 20901595,
+            },
+            through: None,
+        };
+        assert!(!decoded.matches_segment(&snapshot_subvol));
+
+        let swapped_inode = Segment {
+            durable: DurableObjectId {
+                fs: persistent.fs.clone(),
+                inode: 999,
+            },
+            ..after_reboot.clone()
+        };
+        assert!(!decoded.matches_segment(&swapped_inode));
+
+        let v1_missing_durable = br#"{"version":2,"active":[58,10],"tip":{"sequence":0,"hash":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}"#;
+        assert!(Head::from_bytes(v1_missing_durable).is_err());
+
+        // Volatile filesystem (tmpfs) must never match across st_dev changes.
+        let volatile_head = Head {
+            version: 2,
+            active: [70, 50],
+            durable: Some(DurableObjectId {
+                fs: DurableFs::Volatile {
+                    fs_type: 0x0102_1994,
+                    device: 70,
+                },
+                inode: 50,
+            }),
+            tip,
+        };
+        let volatile_remount = Segment {
+            name: OsString::from("audit.jsonl"),
+            info: [71, 50, 0, 0, 0, 0, 0, 0o100600],
+            durable: DurableObjectId {
+                fs: DurableFs::Volatile {
+                    fs_type: 0x0102_1994,
+                    device: 71,
+                },
+                inode: 50,
+            },
+            through: None,
+        };
+        assert!(!volatile_head.matches_segment(&volatile_remount));
+    }
+
+    #[test]
+    fn legacy_v1_migration_and_explicit_recovery() {
+        let dir = make_dir(&std::env::temp_dir(), "veyl-ledger-mig");
+        let log = dir.join("audit.jsonl");
+        let sink = AuditSink::open(&log).unwrap();
+        sink.record("alice", AuditAction::WriteFile, AuditPhase::Intent, 100)
+            .unwrap();
+        sink.record("alice", AuditAction::WriteFile, AuditPhase::Success, 101)
+            .unwrap();
+        drop(sink);
+
+        let head_path = dir.join("audit.jsonl.head");
+        let v2_head = Head::from_bytes(&std::fs::read(&head_path).unwrap()).unwrap();
+        assert_eq!(v2_head.version, 2);
+
+        // Downgrade .head to legacy v1 with exact live [dev, ino] -> opens & auto-upgrades to v2.
+        let v1_same_dev = Head {
+            version: 1,
+            active: v2_head.active,
+            durable: None,
+            tip: v2_head.tip.clone(),
+        };
+        std::fs::write(&head_path, v1_same_dev.to_vec().unwrap()).unwrap();
+        std::fs::set_permissions(&head_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(AuditSink::inspect(&log, false).unwrap()["sequence"], 2);
+        let reopened = AuditSink::open(&log).unwrap();
+        drop(reopened);
+        let migrated = Head::from_bytes(&std::fs::read(&head_path).unwrap()).unwrap();
+        assert_eq!(migrated.version, 2);
+        assert_eq!(migrated.tip, v2_head.tip);
+
+        // Simulate legacy v1 with mismatched st_dev after reboot.
+        let mismatched_dev = migrated.active[0] ^ 13;
+        let v1_mismatched = Head {
+            version: 1,
+            active: [mismatched_dev, migrated.active[1]],
+            durable: None,
+            tip: migrated.tip.clone(),
+        };
+        std::fs::write(&head_path, v1_mismatched.to_vec().unwrap()).unwrap();
+        std::fs::set_permissions(&head_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(AuditSink::inspect(&log, false).is_err());
+        assert!(AuditSink::open(&log).is_err());
+
+        // Wrong inode must be rejected even by explicit recovery.
+        let v1_wrong_ino = Head {
+            version: 1,
+            active: [mismatched_dev, migrated.active[1] + 99],
+            durable: None,
+            tip: migrated.tip.clone(),
+        };
+        std::fs::write(&head_path, v1_wrong_ino.to_vec().unwrap()).unwrap();
+        std::fs::set_permissions(&head_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(AuditSink::recover_legacy_identity(&log, AuditLimits::default()).is_err());
+
+        // Corrupted ledger contents must be rejected even when inode matches.
+        let original_bytes = std::fs::read(&log).unwrap();
+        let mut corrupted = original_bytes.clone();
+        corrupted[10] ^= 0xff;
+        std::fs::write(&log, &corrupted).unwrap();
+        std::fs::write(&head_path, v1_mismatched.to_vec().unwrap()).unwrap();
+        std::fs::set_permissions(&head_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(AuditSink::recover_legacy_identity(&log, AuditLimits::default()).is_err());
+        std::fs::write(&log, &original_bytes).unwrap();
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        // Restore matching inode v1 with mismatched dev -> explicit recovery succeeds on persistent FS, fails on volatile FS.
+        std::fs::write(&head_path, v1_mismatched.to_vec().unwrap()).unwrap();
+        std::fs::set_permissions(&head_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let is_persistent = migrated.durable.as_ref().unwrap().fs.is_persistent();
+        if is_persistent {
+            let recovered =
+                AuditSink::recover_legacy_identity(&log, AuditLimits::default()).unwrap();
+            assert_eq!(recovered["sequence"], 3);
+            let inspected = AuditSink::inspect(&log, true).unwrap();
+            assert_eq!(inspected["sequence"], 3);
+            assert_eq!(inspected["records"][2]["tool"], "audit_identity_recovery");
+            // Subsequent recovery call refuses already-versioned v2 ledger.
+            assert!(AuditSink::recover_legacy_identity(&log, AuditLimits::default()).is_err());
+        } else {
+            assert!(AuditSink::recover_legacy_identity(&log, AuditLimits::default()).is_err());
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

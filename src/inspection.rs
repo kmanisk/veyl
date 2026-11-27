@@ -36,6 +36,8 @@ pub(crate) fn local_diagnostics(section: &str) -> Result<Value, String> {
 }
 
 const MAX_ENTRIES: usize = 16_384;
+const MAX_LIST_ITEMS: usize = 512;
+const MAX_TREE_ENTRIES: usize = 512;
 const MAX_COPY: u64 = 64 * 1024 * 1024;
 static GIT_WORKER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -216,7 +218,7 @@ fn inspect(
             rel_target,
             OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW,
             Mode::empty(),
-            ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS | ResolveFlags::NO_XDEV,
+            ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS | ResolveFlags::NO_XDEV | ResolveFlags::NO_SYMLINKS,
         )
         .map_err(|_| "Target unavailable or outside workspace")?;
         let stat = fs::fstat(&handle).map_err(|_| "Cannot stat target path")?;
@@ -230,10 +232,15 @@ fn inspect(
         if ftype == "file"
             && stat.st_size <= 1024 * 1024
             && stat.st_nlink == 1
-            && let Ok(file) = reopen_regular(&handle, OFlags::RDONLY)
+            && let Ok(file) = reopen_regular(&handle, OFlags::RDONLY | OFlags::NONBLOCK)
+            && fs::fstat(&file).is_ok_and(|s|s.st_nlink==1)
         {
             let mut data = Vec::new();
-            if File::from(file).read_to_end(&mut data).is_ok() {
+            let mut file=File::from(file);
+            if (&mut file).take(1024*1024+1).read_to_end(&mut data).is_ok()
+                && data.len() as i64 == stat.st_size
+                && fs::fstat(&file).is_ok_and(|s|s.st_nlink==1 && s.st_size==stat.st_size)
+            {
                 sha = Some(format!("{:x}", Sha256::digest(&data)));
             }
         }
@@ -273,7 +280,8 @@ fn inspect(
             .get("show_hidden")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let max_items = args.get("max_items").and_then(Value::as_u64).unwrap_or(200) as usize;
+        let max_items = args.get("max_items").map_or(Some(200),Value::as_u64)
+            .filter(|n|*n>0).ok_or("Invalid max_items")?.min(MAX_LIST_ITEMS as u64) as usize;
         let mut entries = Vec::new();
         if !recursive {
             for item in Dir::read_from(&directory).map_err(|e| e.to_string())? {
@@ -282,6 +290,11 @@ fn inspect(
                 let name_str = name.to_string_lossy();
                 if name_str == "." || name_str == ".." {
                     continue;
+                }
+                walk.seen += 1;
+                if walk.seen > MAX_ENTRIES || Instant::now()>=walk.deadline {
+                    walk.truncated=true;
+                    break;
                 }
                 if !show_hidden && name_str.starts_with('.') {
                     continue;
@@ -367,7 +380,7 @@ fn inspect(
             current: &Path,
             depth: usize,
             max_depth: usize,
-            reserved: &dyn Fn(&Path) -> bool,
+            walk: &mut Walk<'_>,
         ) -> io::Result<Value> {
             let mut children = Vec::new();
             if depth < max_depth {
@@ -376,10 +389,19 @@ fn inspect(
                     let name = OsStr::from_bytes(item.file_name().to_bytes());
                     let name_str = name.to_string_lossy();
                     if name_str == "." || name_str == ".." || name_str.starts_with('.') {
+                        if name_str.starts_with('.') && name_str!="." && name_str!=".." {
+                            walk.seen += 1;
+                            if walk.seen>MAX_TREE_ENTRIES || Instant::now()>=walk.deadline {walk.truncated=true;break;}
+                        }
                         continue;
                     }
+                    walk.seen += 1;
+                    if walk.seen>MAX_TREE_ENTRIES || Instant::now()>=walk.deadline {
+                        walk.truncated=true;
+                        break;
+                    }
                     let child_path = current.join(name);
-                    if reserved(&child_path) {
+                    if (walk.reserved)(&child_path) {
                         continue;
                     }
                     if let Ok(handle) = fs::openat2(
@@ -398,10 +420,11 @@ fn inspect(
                                         &child_path,
                                         depth + 1,
                                         max_depth,
-                                        reserved,
+                                        walk,
                                     )
                                 {
                                     children.push(sub_tree);
+                                    if walk.truncated {break;}
                                 }
                             }
                             FileType::RegularFile => {
@@ -422,8 +445,9 @@ fn inspect(
                 "children": children
             }))
         }
-        let tree =
-            tree_node(&directory, relative, 0, max_depth, &reserved).map_err(|e| e.to_string())?;
+        let mut tree =
+            tree_node(&directory, relative, 0, max_depth, &mut walk).map_err(|e| e.to_string())?;
+        tree["truncated"]=json!(walk.truncated);
         return Ok(tree);
     }
     if tool == Tool::SearchFiles {

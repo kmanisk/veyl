@@ -8,10 +8,10 @@ commands, durable jobs, native diagnostics, skills and upstream MCP servers.
 
 ## Install
 
-Install the Linux beta from [GitHub Releases](https://github.com/kmanisk/veyl/releases). Download the Linux x86_64 bundle and `SHA256SUMS` into a private folder, verify `sha256sum -c SHA256SUMS`, and use `veyl update --from-dir /absolute/path/to/bundle` for an existing installation. The managed updater continues to install only `veyl`, `mcp-gateway`, and `veyl-monitor`. The separate `veyl-connector` binary is an experimental foreground loopback preview, not an automatically installed or started service. To build this release from source:
+Install the Linux beta from [GitHub Releases](https://github.com/kmanisk/veyl/releases). Download the Linux x86_64 bundle and `SHA256SUMS` into a private folder, verify `sha256sum -c SHA256SUMS`, and use the **verified new bundle's** `/absolute/path/to/bundle/veyl update --from-dir /absolute/path/to/bundle` for an existing installation. The 0.6 audit checkpoint migration requires the new updater; an older updater cannot safely reverse the schema change and is refused before migration. Keep the verified bundle until completion and use its `veyl update --recover` for interrupted transactions. The updater restores a verified legacy checkpoint format only when the current chain extends the original prefix and the policy remains unchanged; it refuses incompatible new history instead of discarding records. The managed updater continues to install only `veyl`, `mcp-gateway`, and `veyl-monitor`. The separate `veyl-connector` binary is an experimental foreground loopback preview, not an automatically installed or started service. To build this release from source:
 
 ```sh
-cargo install --git https://github.com/kmanisk/veyl --tag v0.5.0-beta --locked --bins
+cargo install --git https://github.com/kmanisk/veyl --tag v0.6.0-beta --locked --bins
 ```
 
 Veyl is open source under the MIT license. Source code and prebuilt Linux
@@ -21,7 +21,12 @@ Requires Linux, Bubblewrap (`bwrap`) and Git. Add Tailscale for remote
 access and a systemd user session for persistent service mode.
 Cargo's bin directory must be on PATH.
 
-## Connect a remote client
+## Connect a remote client — legacy bearer/secret-path compatibility
+
+The commands below describe the legacy bearer/secret-path compatibility path.
+For `0.6.0-beta`, prefer direct OAuth MCP over a public HTTPS
+endpoint (see the OAuth section below). No Veyl-hosted account, relay or
+standalone ChatGPT plugin is required by the direct architecture.
 
 1. Sign in to Tailscale once. Enable HTTPS, MagicDNS and Funnel for your
    node, and allow your user to manage Serve routes.
@@ -49,6 +54,179 @@ veyl run
 
 Run the monitor or dashboard in another terminal. Ctrl+C stops the
 foreground gateway. Tailscale and systemd are not required for this flow.
+
+## Direct OAuth MCP (next-release candidate)
+
+The client-independent remote interface is Streamable HTTP MCP with OAuth
+DCR, authorization-code PKCE S256, local consent and explicit scoped tools.
+Use the MCP connection settings of a compatible client; no separate plugin
+package or hosted connector is needed. Linux is the implemented gateway host;
+Windows and Android/Termux gateway ports are future work. A phone can connect
+to a remote Linux gateway only if its chosen AI client supports the connection.
+Actual ChatGPT, Claude and other client capability/plan support must be tested.
+
+The simplest onboarding entry point uses one foreground command:
+
+```sh
+veyl login
+```
+
+`veyl login` guides interactive workspace selection (defaulting to the
+current directory, or `--root DIR`), checks Tailscale MagicDNS/HTTPS/Funnel
+prerequisites on port 8443 or 10000, starts an owner-private profile in
+`~/.veyl-login/profile` defaulting new OAuth connections to **Standard**,
+copies the HTTPS `/mcp` URL to your clipboard when available, and opens the
+local dashboard (`--no-ui` suppresses browser launch). During local approval
+in the dashboard you can keep **Standard** (default) or explicitly select
+**YOLO** (broad host-user access with `~/.veyl-login`, `~/.ssh`, and
+configured protected paths masked and `~/.bashrc` / `.git/hooks` kept
+read-only).
+
+Manage persisted per-connection modes and disconnect remote clients locally:
+
+```sh
+veyl mode                          # list connected OAuth clients and modes
+veyl mode yolo <CLIENT_ID>         # escalate (revokes old Standard tokens; re-auth required)
+veyl mode standard <CLIENT_ID>     # downgrade (denies elevated operations immediately)
+veyl logout --client <CLIENT_ID>   # revoke one OAuth connection
+veyl logout --all                  # revoke all managed OAuth connections and stop Funnel
+```
+
+For low-level manual Flag/Profile control (`veyl oauth setup/run`), choose a
+non-sensitive workspace and new private profile:
+
+```sh
+veyl oauth setup --root "$PWD" --profile "$HOME/.veyl-oauth-preview" \
+  --funnel --open-ui
+```
+
+Paste the emitted HTTPS `/mcp` URL into the client's custom MCP connection,
+select OAuth with dynamic client registration, scope `mcp` and PKCE S256,
+and review the exact grant in the local dashboard. Resume with the same
+profile and `--funnel`; keep the issuer and selected capabilities unchanged.
+Live external-client acceptance is still pending; see the release checklist
+in [the direct remote plan](docs/development/DIRECT_REMOTE_PLAN.md).
+
+### Local OAuth onboarding (development builds only)
+
+For a separate, read-only local OAuth profile, choose an existing
+workspace and a new absolute profile directory with an existing
+owner-controlled parent:
+
+```sh
+veyl oauth setup --root "$PWD" --profile "$HOME/.veyl-oauth-preview" --open-ui
+```
+
+This initializes private state and starts an isolated foreground gateway.
+No JSON, manually generated bearer, service install or tunnel setup is
+required. The optional flag opens a paired local dashboard. Stop with
+Ctrl+C; resume with:
+
+```sh
+veyl oauth run --profile "$HOME/.veyl-oauth-preview" --open-ui
+```
+
+Setup refuses to overwrite existing profiles; run refuses missing or
+invalid authentication state. The OAuth connections tab supports local
+review and explicit approval. Without `--funnel` this remains a local
+preview with synthetic origin `https://veyl.example`. The explicit
+`--workspace-edit` and `--workspace-tools` profiles add scoped editing
+and bounded directory/search tools respectively; repeat the selected flag
+on restart.
+
+`--workspace-jobs` adds named, operator-approved
+commands. Supply a private, owner-controlled JSON file on first setup:
+
+```json
+{"job_profiles":{"pwd":{"executable":"/usr/bin/pwd","args":[],"timeout_seconds":4}}}
+```
+
+```sh
+veyl oauth setup --root "$PWD" --profile "$HOME/.veyl-oauth-jobs" \
+  --workspace-jobs --job-profiles "$HOME/job-profiles.json" --open-ui
+veyl oauth run --profile "$HOME/.veyl-oauth-jobs" --workspace-jobs --open-ui
+```
+
+Stop the foreground setup before running the recovery command. Job profiles
+run in an offline Bubblewrap sandbox with a writable workspace and mandatory
+systemd user resource ceilings. Only explicit named profiles or their exact
+configured argv are accepted; arbitrary commands and interactive processes
+are not granted. Local approval displays the exact profiles. Jobs retain
+separate durable ownership per OAuth grant family. Revocation denies new
+remote admissions; the local dashboard retains job cancellation and logs.
+Public ingress additionally requires the explicit experimental `--funnel-advanced` gate described below.
+
+For a new, explicitly opted-in job profile, add `--workspace-commands`
+to both setup and run. This adds arbitrary `exec_command` and `task_run`
+inside the offline, writable workspace sandbox (maximum 300 seconds,
+100% CPU, 256 MiB RAM and 64 KiB output per stream). Commands use only
+the approved workspace root; no alternate cwd, ephemeral Git worktrees,
+or implicit interactive sessions. A command may return a
+still-running durable job after the bounded two-second wait; use
+`job_status` and `job_logs` to inspect it. Existing named-job profiles
+cannot silently acquire this grant by adding the flag on restart.
+
+For interactive pipe or PTY sessions on approved interactive job profiles,
+add `--workspace-interactive` alongside `--workspace-jobs` on both setup and
+run. This grants `process_start`, `process_input`, `process_resize`,
+`shell_status` and `shell_reset` within the same offline writable workspace
+sandbox and resource ceilings (maximum 300 seconds, 100% CPU, 256 MiB RAM,
+64 KiB output per stream and 4096-byte UTF-8 input frames). Interactive
+sessions are owned by each OAuth grant family, revalidated on both the gateway
+and detached runner against durable OAuth state across token refresh, expiry,
+revocation and gateway restart. Public ingress requires `--funnel-advanced`.
+
+For trusted local upstream MCP servers, opt in with
+`--workspace-upstreams --upstream-manifest /absolute/path/to/upstreams.json`
+on setup and `--workspace-upstreams` on run. The manifest contains exactly
+`mcp_servers` and `allowed_server_tools`, for example:
+
+```json
+{"mcp_servers":{"local":{"transport":"http","url":"http://127.0.0.1:8123/mcp"}},"allowed_server_tools":{"local":["hello"]}}
+```
+
+This is a configuration example, not a running provider. The operator
+must already have a trusted MCP server at the configured endpoint.
+Only explicit tool grants, credential-free loopback HTTP or offline
+trusted system stdio are supported by this OAuth profile. Providers may
+have side effects and share application state across OAuth families.
+Public upstream grants require `--funnel-advanced` as well as the explicit provider manifest.
+
+The development candidate also implements `--funnel` on setup and run:
+it selects an authorized free dedicated Tailscale HTTPS port (8443 or
+10000), optionally pinned with `--funnel-port`, and owns the route only
+for the foreground IPN-bus session. Restart recovers the saved issuer;
+it refuses to silently migrate to another hostname or port. The dashboard
+remains private. This path has passed independent disposable LocalAPI and native OAuth
+integration tests, including the full advanced host-tmpfs suite. A live
+preview also passed HTTPS discovery from the gateway host; external client
+OAuth and tool invocation remain unverified.
+The separate `--funnel-advanced` flag is required with `--funnel` and any
+explicit jobs or upstream capability group, both on setup and recovery. It
+grants no tools by itself. Local consent includes the exact public scope
+and warnings about workspace writes and shared upstream state. Scoped jobs
+enforce CPU, memory, runtime, output, zero swap and at most 128 tasks.
+Public workspace edits and jobs require the root of a private tmpfs mount
+owned by the gateway UID (mode 0700, nosuid,nodev), no nested mounts,
+at most 256 MiB and 16384 inodes. The gateway checks these kernel limits
+during setup, recovery, consent, admission and detached job launch.
+This is a volatile preview backend, not persistent project storage. Mount
+provisioning is the operator's responsibility; Veyl never mounts or formats
+a filesystem automatically. Upstream providers remain separately trusted
+and their external side effects are not bounded by this workspace limit.
+Independent local/simulated security acceptance has passed. Public use
+still requires explicit operator approval and the live client acceptance
+checklist. Do not reuse durable authorizations after recreating a tmpfs
+mount; persistent quota backends and aggregate host quotas are not implemented.
+
+The standalone ChatGPT Plugin Creator package and hosted connector are
+deferred optional experiments, not runtime dependencies or release gates.
+The existing package generator is retained for future use; no plugin
+installation is required for direct MCP.
+Direct OAuth MCP onboarding (`veyl login`, `veyl logout`), per-connection
+Standard/YOLO mode selection, and interactive/upstream controls are included in
+the `0.6.0-beta` release candidate.
+See [the direct remote plan](docs/development/DIRECT_REMOTE_PLAN.md).
 
 ## Dashboard and monitor
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::http::admission::Client;
 use crate::http::operator::{Mode, PolicyFile, verify_approvals};
 
-const USAGE: &str = "Usage: veyl mode [list]\n       veyl mode standard|yolo|full [CLIENT | --all] [--confirm-full]\n       veyl mode get|enable|disable [CLIENT]\n       veyl mode migrate\nAll commands accept --config PATH. With multiple clients, select interactively or supply a client ID. Use --all for an explicit atomic mode change of all enabled clients. FULL requires --confirm-full.";
+const USAGE: &str = "Usage: veyl mode [list] [--config PATH | --managed]\n       veyl mode standard|yolo|full [CLIENT | --all] [--config PATH] [--confirm-full]\n       veyl mode get|enable|disable [CLIENT] [--config PATH]\n       veyl mode migrate --config PATH\nWithout --config, manages connected clients in the managed OAuth login profile when present. Native client configurations accept --config PATH. FULL is unavailable for OAuth connections and requires --confirm-full.";
 const LEGACY_USAGE: &str = "Compatibility: veyl yolo enable|disable|reset|status|set [--mode MODE] --client ID --config PATH. See veyl mode --help.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,7 +38,48 @@ fn dispatch(args: &[OsString], legacy: bool) -> Result<(), String> {
         println!("{}", if legacy { LEGACY_USAGE } else { USAGE });
         return Ok(());
     }
-    let (operation, config, id) = parse(args, legacy)?;
+    let (operation, config, id, managed_flag) = parse(args, legacy)?;
+    let config = match config {
+        Some(path) => path,
+        None => {
+            if !legacy && managed_flag {
+                if crate::oauth_cli::managed::managed_exists()? {
+                    return dispatch_managed(operation, id);
+                }
+                return Err("No managed OAuth login profile".into());
+            }
+            if !legacy && crate::oauth_cli::managed::managed_exists()? {
+                let native = crate::local_cli::optional_default_config()?;
+                match (&operation, &id, native) {
+                    (Operation::List, None, Some(native_path)) => {
+                        let native_settings = settings(&native_path)?;
+                        for client in &native_settings.clients {
+                            println!(
+                                "{}\t{}\t{}\tscope=native",
+                                client.id,
+                                client.mode.public_label(),
+                                state(client)
+                            );
+                        }
+                        return dispatch_managed(Operation::List, None);
+                    }
+                    (_, Some(target), Some(native_path)) => {
+                        let (_, regs, _) = crate::oauth_cli::managed::managed_list()?;
+                        if regs.iter().any(|r| r["client_id"].as_str() == Some(target.as_str())) {
+                            return dispatch_managed(operation, id);
+                        }
+                        native_path
+                    }
+                    _ => return dispatch_managed(operation, id),
+                }
+            } else {
+                return Err(USAGE.into());
+            }
+        }
+    };
+    if managed_flag {
+        return Err("Do not combine --managed with --config".into());
+    }
     if operation == Operation::Migrate {
         return transition::migrate(&config);
     }
@@ -71,6 +112,83 @@ fn dispatch(args: &[OsString], legacy: bool) -> Result<(), String> {
     }
     transition::apply(&config, &id, operation, legacy)?;
     show(&config, &id, legacy)
+}
+
+fn dispatch_managed(operation: Operation, id: Option<String>) -> Result<(), String> {
+    use mcp_gateway::core::oauth::ConnectionMode;
+    match operation {
+        Operation::List => {
+            let (live, regs, _supports_yolo) = crate::oauth_cli::managed::managed_list()?;
+            if regs.is_empty() {
+                println!("No connected OAuth clients (gateway {}).", if live { "live" } else { "stopped" });
+                return Ok(());
+            }
+            for reg in regs {
+                println!(
+                    "{}\t{}\tactive_families={}\tname={}",
+                    reg["client_id"].as_str().unwrap_or("?"),
+                    reg["mode"].as_str().unwrap_or("standard"),
+                    reg["active_families"].as_u64().unwrap_or(0),
+                    reg["client_name"].as_str().unwrap_or("Unnamed")
+                );
+            }
+            Ok(())
+        }
+        Operation::Get => {
+            let (_live, regs, _supports_yolo) = crate::oauth_cli::managed::managed_list()?;
+            let entry = if let Some(target) = &id {
+                regs.into_iter()
+                    .find(|r| r["client_id"].as_str() == Some(target.as_str()))
+                    .ok_or("Unknown OAuth client")?
+            } else if regs.len() == 1 {
+                regs.into_iter().next().expect("single registration")
+            } else if regs.is_empty() {
+                return Err("No connected OAuth clients".into());
+            } else {
+                return Err("Multiple OAuth clients connected; run veyl mode to list them, then supply a client ID".into());
+            };
+            println!(
+                "client={} mode={} active_families={} active_yolo_families={} client_name={}",
+                entry["client_id"].as_str().unwrap_or("?"),
+                entry["mode"].as_str().unwrap_or("standard"),
+                entry["active_families"].as_u64().unwrap_or(0),
+                entry["active_yolo_families"].as_u64().unwrap_or(0),
+                entry["client_name"].as_str().unwrap_or("Unnamed"),
+            );
+            Ok(())
+        }
+        Operation::Select(Mode::Standard) | Operation::SelectAll(Mode::Standard) => {
+            let all = matches!(operation, Operation::SelectAll(_));
+            let (changed, _live) =
+                crate::oauth_cli::managed::managed_set_mode(id.as_deref(), all, ConnectionMode::Standard)?;
+            for item in changed {
+                println!(
+                    "client={} previous_mode={} mode=standard immediate_downgrade=true",
+                    item.client_id,
+                    item.previous.as_str()
+                );
+            }
+            Ok(())
+        }
+        Operation::Select(Mode::BroadYolo) | Operation::SelectAll(Mode::BroadYolo) => {
+            let all = matches!(operation, Operation::SelectAll(_));
+            let (changed, _live) =
+                crate::oauth_cli::managed::managed_set_mode(id.as_deref(), all, ConnectionMode::Yolo)?;
+            for item in changed {
+                println!(
+                    "client={} previous_mode={} mode=yolo reauthorization_required={}",
+                    item.client_id,
+                    item.previous.as_str(),
+                    item.reauth_required
+                );
+            }
+            Ok(())
+        }
+        Operation::Select(Mode::Full) | Operation::SelectAll(Mode::Full) => {
+            Err("FULL mode is not available for managed OAuth connections".into())
+        }
+        _ => Err("Managed OAuth profiles support list, get, standard, and yolo".into()),
+    }
 }
 
 fn settings(path: &Path) -> Result<crate::http::admission::Configuration, String> {
@@ -162,11 +280,15 @@ fn select_client(path: &Path) -> Result<String, String> {
         .ok_or("Invalid client selection".into())
 }
 
-fn parse(args: &[OsString], legacy: bool) -> Result<(Operation, PathBuf, Option<String>), String> {
+fn parse(
+    args: &[OsString],
+    legacy: bool,
+) -> Result<(Operation, Option<PathBuf>, Option<String>, bool), String> {
     let usage = if legacy { LEGACY_USAGE } else { USAGE };
-    let command = match args.first() {
-        Some(word) if word == "--config" && !legacy => "list",
-        Some(word) => word.to_str().ok_or(usage)?,
+    let (command, skip_first) = match args.first() {
+        Some(word) if (word == "--config" || word == "--managed") && !legacy => ("list", false),
+        Some(word) => (word.to_str().ok_or(usage)?, true),
+        None if !legacy => ("list", false),
         None => return Err(usage.into()),
     };
     let mut selected = match (legacy, command) {
@@ -176,15 +298,17 @@ fn parse(args: &[OsString], legacy: bool) -> Result<(Operation, PathBuf, Option<
         _ => None,
     };
     let mut config = None;
+    let mut managed = false;
     let mut client = None;
     let mut confirm = false;
     let mut all = false;
-    let mut rest = args[usize::from(args[0] != "--config")..].iter();
+    let mut rest = args[usize::from(skip_first)..].iter();
     while let Some(arg) = rest.next() {
         match arg.to_str() {
             Some("--config") if config.is_none() => {
                 config = Some(PathBuf::from(rest.next().ok_or(usage)?))
             }
+            Some("--managed") if !legacy && !managed => managed = true,
             Some("--client") if client.is_none() => {
                 client = Some(argument(rest.next(), usage)?.to_owned());
             }
@@ -232,7 +356,10 @@ fn parse(args: &[OsString], legacy: bool) -> Result<(Operation, PathBuf, Option<
     if confirm && !full {
         return Err(usage.into());
     }
-    Ok((operation, config.ok_or(usage)?, client))
+    if legacy && config.is_none() {
+        return Err(usage.into());
+    }
+    Ok((operation, config, client, managed))
 }
 
 fn argument<'a>(option: Option<&'a OsString>, usage: &str) -> Result<&'a str, String> {
@@ -287,11 +414,11 @@ mod tests {
                 ],
             ),
         ] {
-            let (op, _, id) = parse(&args(&arguments), legacy).unwrap();
+            let (op, _, id, _) = parse(&args(&arguments), legacy).unwrap();
             assert!(op == Operation::Select(Mode::BroadYolo));
             assert_eq!(id.as_deref(), Some("dev"));
         }
-        let (op, _, id) = parse(&args(&["get", "dev", "--config", "/tmp/config"]), false).unwrap();
+        let (op, _, id, _) = parse(&args(&["get", "dev", "--config", "/tmp/config"]), false).unwrap();
         assert!(op == Operation::Get);
         assert_eq!(id.as_deref(), Some("dev"));
     }
@@ -380,6 +507,23 @@ mod tests {
                 false
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn managed_mode_shorthands_parse_cleanly() {
+        let (op, cfg, id, managed) = parse(&args(&[]), false).unwrap();
+        assert!(op == Operation::List && cfg.is_none() && id.is_none() && !managed);
+        let (op, cfg, id, managed) = parse(&args(&["yolo", "client-1"]), false).unwrap();
+        assert!(
+            op == Operation::Select(Mode::BroadYolo)
+                && cfg.is_none()
+                && id.as_deref() == Some("client-1")
+                && !managed
+        );
+        let (op, cfg, id, managed) = parse(&args(&["standard", "--managed"]), false).unwrap();
+        assert!(
+            op == Operation::Select(Mode::Standard) && cfg.is_none() && id.is_none() && managed
         );
     }
 }

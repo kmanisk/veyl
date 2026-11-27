@@ -63,6 +63,8 @@ pub struct Client {
     pub timeshift_retention_count: usize,
     #[cfg(target_os = "linux")]
     pub job_extra_roots: Vec<JobRoot>,
+    #[cfg(target_os = "linux")]
+    pub(crate) denied_actions: Vec<Action>,
 }
 
 impl Client {
@@ -75,6 +77,72 @@ impl Client {
 impl Client {
     pub(super) fn has_digest(&self, value: &[u8; 32]) -> bool {
         bool::from(self.digest.ct_eq(value))
+    }
+    pub(super) fn credential_digest(&self) -> [u8; 32] {
+        self.digest
+    }
+
+    pub(super) fn oauth_yolo_override(
+        &self,
+        settings: &Configuration,
+        config_path: &Path,
+    ) -> Result<Self, &'static str> {
+        if self.is_disabled() || !settings.managed || settings.jobs.is_none() {
+            return Err("YOLO override unavailable for this policy");
+        }
+        crate::jobs::Broad::prepare(config_path, settings)
+            .map_err(|_| "Broad YOLO isolation unavailable")?;
+        let jobs = settings.jobs.is_some();
+        let skills = settings.skills.is_some();
+        let mut tools: HashSet<Tool> = Tool::ALL
+            .into_iter()
+            .filter(|tool| tool.in_yolo_preset(jobs, skills))
+            .collect();
+        tools.retain(|tool| !self.denied_actions.contains(&tool.action()));
+        let mut actions = vec![Action::ListTools];
+        for tool in &tools {
+            let action = tool.action();
+            if !actions.contains(&action) {
+                actions.push(action);
+            }
+        }
+        let mutation_root = Some(
+            MutationRoot::open(&self.root)
+                .map_err(|_| "Client root must be an existing symlink-free directory")?,
+        );
+        let job_root = if jobs {
+            Some(JobRoot::open(&self.root).map_err(|_| "Job root unavailable")?)
+        } else {
+            None
+        };
+        Ok(Self {
+            id: self.id.clone(),
+            digest: self.digest,
+            expires_at: self.expires_at,
+            root: self.root.clone(),
+            actions,
+            tools,
+            native_tool_preset: true,
+            mode: ExecutionMode::BroadYolo,
+            disabled: false,
+            explicit_extra_roots: false,
+            skills: self.skills.clone(),
+            upstreams: crate::upstream::Grants::default(),
+            yolo_revision: self.yolo_revision.clone(),
+            extra_roots: Vec::new(),
+            mutation_root,
+            job_runtime_limit_seconds: self
+                .job_runtime_limit_seconds
+                .min(crate::jobs::SHORT_RUNTIME_MAX),
+            job_cpu_percent_limit: self.job_cpu_percent_limit.min(100),
+            job_memory_bytes_limit: self.job_memory_bytes_limit.min(256 * 1024 * 1024),
+            job_output_limit_bytes: self.job_output_limit_bytes.min(65_536),
+            job_retention_count: self.job_retention_count,
+            timeshift_retention_count: self.timeshift_retention_count,
+            job_extra_roots: Vec::new(),
+            job_root,
+            denied_actions: self.denied_actions.clone(),
+        })
     }
 }
 
@@ -249,7 +317,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             return Err("client root must be an existing directory".into());
         }
         let native_tool_preset = entry["native_tool_preset"] == true;
-        let (names, actions) = effective_tools(
+        let (names, actions, denied_actions) = effective_tools(
             entry,
             native_tool_preset,
             has_job_profiles && cfg!(target_os = "linux"),
@@ -408,6 +476,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
             } else {
                 None
             },
+            #[cfg(target_os = "linux")]
+            denied_actions,
         });
     }
     #[cfg(target_os = "linux")]
@@ -495,12 +565,14 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
     Ok(settings)
 }
 
+type EffectiveTools = (HashSet<Tool>, Vec<Action>, Vec<Action>);
+
 fn effective_tools(
     entry: &Value,
     preset: bool,
     jobs: bool,
     skills: bool,
-) -> Result<(HashSet<Tool>, Vec<Action>), String> {
+) -> Result<EffectiveTools, String> {
     let allowed = entry["tools"]
         .as_array()
         .ok_or("client tools must be an array")?;
@@ -545,6 +617,13 @@ fn effective_tools(
     }
     // A denial covers every name that can perform the denied action.
     tools.retain(|tool| !denied.iter().any(|denial| denial.action() == tool.action()));
+    let mut denied_actions = Vec::new();
+    for tool in &denied {
+        let action = tool.action();
+        if !denied_actions.contains(&action) {
+            denied_actions.push(action);
+        }
+    }
     let mut actions = Vec::new();
     for tool in Tool::ALL.into_iter().filter(|tool| tools.contains(tool)) {
         if !actions.contains(&tool.action()) {
@@ -554,7 +633,7 @@ fn effective_tools(
     if !actions.is_empty() {
         actions.push(Action::ListTools);
     }
-    Ok((tools, actions))
+    Ok((tools, actions, denied_actions))
 }
 
 pub(crate) fn parse_document(bytes: &[u8]) -> Result<Value, String> {

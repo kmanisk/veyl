@@ -11,6 +11,10 @@ pub(super) use mcp_gateway::core::lifecycle::JobState as State;
 pub(super) struct Receipt {
     pub job_id: String,
     pub client_id: String,
+    #[serde(default,skip_serializing_if="std::ops::Not::not")]
+    pub oauth_family: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub oauth_bounded_workspace: bool,
     pub profile: String,
     pub argv_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -26,6 +30,10 @@ pub(super) struct Receipt {
     pub root: std::path::PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<super::session::Binding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<super::session::OAuthBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_launch: Option<super::session::LaunchAuthority>,
     pub cwd: std::path::PathBuf,
     pub timeout_seconds: u64,
     pub max_output_bytes: usize,

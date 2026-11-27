@@ -7,6 +7,7 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 use mcp_gateway::security::audit::{AuditPhase, StageProof};
+use mcp_gateway::security::durable_id::DurableFs;
 use mcp_gateway::security::linux_fs::{open_absolute_dir, open_beneath_dir, reopen_regular};
 use rustix::fd::OwnedFd;
 use rustix::fs::{
@@ -55,6 +56,17 @@ impl MutationRoot {
         Ok(root)
     }
 
+    /// OAuth scoped mutations reject multiply-linked targets, including
+    /// atomic detach of an alias. Preserve legacy native semantics.
+    pub(crate) fn strict_alias_scope(&self) -> io::Result<Self> {
+        let mut root=Self::open(&self.path)?;
+        if !same_inode(&fs::fstat(&root.directory)?, &fs::fstat(&self.directory)?) {
+            return Err(io::Error::other("Workspace identity changed"));
+        }
+        root.protected=Some(self.protected.clone().unwrap_or_default());
+        Ok(root)
+    }
+
     pub(crate) fn open_host_parent(path: &Path) -> io::Result<Self> {
         if rustix::process::geteuid().is_root() {
             return Err(io::Error::other(
@@ -97,16 +109,77 @@ impl MutationRoot {
     }
 
     pub(super) fn create_directory(&self, path: &str) -> Result<(), MutationError> {
-        let relative = Path::new(path);
-        if relative.is_absolute()
-            || relative
-                .components()
-                .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+        if path.is_empty()
+            || path.starts_with('/')
+            || path.as_bytes().contains(&0)
+            || path.split('/').any(|part| matches!(part, "." | ".."))
         {
             return Err(Rejected("Use a relative directory path"));
         }
-        let full = self.path.join(relative);
-        std::fs::create_dir_all(&full).map_err(|_| Rejected("Cannot create directory"))?;
+
+        // Recursive creation can leave a prefix behind if a later step fails.
+        let mut created = false;
+        self.create_directory_components(path, &mut created)
+            .map_err(|error| {
+                if created {
+                    MutationError::Uncertain
+                } else {
+                    error
+                }
+            })
+    }
+
+    fn create_directory_components(
+        &self,
+        path: &str,
+        created: &mut bool,
+    ) -> Result<(), MutationError> {
+        let mut relative = PathBuf::new();
+        let mut parent = open_directory_component(&self.directory, &relative)
+            .map_err(|_| Rejected("Cannot open the directory root"))?;
+        // Preserve redundant separators and a trailing slash.
+        for name in path.split('/').filter(|part| !part.is_empty()) {
+            self.check_creation_directory(&relative, &parent)?;
+            let child = match open_directory_component(&parent, Path::new(name)) {
+                Ok(child) => child,
+                Err(Errno::NOENT) => {
+                    self.check_creation_directory(&relative, &parent)?;
+                    fs::mkdirat(&parent, name, Mode::from_raw_mode(0o777))
+                        .map_err(|_| Rejected("Cannot create directory"))?;
+                    *created = true;
+                    open_directory_component(&parent, Path::new(name))
+                        .map_err(|_| Rejected("Cannot open the new directory"))?
+                }
+                Err(_) => return Err(Rejected("Cannot open directory component")),
+            };
+            self.check_creation_directory(&relative, &parent)?;
+            relative.push(name);
+            self.check_creation_directory(&relative, &child)?;
+            parent = child;
+        }
+        Ok(())
+    }
+
+    fn check_creation_directory(
+        &self,
+        relative: &Path,
+        pinned: &OwnedFd,
+    ) -> Result<(), MutationError> {
+        const CHANGED: MutationError = Rejected("Directory changed during creation");
+        let root = open_absolute_dir(&self.path).map_err(|_| CHANGED)?;
+        if checked_directory_identity(&root).map_err(|_| CHANGED)?
+            != checked_directory_identity(&self.directory).map_err(|_| CHANGED)?
+        {
+            return Err(CHANGED);
+        }
+
+        let current = open_directory_component(&self.directory, relative).map_err(|_| CHANGED)?;
+        let opened = fs::fstat(pinned).map_err(|_| CHANGED)?;
+        if self.is_protected(&opened)
+            || !same_inode(&opened, &fs::fstat(current).map_err(|_| CHANGED)?)
+        {
+            return Err(CHANGED);
+        }
         Ok(())
     }
 
@@ -227,6 +300,11 @@ impl Target<'_> {
         let created = birth_time(file, "", AtFlags::EMPTY_PATH)
             .map_err(|_| Rejected("Cannot verify staging birth time"))?;
         let file = fs::fstat(file).map_err(|_| Rejected("Cannot identify stage file"))?;
+        if file.st_dev != directory.st_dev {
+            return Err(Rejected("Cannot verify staging mount identity"));
+        }
+        let fs = DurableFs::probe(&self.directory, &directory)
+            .map_err(|_| Rejected("Cannot identify stage filesystem"))?;
         Ok(StageProof {
             root: self.root.path.clone(),
             parent: self.relative_parent.to_owned(),
@@ -238,14 +316,22 @@ impl Target<'_> {
             created,
             uid: file.st_uid,
             host_parent: self.root.host_parent,
+            fs: Some(fs),
         })
     }
 
     pub(super) fn matches_stage(&self, proof: &StageProof) -> bool {
         let name = proof.name.as_str();
+        let Ok(dir_stat) = fs::fstat(&self.directory) else {
+            return false;
+        };
+        let Ok(dir_fs) = DurableFs::probe(&self.directory, &dir_stat) else {
+            return false;
+        };
         fs::statat(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW).is_ok_and(|stat| {
             FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
-                && matches_proof(&stat, proof)
+                && stat.st_dev == dir_stat.st_dev
+                && matches_proof(&dir_stat, &dir_fs, &stat, proof)
         }) && birth_time(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW)
             .is_ok_and(|created| created == proof.created)
     }
@@ -321,6 +407,33 @@ impl Target<'_> {
     }
 }
 
+fn open_directory_component(directory: &OwnedFd, relative: &Path) -> Result<OwnedFd, Errno> {
+    let relative = if relative.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        relative
+    };
+    fs::openat2(
+        directory,
+        relative,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::BENEATH
+            | ResolveFlags::NO_XDEV
+            | ResolveFlags::NO_SYMLINKS
+            | ResolveFlags::NO_MAGICLINKS,
+    )
+}
+
+fn checked_directory_identity(directory: &OwnedFd) -> Result<([u64; 2], u64), Errno> {
+    let stat = fs::fstat(directory)?;
+    let mount = fs::statx(directory, "", AtFlags::EMPTY_PATH, StatxFlags::MNT_ID)?;
+    if mount.stx_mask & StatxFlags::MNT_ID.bits() == 0 {
+        return Err(Errno::OPNOTSUPP);
+    }
+    Ok((directory_identity(&stat), mount.stx_mnt_id))
+}
+
 pub(super) fn read_text(file: &File, expected: &Stat) -> Result<String, MutationError> {
     if expected.st_size > MAX_TEXT_BYTES as i64 {
         return Err(Rejected("Target exceeds the 65536-byte limit"));
@@ -357,8 +470,17 @@ fn directory_identity(stat: &Stat) -> [u64; 2] {
     [stat.st_dev, stat.st_ino]
 }
 
-fn matches_proof(stat: &Stat, proof: &StageProof) -> bool {
-    directory_identity(stat) == proof.file
+fn matches_proof(dir_stat: &Stat, dir_fs: &DurableFs, stat: &Stat, proof: &StageProof) -> bool {
+    let identity_ok = match &proof.fs {
+        Some(expected_fs @ DurableFs::Persistent { .. }) => {
+            expected_fs == dir_fs
+                && dir_stat.st_ino == proof.directory[1]
+                && stat.st_ino == proof.file[1]
+                && stat.st_dev == dir_stat.st_dev
+        }
+        _ => directory_identity(dir_stat) == proof.directory && directory_identity(stat) == proof.file,
+    };
+    identity_ok
         && stat.st_uid == proof.uid
         && stat.st_nlink == 1
         && stat.st_size as u64 == proof.size
@@ -377,4 +499,61 @@ pub(super) fn birth_time(
         ));
     }
     Ok([stat.stx_btime.tv_sec, i64::from(stat.stx_btime.tv_nsec)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::DirBuilderExt;
+
+    #[test]
+    fn create_directory_rejects_renamed_and_protected_directories() {
+        struct Fixture(PathBuf);
+
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut nonce = [0; 16];
+        getrandom::fill(&mut nonce).unwrap();
+        let base = std::env::temp_dir().join(format!(
+            "mcp-mkdir-test-{:032x}",
+            u128::from_ne_bytes(nonce)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&base)
+            .unwrap();
+        let fixture = Fixture(base);
+        let workspace = fixture.0.join("workspace");
+        let parent = workspace.join("parent");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+
+        let mut root = MutationRoot::open(&workspace).unwrap();
+        let relative = Path::new("parent");
+        let pinned = open_directory_component(&root.directory, relative).unwrap();
+        assert_eq!(root.check_creation_directory(relative, &pinned), Ok(()));
+        let stat = fs::fstat(&pinned).unwrap();
+        root.protected = Some(BTreeSet::from([directory_identity(&stat)]));
+        assert!(root.create_directory("parent").is_err());
+        assert!(root.create_directory("parent/protected").is_err());
+        root.protected = None;
+        assert!(!parent.join("protected").exists());
+
+        let moved_parent = fixture.0.join("moved-parent");
+        std::fs::rename(&parent, &moved_parent).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        assert!(root.check_creation_directory(relative, &pinned).is_err());
+        assert!(std::fs::read_dir(&moved_parent).unwrap().next().is_none());
+
+        let moved_root = fixture.0.join("moved-root");
+        std::fs::rename(&workspace, &moved_root).unwrap();
+        std::fs::create_dir(&workspace).unwrap();
+        assert!(root.create_directory("escaped/child").is_err());
+        assert!(!workspace.join("escaped").exists());
+        assert!(!moved_root.join("escaped").exists());
+    }
 }

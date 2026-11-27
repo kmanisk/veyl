@@ -402,6 +402,49 @@ impl Change {
     }
 }
 
+fn capture_legacy_audit(
+    policy: &crate::http::operator::PolicyFile,
+) -> Result<Option<LegacyAuditRollback>, String> {
+    let settings = policy.snapshot()?;
+    let Some(path) = settings.audit_log.as_deref() else {
+        return Ok(None);
+    };
+    // A previously unused ledger has no checkpoint to migrate.
+    let mut checkpoint = path.as_os_str().to_os_string();
+    checkpoint.push(".head");
+    if !PathBuf::from(checkpoint)
+        .try_exists()
+        .map_err(|_| "Cannot inspect audit checkpoint")?
+    {
+        return Ok(None);
+    }
+    let tip = mcp_gateway::security::audit::AuditSink::legacy_rollback_tip(path)
+        .map_err(|e| format!("Cannot capture legacy audit rollback checkpoint: {e}"))?;
+    let policy_sha256 = format!("{:x}", Sha256::digest(policy.bytes()?));
+    Ok(tip.map(|tip| LegacyAuditRollback { policy_sha256, tip }))
+}
+
+fn restore_legacy_audit(
+    policy: Option<&crate::http::operator::PolicyFile>,
+    journal: &Journal,
+) -> Result<(), String> {
+    let Some(saved) = &journal.legacy_audit else {
+        return Ok(());
+    };
+    let policy = policy.ok_or("Rollback policy disappeared")?;
+    if format!("{:x}", Sha256::digest(policy.bytes()?)) != saved.policy_sha256 {
+        return Err("Policy changed since upgrade; refusing legacy rollback".into());
+    }
+    let settings = policy.snapshot()?;
+    let path = settings
+        .audit_log
+        .as_deref()
+        .ok_or("Rollback audit ledger disappeared")?;
+    mcp_gateway::security::audit::AuditSink::restore_legacy_tip(path, &saved.tip)
+        .map_err(|e| format!("Cannot safely restore legacy audit format: {e}"))?;
+    crate::http::operator::verify_approvals(&settings)
+}
+
 fn require_idle(policy: &crate::http::operator::PolicyFile) -> Result<(), String> {
     let settings = policy.snapshot()?;
     crate::http::operator::verify_approvals(&settings)?;
@@ -422,6 +465,15 @@ struct Journal {
     backup_dir: PathBuf,
     service_executable: Option<PathBuf>,
     service_active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_audit: Option<LegacyAuditRollback>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyAuditRollback {
+    policy_sha256: String,
+    tip: (u64, String),
 }
 
 #[derive(Deserialize)]
@@ -625,6 +677,45 @@ fn config_path(home: &Path) -> Result<Option<PathBuf>, String> {
         _ => Err("Ambiguous or unreadable Veyl configuration".into()),
     }
 }
+/// A gateway started by a pre-migration updater must not silently change
+/// its predecessor's audit format. Modern transactions carry a verified
+/// rollback prefix. The listener may become ready, but requests must wait
+/// for the updater to commit (or stop the service).
+pub(crate) fn startup_transaction(
+    config: &Path,
+    audit: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Ok(None);
+    };
+    if config != home.join(".local/state/veyl/clients.json")
+        && config != home.join(".config/mcp-gateway/clients.json")
+    {
+        return Ok(None);
+    }
+    let Some((root, _)) = rollback_root(&home, false)? else {
+        return Ok(None);
+    };
+    let Some(journal) = read_journal(&home, &root)? else {
+        return Ok(None);
+    };
+    if journal.phase == "staging" {
+        return Ok(None);
+    }
+    if journal.legacy_audit.is_none()
+        && let Some(path) = audit
+    {
+        // Only a verified v2 checkpoint is safe with a journal that lacks
+        // the legacy rollback contract. A missing/unreadable head is not.
+        let legacy = mcp_gateway::security::audit::AuditSink::legacy_rollback_tip(path)
+            .map_err(|_| "Cannot establish audit rollback compatibility during update")?;
+        if legacy.is_some() {
+            return Err("Legacy updater cannot safely migrate audit metadata; run the verified new release's veyl update --from-dir BUNDLE".into());
+        }
+    }
+    Ok(Some(root.join("active.json")))
+}
+
 fn existing_bins(home: &Path) -> Result<Vec<PathBuf>, String> {
     let mut dirs = Vec::new();
     for dir in [home.join(".local/bin"), home.join(".cargo/bin")] {
@@ -719,6 +810,7 @@ fn recover(home: &Path) -> Result<(), String> {
     if j.service_active {
         crate::service_cli::update_stop()?;
     }
+    restore_legacy_audit(policy.as_ref(), &j)?;
     for dir in &j.dirs {
         clean_private_dir(
             dir,
@@ -818,6 +910,7 @@ fn install(
         backup_dir: rollback_root.join(&nonce),
         service_executable: None,
         service_active: false,
+        legacy_audit: None,
     };
     write_journal(&root_fd, &journal)?;
     struct StagingJournalGuard<'a> {
@@ -926,6 +1019,9 @@ fn install(
         .as_ref()
         .filter(|(_, active)| *active)
         .map(|(path, _)| path);
+    if let Some(policy) = &policy {
+        journal.legacy_audit = capture_legacy_audit(policy)?;
+    }
     journal.phase = "replacing".into();
     journal.service_active = restart.is_some();
     journal.service_executable = restart.cloned();
@@ -967,6 +1063,8 @@ fn install(
             crate::service_cli::update_stop()
                 .map_err(|e| format!("{error}; cannot stop service for rollback: {e}"))?;
         }
+        restore_legacy_audit(rollback_policy.as_ref(), &journal)
+            .map_err(|e| format!("{error}; automatic rollback stopped: {e}; backups retained"))?;
         let mut restore_errors = Vec::new();
         for change in changes.iter_mut().rev() {
             if let Err(e) = change.restore() {
@@ -1064,6 +1162,7 @@ mod tests {
             backup_dir: root.join("abcdef"),
             service_executable: None,
             service_active: false,
+            legacy_audit: None,
         };
         (home, root, fd, j)
     }

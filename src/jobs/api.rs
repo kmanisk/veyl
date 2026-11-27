@@ -301,14 +301,27 @@ impl Jobs {
     }
 
     pub(crate) fn list(&self, owner: &str, cursor: &str) -> io::Result<Value> {
-        self.list_page(owner, cursor, false)
+        self.list_page(owner, cursor, false,false)
     }
 
     pub(crate) fn list_admin(&self, owner: &str, cursor: &str) -> io::Result<Value> {
-        self.list_page(owner, cursor, true)
+        self.list_page(owner, cursor, true,false)
     }
 
-    fn list_page(&self, owner: &str, cursor: &str, admin: bool) -> io::Result<Value> {
+    // Only the authenticated local operator of an isolated OAuth profile
+    // may aggregate its family-owned receipts, including revoked families.
+    pub(crate) fn list_admin_oauth(&self,cursor:&str)->io::Result<Value>{
+        self.list_page("",cursor,true,true)
+    }
+    pub(crate) fn oauth_admin_owner(&self,id:&str)->io::Result<String>{
+        let _transaction=self.store.lock(false)?;
+        let receipt=self.store.job(id)?.read()?;
+        if !receipt.oauth_family || !super::oauth_owner(&receipt.client_id){
+            return Err(io::Error::from(ErrorKind::NotFound));
+        }
+        Ok(receipt.client_id)
+    }
+    fn list_page(&self, owner: &str, cursor: &str, admin: bool, oauth_admin:bool) -> io::Result<Value> {
         let _transaction = self.store.lock(false)?;
         let mut receipts = Vec::new();
         let mut next = None;
@@ -322,7 +335,7 @@ impl Jobs {
             let Some(receipt) = self.read_if_published(&job)? else {
                 continue;
             };
-            if receipt.client_id != owner {
+            if if oauth_admin { !receipt.oauth_family || !super::oauth_owner(&receipt.client_id) } else {receipt.client_id != owner} {
                 continue;
             }
             if receipts.len() == PAGE_SIZE {
@@ -411,6 +424,12 @@ impl Jobs {
                 .as_bool()
                 .ok_or_else(|| argument_error("Invalid ephemeral_worktree"))?,
         };
+        if policy.oauth_family
+            && !policy.yolo
+            && (ephemeral || args.get("cwd").is_some_and(|v| v.as_str() != Some(".")))
+        {
+            return Err(argument_error("OAuth dynamic commands use only the approved workspace root; worktrees are disabled"));
+        }
         let req = request_id(args)?;
         let number = |key: &str, default: u64, min: u64, max: u64| -> io::Result<u64> {
             match args.get(key) {
@@ -431,9 +450,11 @@ impl Jobs {
                 SHORT_RUNTIME_MAX
             },
         )?;
-        let wait = if task {
+        let wait = if task && policy.oauth_family {
+            number("wait_seconds",2,0,2)?
+        } else if task {
             number("wait_seconds", 15, 0, 60)?.min(20)
-        } else {
+        } else if policy.oauth_family { timeout.saturating_add(2).min(2) } else {
             timeout.saturating_add(2).min(20)
         };
         let cwd = match args.get("cwd") {

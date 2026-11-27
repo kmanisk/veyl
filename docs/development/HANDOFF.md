@@ -1,5 +1,176 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current gate: 0.6.0-beta durable identity + migration rollback checkpoint
+
+Use `../release-0.6.0-beta-final.KH9o63jx/` (four optimized checksums in
+`SHA256SUMS` and STATUS.md). Do not use the superseded earlier durable bundle
+for installation. BridgeDev verified 33 focused cases, three isolated
+systemd upgrade/rollback scenarios and all-target Clippy. The new updater's
+journal preserves the current ledger tip and exact pre-update policy; an older
+updater is refused before migration. Keep the new bundle for `update --recover`.
+See STATUS.md for exact receipts, limitations and current release gate.
+
+## Current gate: Veyl 0.6.0-beta durable-identity candidate (v0.6.0-beta) verified PASS; renewed operator release acceptance pending
+
+Release candidate: `0.6.0-beta` (tag `v0.6.0-beta`, reboot-safe durable identity fix)
+Original preserved bundle: `/home/onyx/.local/share/veyl-development/candidates/public-connector.b64EhS58/release-0.6.0-beta/` (untouched)
+Corrected staged binaries: `/home/onyx/.local/share/veyl-development/candidates/public-connector.b64EhS58/release-0.6.0-beta-durable/`
+(`SHA256SUMS` verified across `veyl`, `mcp-gateway`, `veyl-monitor`, `veyl-connector`)
+Source manifest: `/home/onyx/.local/share/veyl-development/candidates/public-connector.b64EhS58/SOURCE_SHA256SUMS-0.6.0-beta-durable`
+Source tarball: `/home/onyx/.local/share/veyl-development/candidates/public-connector.b64EhS58/veyl-0.6.0-beta-durable-source.tar.gz`
+Crate preflight: `/home/onyx/Projects/veyl/target/package/veyl-0.6.0-beta.crate`
+See `STATUS.md` for full verified results: Clippy clean, 228/228 Rust tests,
+28/28 locked pins intact, 287/287 locked suite cases (`--features test-hooks`
+`locked_audit_chain.py` 13/13 included) + 6/6 `locked_three_modes.py` (293/293),
+`durable_identity.py` 3/3, `durable_identity_loopback.py` (Btrfs `st_dev`
+renumbering + snapshot rejection, ext4 renumbering + FS substitution rejection,
+volatile `tmpfs` strict `dev` check), read-only production `audit verify` (2,590
+records) & `mode list` PASS, 5/5 bounded host-tmpfs `oauth_funnel.py` (0 skipped),
+and 139 additional Python integration cases + `onboarding_browser.py`.
+Production PID `1012`, `~/.local/state/veyl`, `rollback-before-0.6.0-beta.Lf3fvq33`,
+and canonical `~/Projects/veyl` remain unchanged pending renewed explicit operator
+acceptance before local upgrade (`veyl update`), `main` promotion, GitHub
+`v0.6.0-beta` release, and `crates.io` publish.
+
+## Historical gate: Veyl 0.6.0-beta pre-durable candidate; preserved in ../release-0.6.0-beta/
+
+Original staged artifacts preserved at: `/home/onyx/.local/share/veyl-development/candidates/public-connector.b64EhS58/release-0.6.0-beta/`
+
+## Historical gate: direct OAuth onboarding v0.5.0-beta preview; superseded by 0.6.0-beta
+
+## Historical gate: managed Standard lifecycle and native YOLO mask locally PASS
+
+Latest evidence in STATUS.md. Use ../preview-managed-isolation.9MrrYGsG as
+the staged candidate, not the earlier preview-managed-login binary.
+38 integration cases passed, one advanced tmpfs case skipped; 28 pins
+verified. New native broad mask has a genuine failing-old/passing-new
+control. No remote OAuth YOLO or per-connection mode switching yet.
+Next design/implement mode-bound grants and enforce native broad
+protections without confusing them with bounded public Standard, plus
+onboarding polish and actual client acceptance. Retain all existing artifacts
+and preserve old connections. No AGY delegation by default, no production
+promotion or GitHub main push from incomplete scope.
+
+## Historical gate: managed login/logout draft; initial disk admission BLOCKED
+
+See latest STATUS.md. New managed Standard CLI and logout recovery code
+are uncompiled. Preserve preview-resource-final as the verified baseline.
+Safely recover enough space for the 40 GiB guard, then guarded compile,
+Clippy and ordinary-user tests/oauth_managed_login.py against the exact
+new binaries. Verify control socket/lock ownership, interruption, duplicate
+login, old-token denial, route cleanup and legacy transport regression.
+Genuine broad OAuth YOLO and per-connection mode selection remain unfinished;
+do not weaken existing scope and storage restrictions to implement them.
+Routine verification through BridgeDev, no automatic AGY delegation.
+Push only after successful testing and completion of the requested
+workflow; production remains unchanged.
+
+## Historical gate: simplified onboarding and OAuth mode lifecycle
+
+Latest operator UX correction: implement `veyl login`, `veyl logout`,
+Standard default and explicit local per-connection YOLO selection. See
+DIRECT_REMOTE_PLAN.md for the new contract. Previous direct OAuth candidate
+remains the verified baseline, not implementation of the new UX. Preserve
+legacy CLI and accepted artifacts. Do not remove the native OAuth Standard
+restriction or substitute a misleading YOLO label without a verified
+security design. Keep all changes in the candidate; targeted independent
+acceptance and real client testing before release.
+
+## Current gate: direct OAuth MCP live acceptance (2026-11-27)
+
+Latest operator direction supersedes earlier package-specific release gates:
+direct custom MCP over HTTPS/OAuth only; hosted connector and standalone
+plugin are deferred. Runtime remains the independently accepted
+preview-resource-final candidate. Follow DIRECT_REMOTE_PLAN.md: actual
+client consent, synthetic read, bounded writable profile write and command,
+reconnect and revocation, then Android capability observation. No additional
+full AGY matrix for documentation changes. Do not weaken the tmpfs or
+trusted-executable restrictions. No version change, install, push, or public
+release before exact candidate approval. Preserve existing production
+connections and experimental package/connector artifacts.
+
+## Current gate: all simulated acceptance PASS / live operator test pending
+
+AGY full advanced host-tmpfs suite 5/5 and namespace launcher 1/1 PASS; BridgeDev verified raw log, unchanged audited artifacts, locked hashes and cleanup. See STATUS.md. No further full AGY matrix is needed on unchanged runtime. Next: explicitly authorized isolated read-only Funnel preview, verified external TLS/OAuth metadata, private ChatGPT Plugin Creator installation and operator OAuth consent/tool test. No production promotion until the operator accepts the exact release. Keep existing production grants and routes unchanged. Use fresh authorization profile after any recreated tmpfs; persistent quotas and cross-profile aggregate caps remain limitations.
+
+## Current gate: independent local PASS / mounted advanced and live client HOLD
+
+AGY's resource-hardening local/simulated PASS and clean 293-case log confirmed by BridgeDev (exact pre-edit tree and optimized hashes match). Only test launcher and documentation changed after that report; direct single-binary namespace invocation now passes. See STATUS.md. Keep optimized preview-resource-final unchanged. Do not rerun the full independent matrix just for the test launcher correction. Next independent acceptance is narrowly scoped to the full advanced positive test with a temporary operator-approved host tmpfs, preserving trusted root-owned executable checks. No privileged mount or live Funnel route without separate operator approval. Use new profile/authorization after any tmpfs recreation; immediate remount identity reuse is a known limitation pending explicit operator disposition. Real external HTTPS and private ChatGPT plugin acceptance still required before production promotion.
+
+## Current AGY handoff — resource-hardening candidate (2026-11-26)
+
+Supersedes the advanced candidate handoff below. Read the latest STATUS.md and DIRECT_REMOTE_PLAN.md. Inspect the exact dirty candidate, not canonical main. Restage via tests/prepare_locked_artifacts.py using the guarded shared build cache; independently verify 28 immutable pins, run every pinned suite (287 cases) and the six supplementary three-mode cases, resource cgroup checks, aggregate tmpfs capacity and inode exhaustion, full advanced bounded-workspace positive test, negative admission tests, updater lifecycle and OAuth regressions. Use the correct fixture umask 022. No host mount or privileged changes without operator authorization; report a blocked positive test rather than relaxing the gate. The file-only public simulated endpoint passed aggregate ENOSPC in a private mount namespace, but the full advanced case needs a dedicated bounded mount fixture. Review the final optimized artifacts and source-only test relocation after the previous pinned run. Report independent acceptance without changing implementation or locked tests. Real external HTTPS/ChatGPT acceptance and exact operator release approval remain outstanding. Do not deploy or publish.
+
+## Current AGY handoff — advanced direct-remote candidate (2026-11-26)
+
+Inspect the exact dirty candidate at `/home/onyx/.local/share/veyl-development/candidates/public-connector.b64EhS58/source`, not canonical main or an older checkpoint. Verify the candidate snapshot and optimized binaries in `../preview-advanced-release/` against SHA256SUMS before testing. Preserve implementation and independent acceptance ownership. Do not edit locked tests or candidate code; report defects with evidence. Run the complete locked acceptance matrix (28 pins), relevant adversarial OAuth lock/revocation, advanced opt-in, scope/family isolation, recovery, resource bounds, upstream and plugin packaging tests. Use the existing guarded build policy and ordinary-user isolated runtime for tests requiring namespaces. No live production routes, credentials, deployment or version changes. Report actual test counts and failures. The real HTTPS/Plugin Creator test requires an explicitly authorized isolated preview and a bounded writable workspace; no disk quota is currently enforced. See STATUS.md for evidence and remaining gates.
+
+## Current gate: runner launch authorization hardening / local PASS / public HOLD
+
+Candidate public-connector.b64EhS58/source; signed original launch revision/deadline, nonblocking native policy guard held through spawn, final durable family/deadline check. Guarded builds and normal-user runs: 215 Rust, 14 focused runtime, Clippy PASS, 28 pins intact. Exact preview ../preview-runner-launch with SHA256SUMS. Restricted system-job ENOSYS corrected by ordinary-user direct rerun, not by loosening host restrictions. Full locked and deterministic launch/revoke interleaving acceptance still outstanding. See STATUS.md. Production unchanged; AGY independently accepts.
+
+## Current gate: takeover / guarded verification HOLD
+
+ChatGPT implements directly in `public-connector.b64EhS58/source`; AGY owns independent acceptance. Existing debug binaries passed 14/14 targeted OAuth interactive, native sessions and dynamic-command integration cases; 28/28 pins intact. New candidate-only Cargo guard passed 6/6 tests and refused a live build below 40 GiB. See STATUS.md for receipts and the distinction between runner pre-spawn OAuth checks and native policy/expiry validation at the IPC boundary. Next: recover sufficient safe disk headroom, review and test the launch/revocation race, then guarded builds and full locked acceptance before any public capability expansion. No production changes or public activation.
+
+## Current gate: OAuth interactive sessions PASS / public activation HOLD
+
+Candidate `public-connector.b64EhS58/source` (dirty working tree preserved; no commit/push/deploy). Implements explicit `--workspace-interactive` (requires `--workspace-jobs`, refuses `--funnel` and non-interactive defaults) across `src/oauth_cli/onboarding.rs`, `src/http/{oauth,mod}.rs`, `src/http/dashboard/app.js`, `src/core/oauth.rs`, `src/core/oauth/persistence.rs`, `src/http_common/oauth_http{,/durable}.rs`, `src/platform/private_store.rs`, and `src/jobs/{mod,config,launch,runner,session,session/channel}.rs`. Reuses native pipe/PTY process-session infrastructure with OAuth family ownership, runner-side sealed `oauth-state.json` grant-family/expiry/revocation enforcement (`verify_active_family` + `Channel::step`), refresh/reconnect/restart recovery, operation sequencing/replay protection, metadata-only durable audit, offline workspace sandbox, and mandatory systemd ceilings (`300s`, `100%` CPU, `256 MiB`, `65536` bytes/stream, `4096`-byte input frames). Verified: `cargo clippy --all-targets -- -D warnings`, 213/213 Rust tests, 96/96 focused Python tests (including `tests/oauth_interactive.py` 2/2 and `tests/process_sessions.py` 10/10), both Chromium CDP browser probes, `node --check`, 28/28 locked hashes unchanged, and 13 applicable locked acceptance suites (`105/105`). See `STATUS.md`, `DIRECT_REMOTE_PLAN.md`, and `README.md`. Public Funnel activation and remaining full release/non-interactive locked suites remain out of scope pending operator review; ChatGPT resumes next milestone after review.
+
+## Current gate: OAuth dynamic-command PASS / public activation HOLD
+
+Candidate public-connector.b64EhS58/source. Prior upstream gate: 208 Rust + 74 focused integrations, browser probes, 28 pins PASS. Explicit local `--workspace-upstreams` with strict provider manifest; trusted providers may share state. New `--workspace-commands` extends explicit named jobs with root-only dynamic exec/task under bounded offline Standard sandbox. Final dynamic gate 208 Rust + 76 focused integration cases (including 2 dynamic OAuth cases), browser probes, Clippy/build, 28 pins PASS. Browser readiness race fixed without weakening fragment assertion. Interactive controls remain a separate runner-authentication gate. See STATUS.md and DIRECT_REMOTE_PLAN.md. No Codex, no production changes or public activation; AGY independent acceptance pending.
+
+## Current gate: local OAuth named commands and jobs PASS / public activation HOLD
+
+Same isolated candidate public-connector.b64EhS58/source; explicit named-profile jobs, family-scoped signed receipts, local dashboard recovery/cancel after revoke, offline workspace containment and mandatory resource ceilings. New `--workspace-jobs` and initial `--job-profiles ABSOLUTE_FILE` documented in README and DIRECT_REMOTE_PLAN.md. Public Funnel plus jobs refused; arbitrary command/interactive processes not yet granted. Final 208 Rust and 71 focused integrations, browser, build and 28 pins PASS. See latest STATUS.md for exact receipts and corrected non-job consent compatibility. Next implement explicit upstream capability group; then separately review dynamic commands, interactive sessions and public capability admission, actual HTTPS clients, independent AGY and release. No deployment or grant widening. ChatGPT implements directly, AGY independently verifies.
+
+## Current gate: foreground Funnel provider / public activation HOLD
+
+Candidate public-connector.b64EhS58/source now implements foreground-owned dedicated Funnel via LocalAPI, exact stored HTTPS issuer recovery, conditional updates, conflict checks, proxy admission and private local consent. 208 Rust + 59 focused integrations (including three full fake-LocalAPI/native-OAuth tunnel lifecycle tests), actual browser probe, Clippy/build and all 28 pin hashes passed. Read-only installed Tailscale 1.104.7 watch/ETag compatibility passed with unchanged Serve configuration. See STATUS.md and DIRECT_REMOTE_PLAN.md for receipts and limitations. Do not mistake disposable daemon cleanup for a live public route or external ChatGPT/Claude interoperability. Next separately scope commands/jobs and upstream grants; AGY independently accepts, actual external client acceptance and exact release approval required before production. No Codex, no routine confirmation pauses.
+
+## Current gate: bounded workers and expanded scoped workspace tools / public activation HOLD
+
+Candidate public-connector.b64EhS58/source. Directory safety and bounded OAuth blocking workers passed 208 Rust + 55 focused tests at that checkpoint. Expanded `--workspace-tools` now adds mkdir, list/tree/metadata/search to the existing four scoped file tools. Expanded build and 56 focused tests, browser probes and 28 locked pins PASS. Full Rust rerun on expanded source, full locked acceptance and public interoperability pending. See latest STATUS.md for receipts. Next dedicated fixed-origin tunnel provider and separately reviewed native capability groups; no production activation or policy widening. ChatGPT implements directly, AGY verifies independently; no routine confirmation pauses during development.
+
+## Operator workflow correction (2026-11-26)
+
+ChatGPT implements directly using BridgeDev; AGY independently verifies.
+No further Codex tasks. The earlier directory-creation draft finished in
+the isolated codex-next-u2xixsy6 clone before the correction. ChatGPT
+reviewed its three code/test file changes, checked all 193 baseline entries,
+and imported only those files into public-connector.b64EhS58/source.
+Independent local verification is required before acceptance; the historical
+draft is not authoritative. Production and locked suites remain untouched.
+
+## Current gate: scoped OAuth workspace edit / public activation HOLD
+
+Candidate public-connector.b64EhS58/source: explicit onboarded --workspace-edit profile, native read/write/patch/edit only, exact scope review/fingerprint and strict multiply-linked mutation denial. 203 Rust + 55 focused integrations PASS, 28 pins unchanged, browser/lint/build PASS. No changes to legacy grants, production or public routes. Source review flags create_directory path-based create_dir_all; next fix and independently test that boundary, then isolate blocking persistence and incrementally broaden capability groups. AGY full locked acceptance pending. See STATUS.md and DIRECT_REMOTE_PLAN.md.
+
+## Current gate: automated local OAuth onboarding / public activation HOLD
+
+Candidate public-connector.b64EhS58/source: `veyl oauth setup --root DIR --profile NEW_DIR --open-ui` provisions and launches isolated private state, and `veyl oauth run --profile DIR --open-ui` recovers it without manual JSON or bearer input. 203 Rust + 54 focused integrations and existing first-run browser probe PASS, 28 pins unchanged. Onboarded legacy bearer operator routes disabled. Synthetic origin and Standard read_file only; no real tunnel, official plugin, installed service or broader grants. Next extend native permission-preserving capabilities and isolate blocking persistence, then actual tunnel/provider and cloud-client acceptance. Production 0.5.0-beta remains untouched. See STATUS.md and DIRECT_REMOTE_PLAN.md.
+
+## Current gate: local OAuth consent UI and CLI / public activation HOLD
+
+Candidate public-connector.b64EhS58/source: paired local dashboard OAuth connections tab and `veyl oauth` CLI, exact binding confirmation, local Origin/session/CSRF checks and live policy/audit eligibility. 203 Rust + 52 focused integrations PASS (13 native OAuth including real Brave browser and CLI); 28 pins unchanged, Clippy and builds PASS. New interfaces remain read-only Standard preview; old bearer operator fixture API retained for compatibility, retire/consolidate before exposure. Next broaden native capabilities under existing policy, isolate blocking persistence, real web-client and tunnel acceptance. Preserve deployed 0.5.0-beta. See DIRECT_REMOTE_PLAN.md and STATUS.md.
+
+## Current gate: durable native OAuth / public activation HOLD
+
+Candidate public-connector.b64EhS58/source: optional private native OAuth family recovery and atomic lifecycle receipts. 203 Rust + 47 focused integration tests PASS, 28 locked pins unchanged, all-target Clippy/build PASS. Clean-commit restart/replay/revocation, expiry, policy/workspace binding and fail-closed dirty/corrupt state verified. Native MCP sessions and unfinished consent remain volatile, connector registration-only mode unchanged. Preview only, bounded 2048-receipt audit, synchronous disk commits; no full locked acceptance or real cloud-client interoperability. Next authenticated local dashboard/CLI consent and reviewed broader native grants. Preserve production 0.5.0-beta. See DIRECT_REMOTE_PLAN.md and STATUS.md.
+
+## Current gate: native read-only OAuth integration / public activation HOLD
+
+Candidate public-connector.b64EhS58/source: shared OAuth server and actual native Standard read_file execution behind explicit ephemeral loopback fixture. 200 Rust + 43 focused integrations PASS (4 new native OAuth cases); all-target Clippy and builds pass. Grant-family MCP session binding, live native policy/worker revalidation and durable native admission audit verified. Native OAuth state volatile; no public activation. Next durable hashed token state/expiry/replay recovery, durable OAuth lifecycle audit, authenticated dashboard/CLI consent, then wider capability and cloud-client acceptance. Preserve verified 0.5.0-beta production. See DIRECT_REMOTE_PLAN.md and STATUS.md.
+
+## Current gate: direct remote OAuth HTTP preview / native admission HOLD
+
+Candidate public-connector.b64EhS58/source has actual loopback OAuth HTTP flow and optional persistent registered-client state. Final 200 Rust + 39 focused integrations PASS, 28 locked pins unchanged. Reproduce with tests/oauth_http_preview.py and candidate ../target/debug/veyl-connector. Separate authenticated operator API is fixture-only, not a production dashboard; valid token deliberately returns 503 at /mcp. All token families currently lost on restart. Next share handlers with native HTTP adapter, wire live policy/session binding, local approval UI, durable hashed token state and audit; no public OAuth activation until full end-to-end acceptance. Details in DIRECT_REMOTE_PLAN.md and STATUS.md.
+
+## Current gate: direct remote OAuth domain checkpoint / public activation HOLD
+
+Latest operator direction supersedes hosted-first roadmap. Read DIRECT_REMOTE_PLAN.md. Candidate public-connector.b64EhS58/source contains real S256 grant lifecycle, bounded registered-client and resource validation, metadata and path allowlist primitives. 199 Rust and 31 focused integration tests passed; 28 locked pins intact, no complete locked battery rerun. No live OAuth routes or persistent grant store yet. Next implement HTTP authorization/token/registration flow with private operator consent and live native admission, persistent secure state and audit. Keep existing Funnel and 0.5.0-beta production unchanged.
+
 ## Current gate: 0.5.0-beta Linux release — DEPLOYED AND PUBLISHED
 
 Release commit a3a8df21259510844fcab93d4ea1364ad883fcd6, GitHub v0.5.0-beta and crates.io veyl 0.5.0-beta verified. Direct BridgeDev acceptance: 186 Rust, 287 locked + 6 modes, 48 focused integration and lifecycle tests PASS. Both Low defects fixed. All six managed binary copies and production gateway match the release. Policy unchanged; rollback and artifacts recorded in STATUS.md. Native Android/Termux remains unverified for this tag; do not claim cross-platform acceptance. Next gate: native Termux verification of the exact release source, then resume platform feature development after operator direction.

@@ -246,6 +246,30 @@ fn unique_profiles<'de, D: de::Deserializer<'de>>(
 }
 
 impl Profiles {
+    /// OAuth admits only operator-configured noninteractive profiles.
+    /// The local consent UI displays the exact normalized profile set.
+    pub(crate) fn oauth_summary(&self, allow_interactive: bool) -> Result<serde_json::Value,String> {
+        if self.0.is_empty() || self.0.len()>16 {return Err("OAuth requires 1 to 16 named job profiles".into());}
+        if allow_interactive && !self.has_interactive() {
+            return Err("Interactive OAuth sessions require at least one interactive job profile".into());
+        }
+        for profile in self.0.values() {
+            if (!allow_interactive && (profile.interactive || profile.pty))
+                || profile.extended_runtime
+                || profile.timeout_seconds>SHORT_RUNTIME_MAX
+                || profile.max_output_bytes>MAX_OUTPUT
+                || profile.cpu_percent>default_cpu() || profile.memory_bytes>default_memory()
+                || !Path::new(&profile.executable).starts_with("/usr/bin")
+                || !fs::metadata(&profile.executable).is_ok_and(|m|m.is_file() && m.uid()==0 && m.mode()&0o6022==0) {
+                return Err(if allow_interactive {
+                    "OAuth interactive jobs require bounded profiles with trusted system executables"
+                } else {
+                    "OAuth jobs require bounded noninteractive profiles with trusted system executables"
+                }.into());
+            }
+        }
+        serde_json::to_value(&self.0).map_err(|_|"Cannot represent OAuth job profiles".into())
+    }
     pub(super) fn named(&self, name: &str) -> Option<Profile> {
         self.0.get(name).cloned()
     }
@@ -287,12 +311,30 @@ impl Profiles {
     }
 }
 
+pub(crate) fn oauth_profiles(bytes:&[u8], allow_interactive: bool)->Result<serde_json::Value,String>{
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        #[serde(deserialize_with="unique_profiles")]
+        job_profiles:BTreeMap<String,Profile>,
+    }
+    let mut input:Input=serde_json::from_slice(bytes).map_err(|_|"Invalid job profiles file")?;
+    if input.job_profiles.is_empty() || input.job_profiles.len()>16 {return Err("OAuth requires 1 to 16 job profiles".into());}
+    for (name,profile) in &mut input.job_profiles {
+        if name.is_empty() || name.len()>64 || !name.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'_'|b'-')) {
+            return Err("Invalid OAuth job profile name".into());
+        }
+        profile.validate().map_err(|_|"Invalid OAuth job profile")?;
+    }
+    Profiles(input.job_profiles).oauth_summary(allow_interactive)
+}
+
 pub(crate) struct JobRoot {
     identity: RootIdentity,
     _directory: File,
 }
 
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct RootIdentity {
     path: PathBuf,
     id: [u64; 2],
@@ -404,5 +446,74 @@ mod runtime_tests {
                 .get("extended_runtime")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn oauth_summary_enforces_explicit_interactive_boundary() {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "shell".to_owned(),
+            Profile {
+                executable: "/usr/bin/sh".into(),
+                args: vec!["-s".into()],
+                timeout_seconds: 60,
+                interactive: true,
+                pty: false,
+                extended_runtime: false,
+                max_output_bytes: MAX_OUTPUT,
+                cpu_percent: 100,
+                memory_bytes: default_memory(),
+            },
+        );
+        let profiles = Profiles(map.clone());
+        assert!(profiles.oauth_summary(false).is_err());
+        assert!(profiles.oauth_summary(true).is_ok());
+
+        let mut pty_map = BTreeMap::new();
+        pty_map.insert(
+            "pty".to_owned(),
+            Profile {
+                executable: "/usr/bin/sh".into(),
+                args: vec!["-i".into()],
+                timeout_seconds: 300,
+                interactive: true,
+                pty: true,
+                extended_runtime: false,
+                max_output_bytes: MAX_OUTPUT,
+                cpu_percent: 100,
+                memory_bytes: default_memory(),
+            },
+        );
+        assert!(Profiles(pty_map.clone()).oauth_summary(false).is_err());
+        assert!(Profiles(pty_map.clone()).oauth_summary(true).is_ok());
+
+        // Interactive OAuth still forbids extended runtime or exceeded ceilings.
+        let mut over = pty_map.clone();
+        over.get_mut("pty").unwrap().extended_runtime = true;
+        over.get_mut("pty").unwrap().timeout_seconds = 301;
+        assert!(Profiles(over).oauth_summary(true).is_err());
+
+        let mut over_mem = pty_map;
+        over_mem.get_mut("pty").unwrap().memory_bytes = default_memory() + 1;
+        assert!(Profiles(over_mem).oauth_summary(true).is_err());
+
+        // Interactive mode requires at least one interactive profile.
+        let mut non_interactive = BTreeMap::new();
+        non_interactive.insert(
+            "pwd".to_owned(),
+            Profile {
+                executable: "/usr/bin/pwd".into(),
+                args: vec![],
+                timeout_seconds: 10,
+                interactive: false,
+                pty: false,
+                extended_runtime: false,
+                max_output_bytes: DEFAULT_OUTPUT,
+                cpu_percent: 100,
+                memory_bytes: default_memory(),
+            },
+        );
+        assert!(Profiles(non_interactive.clone()).oauth_summary(false).is_ok());
+        assert!(Profiles(non_interactive).oauth_summary(true).is_err());
     }
 }

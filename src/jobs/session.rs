@@ -6,6 +6,7 @@ pub(super) mod terminal;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -19,17 +20,81 @@ use super::{JobPolicy, JobRoot, Jobs, invalid, store::valid_id};
 use channel::Operation;
 
 #[derive(Clone, Copy)]
+pub(crate) struct OAuthAuthorization<'a> {
+    pub state_dir: &'a Path,
+    pub oauth_client: &'a str,
+    pub local_client: &'a str,
+    pub family: &'a [u8; 32],
+}
+
+#[derive(Clone, Copy)]
 pub(crate) struct Authorization<'a> {
     pub config: &'a Path,
     pub digest: &'a [u8; 32],
     pub expires_at: u64,
+    pub oauth: Option<OAuthAuthorization<'a>>,
 }
 
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+/// Immutable authorization for the original launch, not the lifetime identity
+/// of a session. Subsequent input uses a fresh authenticated request instead.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LaunchAuthority {
+    revision: [u8; 32],
+    expires_at: u64,
+}
+
+impl LaunchAuthority {
+    pub(super) fn new(auth: Authorization<'_>) -> Option<Self> {
+        auth.oauth.map(|_| Self {
+            revision: *auth.digest,
+            expires_at: auth.expires_at,
+        })
+    }
+
+    pub(super) fn expired(&self) -> bool {
+        super::now() >= self.expires_at
+    }
+
+    pub(super) fn policy_guard(
+        &self,
+        config: &Path,
+    ) -> io::Result<crate::http::operator::PolicyFile> {
+        let guard = crate::http::operator::PolicyFile::input_snapshot(config, &self.revision)?;
+        if self.expired() {
+            return Err(io::Error::from(ErrorKind::PermissionDenied));
+        }
+        Ok(guard)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct OAuthBinding {
+    pub state_dir: PathBuf,
+    pub oauth_client: String,
+    pub local_client: String,
+    pub family_code: String,
+}
+
+impl OAuthBinding {
+    pub(super) fn from_auth(oauth: OAuthAuthorization<'_>) -> Self {
+        Self {
+            state_dir: oauth.state_dir.to_owned(),
+            oauth_client: oauth.oauth_client.to_owned(),
+            local_client: oauth.local_client.to_owned(),
+            family_code: URL_SAFE_NO_PAD.encode(oauth.family),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct Binding {
     pub config: PathBuf,
     pub root: RootIdentity,
     pub pty: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<OAuthBinding>,
 }
 
 impl Binding {
@@ -38,12 +103,31 @@ impl Binding {
             config: auth.config.to_owned(),
             root: root.clone(),
             pty,
+            oauth: auth.oauth.map(OAuthBinding::from_auth),
         }
     }
 
     pub(super) fn transport(&self) -> &'static str {
         if self.pty { "pty" } else { "pipe" }
     }
+}
+
+pub(super) fn verify_oauth_grant(oauth: &OAuthBinding) -> io::Result<rustix::fd::OwnedFd> {
+    verify_oauth_grant_mode(oauth, false)
+}
+
+pub(super) fn verify_oauth_grant_mode(
+    oauth: &OAuthBinding,
+    required_yolo: bool,
+) -> io::Result<rustix::fd::OwnedFd> {
+    mcp_gateway::http_common::oauth_http::active_family_guard_with_mode(
+        &oauth.state_dir,
+        &oauth.oauth_client,
+        &oauth.local_client,
+        &oauth.family_code,
+        required_yolo,
+    )
+    .map_err(|_| io::Error::from(ErrorKind::PermissionDenied))
 }
 
 impl Jobs {
@@ -289,6 +373,7 @@ impl Jobs {
             mount.identity().handle()?;
         }
         if receipt.session.as_ref() != Some(&Binding::new(auth, root.identity(), profile.pty))
+            || receipt.oauth_family != policy.oauth_family
             || !receipt.isolated
             || receipt.full
             || receipt.yolo != policy.yolo
@@ -327,5 +412,110 @@ impl Jobs {
             status["idempotent_replay"] = json!(true);
         }
         Ok(status)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    #[test]
+    fn oauth_launch_rejects_stale_policy_expired_deadline_and_busy_writer() {
+        use sha2::{Digest, Sha256};
+        let dir = std::env::temp_dir().join(format!(
+            "veyl-launch-authority-{}-{}",
+            std::process::id(),
+            mcp_gateway::core::session::random_id::<8>().unwrap()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.join("clients.json");
+        let original = b"{\"clients\":[]}";
+        std::fs::write(&path, original).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let revision = Sha256::digest(original).into();
+        let valid = LaunchAuthority {
+            revision,
+            expires_at: super::super::now() + 60,
+        };
+        let guard = valid.policy_guard(&path).expect("current admission");
+        drop(guard);
+        let expired = LaunchAuthority {
+            revision,
+            expires_at: super::super::now(),
+        };
+        assert!(expired.policy_guard(&path).is_err());
+        let exclusive = crate::http::operator::PolicyFile::lock(&path, true).unwrap();
+        assert!(valid.policy_guard(&path).is_err());
+        exclusive.replace(b"{\"clients\":[],\"changed\":true}").unwrap();
+        drop(exclusive);
+        assert!(valid.policy_guard(&path).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn binding_preserves_legacy_format_and_oauth_family_identity() {
+        let dir = std::env::temp_dir().join(format!(
+            "veyl-binding-test-{}-{}",
+            std::process::id(),
+            mcp_gateway::core::session::random_id::<8>().unwrap()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let root = JobRoot::open(&dir).unwrap();
+        let digest = [0x11u8; 32];
+        let legacy = Binding::new(
+            Authorization {
+                config: Path::new("/tmp/clients.json"),
+                digest: &digest,
+                expires_at: 4294967295,
+                oauth: None,
+            },
+            root.identity(),
+            false,
+        );
+        let serialized = serde_json::to_value(&legacy).unwrap();
+        assert!(serialized.get("oauth").is_none());
+        let decoded: Binding = serde_json::from_value(serialized).unwrap();
+        assert_eq!(decoded, legacy);
+
+        let family_a = [0x22u8; 32];
+        let family_b = [0x33u8; 32];
+        let oa = Binding::new(
+            Authorization {
+                config: Path::new("/tmp/clients.json"),
+                digest: &digest,
+                expires_at: 1000,
+                oauth: Some(OAuthAuthorization {
+                    state_dir: &dir,
+                    oauth_client: "client-1",
+                    local_client: "oauth-preview",
+                    family: &family_a,
+                }),
+            },
+            root.identity(),
+            true,
+        );
+        let ob = Binding::new(
+            Authorization {
+                config: Path::new("/tmp/clients.json"),
+                digest: &digest,
+                expires_at: 1000,
+                oauth: Some(OAuthAuthorization {
+                    state_dir: &dir,
+                    oauth_client: "client-1",
+                    local_client: "oauth-preview",
+                    family: &family_b,
+                }),
+            },
+            root.identity(),
+            true,
+        );
+        assert_ne!(oa, ob);
+        assert_eq!(oa.transport(), "pty");
+        assert!(oa.oauth.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

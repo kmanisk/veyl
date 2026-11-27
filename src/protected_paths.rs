@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use mcp_gateway::security::durable_id::DurableObjectId;
 use mcp_gateway::security::linux_fs::open_absolute_dir;
 use rustix::fs::{self, FileType, Mode, OFlags, ResolveFlags};
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,15 @@ use crate::http::admission::Configuration;
 use crate::http::operator::policy_path;
 
 pub(crate) const OPTIONAL_DEFAULTS: &[&str] = &[".ssh", ".gnupg", ".codex"];
+/// Managed and native gateway control-plane directories must remain isolated across modes.
+pub(crate) const MANAGED_LOGIN_DIR: &str = ".veyl-login";
+pub(crate) const CONTROL_PLANE_DIRS: &[&str] = &[
+    MANAGED_LOGIN_DIR,
+    ".local/state/veyl",
+    ".local/state/mcp-gateway",
+    ".config/mcp-gateway",
+    ".veyl-update-backups",
+];
 pub(crate) const READONLY_DEFAULTS: &[&str] = &[
     ".bashrc",
     ".profile",
@@ -20,6 +30,7 @@ pub(crate) const READONLY_DEFAULTS: &[&str] = &[
     ".config/autostart",
     ".local/bin",
     ".ssh/authorized_keys",
+    ".veyl-update.lock",
 ];
 const MAX_RULES: usize = 64;
 
@@ -45,6 +56,8 @@ pub(crate) struct Rule {
     device: u64,
     inode: u64,
     object: Object,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    durable: Option<DurableObjectId>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -60,9 +73,11 @@ impl Rule {
         let parent = path.parent().ok_or("Missing protection parent")?;
         let name = path.file_name().ok_or("Missing protection name")?;
         let open = || {
-            let parent = open_absolute_dir(parent).map_err(|_| "Unsafe or unavailable parent")?;
+            let parent_fd = open_absolute_dir(parent).map_err(|_| "Unsafe or unavailable parent")?;
+            let parent_stat =
+                fs::fstat(&parent_fd).map_err(|_| "Cannot identify protection parent")?;
             let handle = fs::openat2(
-                parent,
+                &parent_fd,
                 name,
                 OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::empty(),
@@ -72,9 +87,15 @@ impl Rule {
                     | ResolveFlags::NO_XDEV,
             )
             .map_err(|_| "Unsafe or unavailable protected path, including mount aliases")?;
-            fs::fstat(handle).map_err(|_| "Cannot identify protected path")
+            let stat = fs::fstat(handle).map_err(|_| "Cannot identify protected path")?;
+            if stat.st_dev != parent_stat.st_dev {
+                return Err("Unsafe or unavailable protected path, including mount aliases".into());
+            }
+            let durable = DurableObjectId::probe(&parent_fd, &stat)
+                .map_err(|_| "Cannot identify protected filesystem")?;
+            Ok::<_, String>((stat, durable))
         };
-        let stat = open()?;
+        let (stat, durable) = open()?;
         let object = match FileType::from_raw_mode(stat.st_mode) {
             FileType::Directory => Object::Directory,
             FileType::RegularFile if kind == Kind::ReadOnly && stat.st_nlink == 1 => {
@@ -82,9 +103,10 @@ impl Rule {
             }
             _ => return Err("Use a directory for optional protection or a singly-linked regular file for read-only protection".into()),
         };
-        let again = open()?;
+        let (again, again_durable) = open()?;
         if (stat.st_dev, stat.st_ino, stat.st_mode, stat.st_nlink)
             != (again.st_dev, again.st_ino, again.st_mode, again.st_nlink)
+            || durable != again_durable
         {
             return Err("Protected path changed during validation".into());
         }
@@ -93,14 +115,53 @@ impl Rule {
             device: stat.st_dev,
             inode: stat.st_ino,
             object,
+            durable: Some(durable),
         })
     }
 
     pub(crate) fn check_identity(&self, kind: Kind) -> Result<(), String> {
-        if *self != Self::inspect(&self.path, kind)? {
+        let live = Self::inspect(&self.path, kind)?;
+        if self.path != live.path || self.object != live.object {
+            return Err("Protected path identity changed; review and re-add the rule".into());
+        }
+        let matches = match &self.durable {
+            Some(expected) => live
+                .durable
+                .as_ref()
+                .is_some_and(|actual| expected.matches_live(actual)),
+            None => (self.device, self.inode) == (live.device, live.inode),
+        };
+        if !matches {
             return Err("Protected path identity changed; review and re-add the rule".into());
         }
         Ok(())
+    }
+
+    pub(crate) fn same_object(&self, other: &Self) -> bool {
+        match (&self.durable, &other.durable) {
+            (Some(a), Some(b)) => a.matches_live(b),
+            _ => (self.device, self.inode) == (other.device, other.inode),
+        }
+    }
+
+    pub(crate) fn migrate_legacy(&mut self, kind: Kind) -> Result<bool, String> {
+        if self.durable.is_some() {
+            self.check_identity(kind)?;
+            return Ok(false);
+        }
+        let live = Self::inspect(&self.path, kind)?;
+        let Some(durable) = &live.durable else {
+            return Err("Protected filesystem identity unavailable".into());
+        };
+        if self.object != live.object
+            || self.inode != live.inode
+            || (!durable.fs.is_persistent() && self.device != live.device)
+        {
+            return Err("Legacy protected path identity changed; review and re-add the rule".into());
+        }
+        self.device = live.device;
+        self.durable = live.durable;
+        Ok(true)
     }
 }
 
@@ -129,12 +190,16 @@ impl Rules {
         }
         for (index, rule) in all.iter().enumerate() {
             validate_path(&rule.path)?;
+            if let Some(durable) = &rule.durable
+                && (!durable.is_valid() || durable.inode != rule.inode)
+            {
+                return Err("Conflicting or invalid protected-path rules".into());
+            }
             if rule.inode == 0
                 || (index < rules.optional.len() && rule.object != Object::Directory)
-                || all[..index].iter().any(|other| {
-                    overlaps(&rule.path, &other.path)
-                        || (rule.device, rule.inode) == (other.device, other.inode)
-                })
+                || all[..index]
+                    .iter()
+                    .any(|other| overlaps(&rule.path, &other.path) || rule.same_object(other))
             {
                 return Err("Conflicting or invalid protected-path rules".into());
             }
@@ -169,9 +234,7 @@ impl Rules {
             for other in rules {
                 if selected == kind && other == rule {
                     present = true;
-                } else if overlaps(&other.path, &rule.path)
-                    || (other.device, other.inode) == (rule.device, rule.inode)
-                {
+                } else if overlaps(&other.path, &rule.path) || other.same_object(rule) {
                     return Err("Rule conflicts with an existing path or object identity".into());
                 }
             }
@@ -193,7 +256,7 @@ impl Rules {
         self.optional.is_empty() && self.readonly.is_empty()
     }
 
-    fn selected_mut(&mut self, kind: Kind) -> &mut Vec<Rule> {
+    pub(crate) fn selected_mut(&mut self, kind: Kind) -> &mut Vec<Rule> {
         match kind {
             Kind::Optional => &mut self.optional,
             Kind::ReadOnly => &mut self.readonly,
@@ -219,7 +282,7 @@ pub(crate) fn validate_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn is_mandatory(config: &Path, settings: &Configuration, path: &Path) -> bool {
+fn is_mandatory_core(config: &Path, settings: &Configuration, path: &Path) -> bool {
     policy_path(config, path)
         || overlaps(config, path)
         || settings
@@ -230,6 +293,42 @@ pub(crate) fn is_mandatory(config: &Path, settings: &Configuration, path: &Path)
         || settings
             .job_state_path()
             .is_some_and(|directory| overlaps(directory, path))
+}
+
+pub(crate) fn is_mandatory(config: &Path, settings: &Configuration, path: &Path) -> bool {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .is_some_and(|home| {
+            CONTROL_PLANE_DIRS
+                .iter()
+                .any(|dir| overlaps(&home.join(dir), path))
+                || overlaps(&home.join(".veyl-update.lock"), path)
+        })
+        || is_mandatory_core(config, settings, path)
+}
+
+pub(crate) fn is_mandatory_for_skills(
+    config: &Path,
+    settings: &Configuration,
+    path: &Path,
+) -> bool {
+    if is_mandatory_core(config, settings, path) {
+        return true;
+    }
+    let Some(home) = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+    else {
+        return false;
+    };
+    let default_skills_dir = home.join(".local/state/veyl/skills");
+    CONTROL_PLANE_DIRS.iter().any(|dir| {
+        if *dir == ".local/state/veyl" && path == default_skills_dir {
+            return false;
+        }
+        overlaps(&home.join(dir), path)
+    }) || overlaps(&home.join(".veyl-update.lock"), path)
 }
 
 pub(crate) fn check_conflicts(
@@ -257,4 +356,83 @@ pub(crate) fn check_conflicts(
 
 fn overlaps(first: &Path, second: &Path) -> bool {
     first.starts_with(second) || second.starts_with(first)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mcp_gateway::security::durable_id::DurableFs;
+
+    #[test]
+    fn protected_rule_uses_durable_identity_and_migrates_legacy() {
+        let dir = std::env::temp_dir().join(format!("veyl-prot-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let target = dir.join("secret");
+        std::fs::create_dir(&target).unwrap();
+
+        let rule = Rule::inspect(&target, Kind::Optional).unwrap();
+        assert!(rule.durable.is_some());
+        rule.check_identity(Kind::Optional).unwrap();
+
+        // Simulate device renumbering on persistent FS: rule.device changed while durable stays identical.
+        let persistent_rule = Rule {
+            path: target.clone(),
+            device: rule.device ^ 17,
+            inode: rule.inode,
+            object: Object::Directory,
+            durable: Some(DurableObjectId {
+                fs: DurableFs::Persistent {
+                    fs_type: 0x9123_683e,
+                    fsid: 0x1234_5678_9abc_def0,
+                },
+                inode: rule.inode,
+            }),
+        };
+        if rule.durable.as_ref().unwrap().fs.is_persistent() {
+            let mut renumbered = rule.clone();
+            renumbered.device ^= 17;
+            renumbered.check_identity(Kind::Optional).unwrap();
+        }
+        // Snapshot subvolume / mismatched fsid must fail closed.
+        let mut wrong_subvol = rule.clone();
+        if let Some(DurableObjectId {
+            fs: DurableFs::Persistent { fsid, .. },
+            ..
+        }) = &mut wrong_subvol.durable
+        {
+            *fsid ^= 1;
+            assert!(wrong_subvol.check_identity(Kind::Optional).is_err());
+        }
+        // Volatile rule with mismatched device fails closed.
+        let volatile_rule = Rule {
+            path: target.clone(),
+            device: rule.device ^ 9,
+            inode: rule.inode,
+            object: Object::Directory,
+            durable: Some(DurableObjectId {
+                fs: DurableFs::Volatile {
+                    fs_type: 0x0102_1994,
+                    device: rule.device ^ 9,
+                },
+                inode: rule.inode,
+            }),
+        };
+        assert!(volatile_rule.check_identity(Kind::Optional).is_err());
+
+        // Legacy rule migration (v1 -> durable) preserves inode/object constraints.
+        let mut legacy = Rule {
+            path: target.clone(),
+            device: rule.device,
+            inode: rule.inode,
+            object: Object::Directory,
+            durable: None,
+        };
+        assert!(legacy.migrate_legacy(Kind::Optional).unwrap());
+        assert!(legacy.durable.is_some());
+        assert!(!legacy.migrate_legacy(Kind::Optional).unwrap());
+
+        drop(persistent_rule);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -19,7 +19,9 @@ use std::{
 
 mod agent;
 #[cfg(target_os = "linux")]
-mod store;
+use mcp_gateway::http_common::oauth_http as oauth_preview;
+#[cfg(target_os = "linux")]
+use mcp_gateway::platform::private_store as store;
 
 const API: u64 = 1;
 use mcp_gateway::core::protocol::{MCP_VERSION as MCP, Session};
@@ -480,6 +482,30 @@ fn local_state(args: &[String]) -> Result<(), String> {
 pub fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
+        #[cfg(target_os = "linux")]
+        [mode, port, admin_port, origin] if mode == "oauth-preview" => {
+            runtime()?.block_on(oauth_preview::serve(
+                parse_port(port)?,
+                parse_port(admin_port)?,
+                origin,
+                input()?,
+                None,
+            ))
+        }
+        #[cfg(target_os = "linux")]
+        [mode, dir, origin] if mode == "oauth-state-init" => {
+            oauth_preview::init_state(std::path::Path::new(dir), origin)
+        }
+        #[cfg(target_os = "linux")]
+        [mode, port, admin_port, origin, dir] if mode == "oauth-preview" => {
+            runtime()?.block_on(oauth_preview::serve(
+                parse_port(port)?,
+                parse_port(admin_port)?,
+                origin,
+                input()?,
+                Some(std::path::Path::new(dir)),
+            ))
+        }
         [mode, port] if mode == "preview" => {
             runtime()?.block_on(serve(parse_port(port)?, config(input()?)?))
         }

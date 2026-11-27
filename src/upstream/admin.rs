@@ -142,7 +142,14 @@ pub(crate) fn manage(path: &Path, params: &[&str]) -> Result<Value, String> {
                     return Err("Provider-only workspace requires managed policy".into());
                 }
                 let selected = super::workspace::Grant::parse(&json!(root))?;
-                json!({"root":selected.root,"device":selected.identity[0],"inode":selected.identity[1]})
+                match selected.durable {
+                    Some(durable) => {
+                        json!({"root":selected.root,"device":selected.identity[0],"inode":selected.identity[1],"durable":durable})
+                    }
+                    None => {
+                        json!({"root":selected.root,"device":selected.identity[0],"inode":selected.identity[1]})
+                    }
+                }
             } else {
                 json!(root)
             };

@@ -15,6 +15,7 @@ use super::{invalid, random_hex};
 const SYSTEMD_RUN: &str = "/usr/bin/systemd-run";
 const MEMORY_BYTES: u64 = 256 * 1024 * 1024;
 const CPU_PERCENT: u64 = 100;
+const TASKS_MAX: u64 = 128;
 
 pub(super) struct Scopes {
     executable: PathBuf,
@@ -83,6 +84,8 @@ impl Scopes {
             .arg(format!("--unit={}", unit(id)))
             .arg(format!("--property=CPUQuota={cpu_percent}%"))
             .arg(format!("--property=MemoryMax={memory_bytes}"))
+            .arg("--property=MemorySwapMax=0")
+            .arg(format!("--property=TasksMax={TASKS_MAX}"))
             // This manager-side backstop also ends the scope if its runner
             // dies. The runner normally times out and records the result first.
             .arg(format!(
@@ -117,6 +120,12 @@ pub(crate) fn verify(id: &str, cpu_percent: u64, memory_bytes: u64) -> io::Resul
     let cgroup = Path::new("/sys/fs/cgroup").join(location);
     let memory = fs::read_to_string(cgroup.join("memory.max"))?;
     let memory: u64 = memory.trim().parse().map_err(|_| invalid())?;
+    let swap = fs::read_to_string(cgroup.join("memory.swap.max"))?;
+    let tasks = fs::read_to_string(cgroup.join("pids.max"))?;
+    let tasks: u64 = tasks.trim().parse().map_err(|_| invalid())?;
+    if swap.trim() != "0" || tasks == 0 || tasks > TASKS_MAX {
+        return Err(invalid());
+    }
     let cpu = fs::read_to_string(cgroup.join("cpu.max"))?;
     let (quota, period) = cpu.trim().split_once(' ').ok_or_else(invalid)?;
     let quota: u64 = quota.parse().map_err(|_| invalid())?;

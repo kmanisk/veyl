@@ -255,6 +255,41 @@ fn no_nested_mount(root: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Check the whole workspace with descriptor-relative traversal. Existing
+/// hardlinks and special files can otherwise bypass the mount boundary.
+/// Outside concurrent same-UID mutations remain outside the threat model.
+pub(super) fn verify_oauth_workspace(root:&OwnedFd)->io::Result<()> {
+    use rustix::fs::{self,Dir,Mode,OFlags,ResolveFlags,FileType};
+    use std::time::{Instant,Duration};
+    fn walk(dir:&OwnedFd,depth:usize,remaining:&mut usize,deadline:Instant)->io::Result<()> {
+        if depth>64{return Err(unsupported());}
+        for entry in Dir::read_from(dir)? {
+            let entry=entry?;
+            let name=entry.file_name();
+            if matches!(name.to_bytes(),b"."|b".."){continue;}
+            if *remaining==0 || Instant::now()>=deadline{return Err(unsupported());}
+            *remaining-=1;
+            let fd=fs::openat2(dir,name,OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,
+                Mode::empty(),ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_MAGICLINKS)?;
+            let stat=fs::fstat(&fd)?;
+            match FileType::from_raw_mode(stat.st_mode) {
+                FileType::RegularFile if stat.st_nlink==1=>{},
+                FileType::Symlink=>{},
+                FileType::Directory=>{
+                    let child=fs::openat2(dir,name,OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::CLOEXEC,
+                        Mode::empty(),ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_SYMLINKS)?;
+                    let current=fs::fstat(&child)?;
+                    if (stat.st_dev,stat.st_ino)!=(current.st_dev,current.st_ino){return Err(unsupported());}
+                    walk(&child,depth+1,remaining,deadline)?;
+                }
+                _=>return Err(unsupported())
+            }
+        }
+        Ok(())
+    }
+    walk(root,0,&mut 16384,Instant::now()+Duration::from_secs(2))
+}
+
 /// Filter x86_64 syscall numbers, including the x32 ABI bit. A private network
 /// namespace alone leaves filesystem Unix sockets available through bind mounts.
 fn filter(network: bool) -> io::Result<File> {

@@ -21,6 +21,8 @@ mod local_cli;
 #[cfg(target_os = "linux")]
 mod mode_cli;
 #[cfg(target_os = "linux")]
+mod oauth_cli;
+#[cfg(target_os = "linux")]
 mod protected_cli;
 #[cfg(target_os = "linux")]
 mod protected_paths;
@@ -55,6 +57,8 @@ const HELP: &str = "Veyl — local-first MCP gateway
 Usage: veyl <command> [options]
 
 Getting started
+  login [--root DIR]                              Connect via direct Standard OAuth
+  logout                                         Stop and revoke managed OAuth login
   setup --root DIR [--tailscale | --yolo]          Set up Veyl
   init --root DIR                                Initialize local configuration
   connect                                        Copy the connector URL
@@ -74,6 +78,7 @@ Daily use
 
 Administration
   diagnostics, skills, mcp-servers, marketplace, audit, state, serve, protected-paths
+  oauth                                          Local OAuth preview consent
 
 Advanced transport
   platform                                       Show compiled platform capabilities\n  platform-probe [--root DIR]                    Experimental foreground MCP probe\n  --root DIR                                     MCP over stdio (Linux legacy)
@@ -95,6 +100,8 @@ fn main() {
             arg.to_str(),
             Some(
                 "init"
+                    | "login"
+                    | "logout"
                     | "setup"
                     | "connect"
                     | "run"
@@ -115,6 +122,7 @@ fn main() {
                     | "protected-paths"
                     | "yolo"
                     | "http"
+                    | "oauth"
             )
         )
     };

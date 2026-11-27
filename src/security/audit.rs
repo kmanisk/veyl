@@ -94,6 +94,8 @@ pub struct StageProof {
     pub uid: u32,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub host_parent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fs: Option<super::durable_id::DurableFs>,
 }
 
 enum EventDetails<'a> {
@@ -114,6 +116,14 @@ impl AuditSink {
 
     pub fn open_with_limits(path: &Path, limits: AuditLimits) -> io::Result<Self> {
         Ledger::open(path, limits).map(Self)
+    }
+
+    pub fn legacy_rollback_tip(path: &Path) -> io::Result<Option<(u64, String)>> {
+        Ledger::legacy_rollback_tip(path)
+    }
+
+    pub fn restore_legacy_tip(path: &Path, previous: &(u64, String)) -> io::Result<()> {
+        Ledger::restore_legacy_tip(path, previous)
     }
 
     pub fn check_binding(&self) -> io::Result<()> {
@@ -327,6 +337,10 @@ impl AuditSink {
 
     pub fn inspect(path: &Path, include_records: bool) -> io::Result<Value> {
         Self::inspection_json(Ledger::inspect_path(path, include_records)?)
+    }
+
+    pub fn recover_legacy_identity(path: &Path, limits: AuditLimits) -> io::Result<Value> {
+        Self::inspection_json(Ledger::recover_legacy_identity(path, limits)?)
     }
 
     /// Keep only a fixed number of verified events for local inspection.

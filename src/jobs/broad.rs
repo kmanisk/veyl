@@ -13,7 +13,9 @@ use mcp_gateway::security::linux_fs::open_absolute_dir;
 use serde::{Deserialize, Serialize};
 
 use crate::http::admission::Configuration;
-use crate::protected_paths::{Kind, OPTIONAL_DEFAULTS, READONLY_DEFAULTS, validate_path};
+use crate::protected_paths::{
+    CONTROL_PLANE_DIRS, Kind, OPTIONAL_DEFAULTS, READONLY_DEFAULTS, validate_path,
+};
 use crate::state_cli::Layout;
 
 use super::sandbox::{Sandbox, check_inherited_fds, unsupported, validate_executable};
@@ -49,6 +51,9 @@ impl Broad {
             readonly: BTreeSet::new(),
         };
         plan.masked.insert(plan.state.clone());
+        for dir in CONTROL_PLANE_DIRS {
+            plan.masked.insert(plan.home.join(dir));
+        }
         if let Some(skills) = &settings.skills {
             plan.masked.insert(skills.path().to_owned());
         }
@@ -259,6 +264,7 @@ impl Broad {
         if visible(&self.home) && self.home.is_dir() {
             sandbox.command.args(["--setenv", "HOME"]).arg(&self.home);
         }
+        let mut created_dirs = BTreeSet::new();
         for path in &self.masked {
             if !visible(path) || self.hidden_by_parent(path) {
                 continue;
@@ -266,6 +272,23 @@ impl Broad {
             // A missing target needs no mount. The private HOME projection
             // also prevents accidental host creation of missing default paths.
             if metadata(path)?.is_some() || path.starts_with(&self.home) {
+                if path.starts_with(&self.home) {
+                    let mut chain = Vec::new();
+                    let mut current = path.parent();
+                    while let Some(dir) = current {
+                        if dir == self.home || !dir.starts_with(&self.home) {
+                            break;
+                        }
+                        if metadata(dir)?.is_none() && created_dirs.insert(dir.to_owned()) {
+                            chain.push(dir.to_owned());
+                        }
+                        current = dir.parent();
+                    }
+                    chain.reverse();
+                    for dir in chain {
+                        sandbox.command.arg("--dir").arg(&dir);
+                    }
+                }
                 sandbox.command.arg("--tmpfs").arg(path);
                 guard.masked.insert(path.clone());
             }
@@ -276,7 +299,11 @@ impl Broad {
                 guard.readonly.insert(path.clone());
             }
         }
-        if !guard.masked.contains(&self.state) {
+        if !guard
+            .masked
+            .iter()
+            .any(|masked| self.state == *masked || self.state.starts_with(masked))
+        {
             return Err(unsupported());
         }
         // The wrapper is the running runner inode, never a pathname in the
@@ -353,14 +380,6 @@ impl Broad {
                     Err(error) => return Err(error),
                     Ok(_) => bind(sandbox, &child, false)?,
                 }
-            }
-        }
-        for target in &self.masked {
-            if target.starts_with(path)
-                && !self.hidden_by_parent(target)
-                && let Some(parent) = target.parent()
-            {
-                sandbox.command.arg("--dir").arg(parent);
             }
         }
         Ok(())

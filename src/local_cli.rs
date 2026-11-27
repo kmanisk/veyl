@@ -70,6 +70,9 @@ pub(crate) fn normalize(mut args: Vec<OsString>) -> Result<Vec<OsString>, String
         return Ok(args);
     }
     if args.iter().any(|arg| arg == "--config" || arg == "--help")
+        || (args[0] == "mode"
+            && (args.iter().any(|arg| arg == "--managed")
+                || crate::oauth_cli::managed::managed_exists().unwrap_or(false)))
         || (args.len() < 2 && args[0] != "connect")
         || (args[0] == "service" && matches!(args[1].to_str(), Some("status" | "diagnostics")))
     {
@@ -81,6 +84,19 @@ pub(crate) fn normalize(mut args: Vec<OsString>) -> Result<Vec<OsString>, String
         default_config(&home)?.into_os_string(),
     ]);
     Ok(args)
+}
+
+pub(crate) fn optional_default_config() -> Result<Option<PathBuf>, String> {
+    let home = home()?;
+    let current = home.join(".local/state/veyl/clients.json");
+    let legacy = home.join(".config/mcp-gateway/clients.json");
+    match (current.try_exists(), legacy.try_exists()) {
+        (Ok(true), Ok(false)) => Ok(Some(current)),
+        (Ok(false), Ok(true)) => Ok(Some(legacy)),
+        (Ok(true), Ok(true)) => Err("Two Veyl policies found; specify --config PATH".into()),
+        (Ok(false), Ok(false)) => Ok(None),
+        _ => Err("Cannot inspect default configuration paths".into()),
+    }
 }
 
 /// Explicit local grant for the new read-only diagnostics capability.

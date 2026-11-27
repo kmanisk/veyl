@@ -123,7 +123,7 @@ pub(crate) fn verify_approvals_except(
         .as_deref()
         .ok_or("Managed YOLO requires a private audit ledger")?;
     AuditSink::verify_mode_approvals(audit, &expected)
-        .map_err(|_| "Cannot verify durable YOLO authorization".into())
+        .map_err(|error| format!("Cannot verify durable YOLO authorization: {error}"))
 }
 
 pub(crate) fn revision() -> io::Result<String> {
@@ -623,6 +623,10 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
 }
 
 struct StrictJson(Value);
+
+pub(crate) fn parse_unique_json(bytes:&[u8])->Result<Value,String>{
+    serde_json::from_slice::<StrictJson>(bytes).map(|v|v.0).map_err(|_|"Invalid or ambiguous JSON".into())
+}
 
 impl<'de> Deserialize<'de> for StrictJson {
     fn deserialize<D: serde::Deserializer<'de>>(input: D) -> Result<Self, D::Error> {

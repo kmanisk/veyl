@@ -2,6 +2,7 @@
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use mcp_gateway::security::durable_id::DurableObjectId;
 use mcp_gateway::security::linux_fs::{open_absolute_dir, open_beneath_dir};
 use rustix::fs;
 use serde_json::Value;
@@ -13,6 +14,7 @@ use mcp_gateway::security::policy::{Action, ExecutionMode};
 pub(super) struct Grant {
     pub root: PathBuf,
     pub identity: [u64; 2],
+    pub durable: Option<DurableObjectId>,
     pub provider_only: bool,
 }
 
@@ -46,7 +48,7 @@ impl Grant {
             let object = raw
                 .as_object()
                 .ok_or("Expected an upstream workspace grant")?;
-            if object.len() != 3 {
+            if !matches!(object.len(), 3 | 4) {
                 return Err("Invalid provider-only workspace grant".into());
             }
             let path = object
@@ -62,7 +64,19 @@ impl Grant {
                 .and_then(Value::as_u64)
                 .filter(|i| *i != 0)
                 .ok_or("Missing workspace inode")?;
-            (path, Some([device, inode]))
+            let durable = match object.get("durable") {
+                Some(raw_durable) => {
+                    let parsed: DurableObjectId = serde_json::from_value(raw_durable.clone())
+                        .map_err(|_| "Invalid workspace durable identity")?;
+                    if !parsed.is_valid() || parsed.inode != inode {
+                        return Err("Invalid workspace durable identity".into());
+                    }
+                    Some(parsed)
+                }
+                None if object.len() == 3 => None,
+                None => return Err("Invalid provider-only workspace grant".into()),
+            };
+            (path, Some(([device, inode], durable)))
         };
         let root = PathBuf::from(path);
         protected_paths::validate_path(&root)?;
@@ -71,10 +85,11 @@ impl Grant {
         }
         // Explicit folder grants persist the approved inode. A moved or missing
         // folder must deny its calls, not make the entire policy unmanageable.
-        if let Some(identity) = pinned {
+        if let Some((identity, durable)) = pinned {
             return Ok(Self {
                 root,
                 identity,
+                durable,
                 provider_only: true,
             });
         }
@@ -86,9 +101,12 @@ impl Grant {
             return Err("Expected an operator-owned upstream workspace directory".into());
         }
         let identity = [st.st_dev, st.st_ino];
+        let durable = DurableObjectId::probe(&fd, &st)
+            .map_err(|_| "Upstream workspace identity unavailable")?;
         Ok(Self {
             root,
             identity,
+            durable: Some(durable),
             provider_only: false,
         })
     }
@@ -206,9 +224,25 @@ impl Grant {
                 .to_string_lossy()
                 .into_owned(),
         );
+        let live_identity = if self.provider_only {
+            let fd = open_absolute_dir(&self.root)
+                .map_err(|_| "Upstream workspace root unavailable")?;
+            let st = fs::fstat(&fd).map_err(|_| "Upstream workspace identity unavailable")?;
+            let matches = match &self.durable {
+                Some(expected) => DurableObjectId::probe(&fd, &st)
+                    .is_ok_and(|actual| expected.matches_live(&actual)),
+                None => [st.st_dev, st.st_ino] == self.identity,
+            };
+            if !matches {
+                return Err("Upstream workspace identity changed");
+            }
+            [st.st_dev, st.st_ino]
+        } else {
+            self.identity
+        };
         Ok(Some(Input {
             root: self.root.clone(),
-            identity: self.identity,
+            identity: live_identity,
             relative,
             tree,
         }))

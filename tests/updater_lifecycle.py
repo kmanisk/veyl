@@ -23,7 +23,7 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def make_bundle(directory: pathlib.Path, hardlink_from: pathlib.Path | None = None, broken_gateway: bool = False):
+def make_bundle(directory: pathlib.Path, hardlink_from: pathlib.Path | None = None, broken_gateway: bool = False, oversized: bool = False):
     directory.mkdir(mode=0o700, exist_ok=True)
     sums = []
     for name in names:
@@ -46,6 +46,12 @@ def make_bundle(directory: pathlib.Path, hardlink_from: pathlib.Path | None = No
         else:
             shutil.copy2(src_bins / name, dest)
         dest.chmod(0o755)
+        if oversized and name == "veyl":
+            # ELF loaders ignore trailing padding. Preserve the >32 MiB
+            # regression even when debug symbols are deliberately disabled.
+            with dest.open("r+b") as executable:
+                executable.truncate(max(dest.stat().st_size, 32 * 1024 * 1024 + 1))
+            assert subprocess.check_output([dest, "--version"]) == subprocess.check_output([src_bins / name, "--version"])
         digest = sha256_bytes(dest.read_bytes())
         sums.append(f"{digest}  {name}")
     (directory / "SHA256SUMS").write_text("\n".join(sums) + "\n")
@@ -57,8 +63,8 @@ portable_home = base / "portable-home"
 portable_home.mkdir(mode=0o700)
 (portable_home / ".local/bin").mkdir(parents=True, mode=0o700)
 bundle_v1 = base / "bundle-v1"
-make_bundle(bundle_v1)
-# Hardlink bundle_v2 from bundle_v1 to verify st_nlink > 1 bundle input + >32 MiB debug binary limit
+make_bundle(bundle_v1, oversized=True)
+# Hardlink bundle_v2 from bundle_v1 to verify st_nlink > 1 and the >32 MiB input boundary.
 bundle_v2 = base / "bundle-v2"
 make_bundle(bundle_v2, hardlink_from=bundle_v1)
 assert (bundle_v2 / "veyl").stat().st_nlink >= 2

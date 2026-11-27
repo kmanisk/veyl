@@ -39,6 +39,8 @@ pub(super) struct Launch {
     pub nonce: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<Binding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<super::session::OAuthBinding>,
     pub scoped: bool,
     pub yolo: bool,
     pub isolated: bool,
@@ -78,6 +80,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
             || receipt.runner.is_some()
             || receipt.launch_nonce != launch.nonce
             || receipt.session != launch.session
+            || receipt.oauth != launch.oauth
             || launch.session.is_some() != launch.profile.interactive
             || launch.session.as_ref().is_some_and(|session| {
                 session.pty != launch.profile.pty || session.root != launch.root
@@ -115,6 +118,57 @@ pub(crate) fn run_worker() -> io::Result<()> {
         }
 
         let cwd = launch.root.handle()?;
+        if receipt.oauth_bounded_workspace && (!receipt.oauth_family
+            || mcp_gateway::security::linux_fs::bounded_oauth_workspace(launch.root.path()).is_err())
+        {
+            return finish(&job, &mut audit, receipt, State::Failed);
+        }
+        if receipt.oauth_family {
+            let oauth_yolo = launch.yolo
+                && launch.broad.is_some()
+                && !receipt.full
+                && !receipt.oauth_bounded_workspace
+                && launch.oauth.is_some();
+            let oauth_standard = !launch.yolo && launch.broad.is_none();
+            let interactive_valid = launch.profile.interactive
+                && launch
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.oauth.as_ref())
+                    .is_some_and(|oauth| {
+                        super::session::verify_oauth_grant_mode(oauth, oauth_yolo).is_ok()
+                    });
+            if !super::oauth_owner(&receipt.client_id)
+                || !launch.isolated
+                || !launch.scoped
+                || receipt.full
+                || !(oauth_yolo || oauth_standard)
+                || !launch.sandbox_roots.is_empty()
+                || launch.profile.extended_runtime
+                || launch.profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX
+                || launch.profile.cpu_percent > 100
+                || launch.profile.memory_bytes > super::config::default_memory()
+                || launch.profile.max_output_bytes > super::config::MAX_OUTPUT
+                || (!interactive_valid
+                    && (launch.profile.interactive
+                        || launch.profile.pty
+                        || launch.session.is_some()))
+                || (!oauth_yolo && super::sandbox::verify_oauth_workspace(&cwd).is_err())
+                || (oauth_yolo
+                    && launch.oauth.as_ref().is_none_or(|oauth| {
+                        super::session::verify_oauth_grant_mode(oauth, true).is_err()
+                    }))
+            {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            }
+        } else if launch
+            .session
+            .as_ref()
+            .is_some_and(|session| session.oauth.is_some())
+            || launch.oauth.is_some()
+        {
+            return finish(&job, &mut audit, receipt, State::Failed);
+        }
         // This is a one-job process. Changing its own cwd by handle lets the
         // workload inherit the checked directory without resolving its path.
         rustix::process::fchdir(&cwd)?;
@@ -193,10 +247,53 @@ pub(crate) fn run_worker() -> io::Result<()> {
                 .stderr(Stdio::piped());
             None
         };
+        // Revalidate the original signed admission immediately before spawning.
+        // Hold the native policy lock through spawn so cooperating local policy
+        // changes cannot race this boundary. The durable OAuth shared guard
+        // also stays held through spawn, ordering admission before revocation.
+        let launch_guards = if receipt.oauth_family && launch.profile.interactive {
+            let Some(binding) = launch.session.as_ref() else {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            };
+            let Some(authority) = receipt.oauth_launch.as_ref() else {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            };
+            let Ok(guard) = authority.policy_guard(&binding.config) else {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            };
+            let Some(oauth) = binding.oauth.as_ref() else {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            };
+            let Ok(grant_guard) = super::session::verify_oauth_grant_mode(oauth, receipt.yolo) else {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            };
+            // The durable read can take time; check the original deadline again.
+            if authority.expired() {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            }
+            Some((Some(guard), grant_guard))
+        } else if receipt.oauth_family && receipt.yolo {
+            if receipt.oauth_launch.is_some() {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            }
+            let Some(oauth) = launch.oauth.as_ref() else {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            };
+            let Ok(grant_guard) = super::session::verify_oauth_grant_mode(oauth, true) else {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            };
+            Some((None, grant_guard))
+        } else {
+            if receipt.oauth_launch.is_some() {
+                return finish(&job, &mut audit, receipt, State::Failed);
+            }
+            None
+        };
         let mut child = match command.process_group(0).spawn() {
             Ok(child) => child,
             Err(_) => return finish(&job, &mut audit, receipt, State::Failed),
         };
+        drop(launch_guards);
         let pid = child.id();
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
@@ -226,12 +323,7 @@ pub(crate) fn run_worker() -> io::Result<()> {
         (&mut stdout_log, &mut stdout),
         (&mut stderr_log, &mut stderr),
         start + Duration::from_secs(launch.profile.timeout_seconds),
-        channel.zip(
-            launch
-                .session
-                .as_ref()
-                .map(|session| session.config.as_path()),
-        ),
+        channel.zip(launch.session.as_ref()),
     );
     let supervision_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     drop(process);
@@ -262,7 +354,7 @@ fn supervise(
     (stdout_log, stdout): (&mut Log, &mut Option<std::process::ChildStdout>),
     (stderr_log, stderr): (&mut Log, &mut Option<std::process::ChildStderr>),
     deadline: Instant,
-    mut input: Option<(Channel, &std::path::Path)>,
+    mut input: Option<(Channel, &super::session::Binding)>,
 ) -> io::Result<(State, std::process::ExitStatus)> {
     if let Some(pipe) = stdout.as_ref() {
         nonblocking(pipe)?;
@@ -314,9 +406,9 @@ fn supervise(
             }
         }
         if stop.is_none()
-            && let Some((channel, config)) = &mut input
+            && let Some((channel, session)) = &mut input
         {
-            channel.step(config)?;
+            channel.step(&session.config, session.oauth.as_ref())?;
         }
         if let Some((state, kill_at)) = stop
             && now >= kill_at

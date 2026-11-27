@@ -26,7 +26,7 @@ use mcp_gateway::security::audit::{AuditAction, AuditLimits, AuditPhase, AuditSi
 
 pub(crate) use broad::Broad;
 pub(crate) use config::{
-    EXTENDED_RUNTIME_MAX, JobRoot, Profiles, SHORT_RUNTIME_MAX, parse_settings,
+    EXTENDED_RUNTIME_MAX, JobRoot, Profiles, SHORT_RUNTIME_MAX, parse_settings, oauth_profiles,
 };
 pub(crate) use resources::verify as verify_scope;
 pub(crate) use runner::run_worker;
@@ -34,7 +34,9 @@ pub(crate) use sandbox::{
     GitToolRequest, git_tool_worker, git_worker, probe as probe_sandbox,
     probe_worker as probe_sandbox_worker, upstream_worker,
 };
-pub(crate) use session::Authorization as SessionAuthorization;
+pub(crate) use session::{
+    Authorization as SessionAuthorization, OAuthAuthorization as OAuthSessionAuthorization,
+};
 pub(crate) use store::{has_active_jobs, has_unconfined_jobs};
 
 use receipt::Receipt;
@@ -43,10 +45,19 @@ use store::Store;
 
 const SHORT_TIMEOUT: u64 = 2;
 
+// Reserved only inside the separate onboarded OAuth job store. The suffix
+// is a domain-separated digest, not an access token or code verifier.
+pub(crate) fn oauth_owner(value:&str)->bool {
+    value.strip_prefix("oauth-job-v1-").is_some_and(|s|s.len()==64 && s.bytes().all(|b|matches!(b,b'a'..=b'f'|b'0'..=b'9')))
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct JobPolicy<'a> {
+    pub oauth_family: bool,
+    pub oauth_bounded_workspace: bool,
     pub yolo: bool,
     pub session: Option<SessionAuthorization<'a>>,
+    pub oauth: Option<OAuthSessionAuthorization<'a>>,
     pub full: bool,
     pub job_runtime_limit_seconds: u64,
     pub job_cpu_percent_limit: u64,
@@ -106,6 +117,9 @@ impl Jobs {
         self.audit
             .lock()
             .is_ok_and(|sink| sink.check_binding().is_ok())
+    }
+    pub(crate) fn oauth_launch_available(&self)->bool {
+        self.scopes.is_some() && self.available()
     }
 }
 fn now() -> u64 {

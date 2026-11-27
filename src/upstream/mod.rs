@@ -173,6 +173,40 @@ enum Transport {
 }
 
 impl Catalog {
+    /// OAuth preview uses explicit per-tool grants, no implicit workspace,
+    /// runtime bundle, credential, private CA or arbitrary network route.
+    /// Providers are operator-trusted, not a tenant-isolation mechanism.
+    pub(crate) fn oauth_summary(&self,grants:&Grants)->Result<Value,String>{
+        use std::os::unix::fs::MetadataExt;
+        let tools=grants.tools.as_ref().ok_or("OAuth upstreams require exact per-tool grants")?;
+        if self.0.is_empty() || self.0.len()>4 || !grants.workspaces.is_empty()
+            || grants.servers.len()!=self.0.len() || tools.len()!=self.0.len() {
+            return Err("OAuth requires 1 to 4 explicitly granted providers without workspace mounts".into());
+        }
+        let mut result=serde_json::Map::new();
+        for (id,server) in &self.0 {
+            let granted=tools.get(id).filter(|t|!t.is_empty() && t.len()<=16 && grants.servers.contains(id))
+                .ok_or("Missing exact upstream tool grant")?;
+            if server.disabled {return Err("OAuth upstream provider is disabled".into());}
+            let definition=match &server.transport {
+                Transport::Stdio{command,args,bundle:false}=>{
+                    let canonical=Path::new(command).canonicalize().map_err(|_|"Upstream executable unavailable")?;
+                    if !canonical.starts_with("/usr/bin")
+                        || !std::fs::metadata(&canonical).is_ok_and(|m|m.is_file() && m.uid()==0 && m.mode()&0o6022==0)
+                        || args.first().is_some_and(|arg|Path::new(arg).is_absolute() && Path::new(arg).extension().is_some_and(|e|e=="py")) {
+                        return Err("OAuth stdio requires trusted system executable and no external Python script mount".into());
+                    }
+                    json!({"transport":"stdio","command":command,"args":args,"allowed_tools":granted})
+                }
+                Transport::Http{uri,route,use_token:false,private_ca:false}
+                    if uri.scheme_str()==Some("http") && uri.host()==Some("127.0.0.1") && route.ip().is_loopback()=>
+                    json!({"transport":"http","url":uri.to_string(),"allowed_tools":granted}),
+                _=>return Err("OAuth upstreams require offline stdio or credential-free loopback HTTP".into()),
+            };
+            result.insert(id.clone(),definition);
+        }
+        Ok(Value::Object(result))
+    }
     pub(crate) fn parse(document: &Value) -> Result<Self, String> {
         let Some(value) = document.get("mcp_servers") else {
             return Ok(Self::default());
@@ -472,6 +506,20 @@ impl Catalog {
             },
         )
     }
+}
+
+/// Strict, locally supplied onboarding manifest. Reuse the native catalog
+/// and grant parser before writing a new isolated policy.
+pub(crate) fn oauth_manifest(bytes:&[u8])->Result<Value,String>{
+    let doc=crate::http::operator::parse_unique_json(bytes)?;
+    if !doc.as_object().is_some_and(|o|o.len()==2 && o.contains_key("mcp_servers") && o.contains_key("allowed_server_tools")){
+        return Err("Expected exactly mcp_servers and allowed_server_tools".into());
+    }
+    let catalog=Catalog::parse(&doc)?;
+    let servers=catalog.0.keys().collect::<Vec<_>>();
+    let grants=Grants::parse(&json!({"allowed_servers":servers,"allowed_server_tools":doc["allowed_server_tools"]}),&catalog)?;
+    catalog.oauth_summary(&grants)?;
+    Ok(doc)
 }
 
 impl Server {

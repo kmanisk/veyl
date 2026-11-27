@@ -225,7 +225,11 @@ impl Channel {
         }
     }
 
-    pub(in crate::jobs) fn step(&mut self, config: &Path) -> io::Result<()> {
+    pub(in crate::jobs) fn step(
+        &mut self,
+        config: &Path,
+        oauth: Option<&super::OAuthBinding>,
+    ) -> io::Result<()> {
         if let Some(Input::Pty(terminal)) = &mut self.stdin
             && terminal.flush().is_err()
         {
@@ -258,6 +262,9 @@ impl Channel {
             .try_into()
             .expect("revision field size");
         let outcome = if let Ok(_policy) = PolicyFile::input_snapshot(config, revision)
+            && millis() < deadline
+            && now() < expires_at
+            && let Ok(_grant_guard) = oauth.map(super::verify_oauth_grant).transpose()
             && millis() < deadline
             && now() < expires_at
         {

@@ -302,6 +302,7 @@ function selectTab(id, focus = false) {
     if (selected && focus) tab.focus();
   }
   if (id === "diagnostics") loadDiagnostics();
+  if (id === "oauth" && changed) loadOAuth().catch(error => byId("oauth-message").textContent = error.message);
 }
 for (const tab of tabs) {
   tab.addEventListener("click", event => {
@@ -338,6 +339,12 @@ async function request(path, body) {
 }
 
 function showPair() {
+  oauthGeneration++;
+  byId("oauth-handle").value = "";
+  byId("oauth-review").replaceChildren();
+  byId("oauth-registrations").replaceChildren();
+  byId("oauth-message").textContent = "";
+  byId("oauth-nav").hidden = true;
   diagnosticsRequest++;
   diagnosticsBusy = false;
   byId("diagnostics-summary").replaceChildren();
@@ -671,6 +678,7 @@ async function loadIntegrations() {
 }
 
 function renderStatus(state) {
+  byId("oauth-nav").hidden = remote || state.oauth_preview !== true;
   summary("metrics", [
     ["MCP listener", state.listener], ["MCP sessions", state.sessions], ["TCP connections", state.connections], ["Active MCP calls", state.active_calls],
     ["Memory", state.rss_kib == null ? "Unavailable" : (state.rss_kib / 1024).toFixed(1) + " MiB"],
@@ -1346,6 +1354,169 @@ byId("logout").addEventListener("click", async () => {
     showPair();
     notice.textContent = "Signed out.";
   } catch (error) { notice.textContent = error.message; }
+});
+let oauthGeneration = 0;
+async function loadOAuth() {
+  if (remote || byId("dashboard").hidden || byId("oauth-nav").hidden) return;
+  const generation = oauthGeneration;
+  const result = await request("oauth", {action:"list"});
+  if (generation !== oauthGeneration || byId("dashboard").hidden) return;
+  const list = byId("oauth-registrations");
+  list.replaceChildren();
+  if (!result.registrations.length) add(list,"p","No registered OAuth clients.");
+  for (const registration of result.registrations) {
+    const card = add(list,"div","");
+    card.className = "section-card";
+    const regMode = registration.mode === "yolo" ? "YOLO" : "Standard";
+    add(card,"strong",registration.client_name + " (unverified) — Mode: " + regMode);
+    add(card,"p","Client ID: " + registration.client_id);
+    if (typeof registration.active_families === "number") {
+      add(card,"p","Active token families: " + registration.active_families + (registration.active_yolo_families ? " (" + registration.active_yolo_families + " YOLO)" : ""));
+    }
+    for (const uri of registration.redirect_uris) add(card,"p","Callback: " + uri);
+    const actions = add(card,"div",""); actions.className = "row";
+    if (registration.mode !== "yolo" && result.supports_yolo) {
+      const toYolo = add(actions,"button","Switch to YOLO");
+      toYolo.type = "button";
+      toYolo.disabled = !result.eligible;
+      toYolo.onclick = async () => {
+        if (!window.confirm("Switch OAuth client " + registration.client_id + " to YOLO?\n\nExisting Standard tokens will be revoked immediately and the remote client must re-authorize with YOLO consent. Protected paths remain masked.")) return;
+        toYolo.disabled = true;
+        try {
+          const switched = await request("oauth",{action:"mode",client_id:registration.client_id,mode:"yolo",confirm:true});
+          oauthGeneration++;
+          byId("oauth-review").replaceChildren();
+          byId("oauth-message").textContent = switched.reauthorization_required
+            ? "Switched to YOLO. Existing grants revoked; fresh OAuth authorization is required."
+            : "Switched to YOLO.";
+          await loadOAuth();
+        } catch(error) { byId("oauth-message").textContent=error.message; }
+        finally { toYolo.disabled=false; }
+      };
+    }
+    if (registration.mode === "yolo") {
+      const toStandard = add(actions,"button","Downgrade to Standard");
+      toStandard.type = "button";
+      toStandard.onclick = async () => {
+        if (!window.confirm("Downgrade OAuth client " + registration.client_id + " to Standard?\n\nElevated YOLO capabilities will be denied immediately.")) return;
+        toStandard.disabled = true;
+        try {
+          await request("oauth",{action:"mode",client_id:registration.client_id,mode:"standard",confirm:true});
+          oauthGeneration++;
+          byId("oauth-review").replaceChildren();
+          byId("oauth-message").textContent="Downgraded to Standard. Elevated capabilities denied immediately.";
+          await loadOAuth();
+        } catch(error) { byId("oauth-message").textContent=error.message; }
+        finally { toStandard.disabled=false; }
+      };
+    }
+    const revoke = add(actions,"button","Revoke registration and all tokens");
+    revoke.type = "button";
+    revoke.onclick = async () => {
+      if (!window.confirm("Revoke OAuth client " + registration.client_id + " and every token family?")) return;
+      revoke.disabled = true;
+      try {
+        await request("oauth",{action:"revoke",client_id:registration.client_id,confirm:true});
+        oauthGeneration++;
+        byId("oauth-review").replaceChildren();
+        byId("oauth-handle").value="";
+        byId("oauth-message").textContent="Registration revoked.";
+        await loadOAuth();
+      } catch(error) { byId("oauth-message").textContent=error.message; }
+      finally { revoke.disabled=false; }
+    };
+  }
+  if (!result.eligible) byId("oauth-message").textContent="Native policy unavailable or changed. Approval disabled; revocation remains available.";
+}
+byId("oauth-refresh").onclick = () => loadOAuth().catch(error => byId("oauth-message").textContent=error.message);
+byId("oauth-handle").addEventListener("input",() => {
+  oauthGeneration++;
+  byId("oauth-review").replaceChildren();
+});
+function renderOAuthReview(handle, info, generation) {
+  const review=byId("oauth-review");
+  review.replaceChildren();
+  if (generation!==oauthGeneration || byId("dashboard").hidden) return;
+  const card=add(review,"div","");
+  card.className="section-card";
+  add(card,"h3","Review authorization");
+  add(card,"p","Unverified client name: "+info.unverified_client_name);
+  const binding={client_id:info.client_id,redirect_uri:info.redirect_uri,resource:info.resource,local_client:info.local_client};
+  for (const [label,value] of Object.entries(binding)) add(card,"p",label+": "+value);
+  const scope=info.native_scope;
+  if (info.supports_yolo) {
+    const modeRow=add(card,"div",""); modeRow.className="row";
+    const modeLabel=add(modeRow,"label","Approval mode ");
+    const modeSelect=add(modeRow,"select","");
+    modeSelect.id="oauth-approve-mode";
+    modeLabel.htmlFor="oauth-approve-mode";
+    const stdOpt=add(modeSelect,"option","Standard (default, workspace-scoped)"); stdOpt.value="standard";
+    const yoloOpt=add(modeSelect,"option","YOLO (broad host-user access, protected paths masked)"); yoloOpt.value="yolo";
+    modeSelect.value=info.mode || "standard";
+    modeSelect.onchange=async () => {
+      const nextGeneration=++oauthGeneration;
+      try {
+        const nextInfo=await request("oauth",{action:"inspect",request:handle,mode:modeSelect.value});
+        renderOAuthReview(handle, nextInfo, nextGeneration);
+      } catch(error) {
+        if (nextGeneration===oauthGeneration) byId("oauth-message").textContent=error.message;
+      }
+    };
+  }
+  const modeDesc=scope.mode==="yolo"?"YOLO broad host-user access (protected paths masked, outbound network allowed)":(scope.workspace_interactive?"Standard interactive-session preview":scope.workspace_commands?"Standard dynamic-command preview":scope.workspace_jobs?"Standard named-job preview":scope.workspace_edit?"Standard workspace-edit preview":"Standard read-only preview");
+  add(card,"p","Scope: "+info.scope+" · "+modeDesc);
+  add(card,"p","Workspace root: "+scope.root);
+  add(card,"p","Granted tools: "+scope.tools.join(", "));
+  if(scope.mode==="yolo" && scope.protected_paths) {
+    add(card,"p","Protected paths (masked/read-only): "+JSON.stringify(scope.protected_paths));
+  }
+  if(scope.mode==="yolo" && scope.resource_ceilings) {
+    add(card,"p","Job resource ceilings: "+JSON.stringify(scope.resource_ceilings));
+  }
+  if(scope.funnel_advanced) add(card,"p","Public HTTPS advanced capabilities: local approval required. Trusted providers can have side effects outside workspace limits.");
+  if(scope.bounded_workspace) add(card,"p","Volatile bounded workspace: "+JSON.stringify(scope.bounded_workspace));
+  if(scope.workspace_jobs) add(card,"p","Named jobs run offline with write access to the workspace and bounded resources: "+JSON.stringify(scope.job_profiles));
+  if(scope.workspace_interactive) add(card,"p","Interactive pipe/PTY sessions send bounded stdin/resize operations to approved workspace jobs.");
+  if(scope.workspace_commands) add(card,"p","Arbitrary command execution in the offline writable workspace sandbox: "+JSON.stringify(scope.dynamic_command_scope));
+  if(scope.workspace_upstreams) add(card,"p","Trusted upstream providers may have side effects and shared state across grants. Explicit provider/tool definitions: "+JSON.stringify(scope.upstream_providers));
+  const controls=add(card,"div",""); controls.className="row";
+  for (const action of ["approve","deny"]) {
+    const control=add(controls,"button",action==="approve"?"Approve exact binding":"Deny request");
+    control.type="button";
+    control.disabled=action==="approve"&&!info.eligible;
+    control.onclick=async () => {
+      const selectedMode=(info.mode==="yolo"?"YOLO":"Standard");
+      if(generation!==oauthGeneration||!window.confirm(action.toUpperCase()+" ("+selectedMode+") client "+binding.client_id+"\nCallback: "+binding.redirect_uri+"\nResource: "+binding.resource+"\nNative client: "+binding.local_client+"\nWorkspace: "+scope.root+"\nTools: "+scope.tools.join(", ")+(scope.mode==="yolo"?"\nWARNING: YOLO grants broad host-user access and outbound network within masked/readonly protections.":"")+(scope.funnel_advanced?"\nPublic HTTPS advanced capabilities; trusted providers may have side effects outside workspace limits.":"")+(scope.workspace_jobs?"\nJobs may write within the workspace. Profiles: "+JSON.stringify(scope.job_profiles):"")+(scope.workspace_interactive?"\nInteractive stdin/PTY sessions allowed for approved profiles.":"")+(scope.workspace_upstreams?"\nUpstreams may have side effects and shared state: "+JSON.stringify(scope.upstream_providers):""))) return;
+      for(const b of controls.querySelectorAll("button")) b.disabled=true;
+      try {
+        await request("oauth",{action,request:handle,confirm:true,...binding,...(action==="approve"?{mode:info.mode||"standard",scope_fingerprint:info.scope_fingerprint}:{})});
+        if (generation!==oauthGeneration) return;
+        oauthGeneration++;
+        review.replaceChildren();
+        byId("oauth-handle").value="";
+        byId("oauth-message").textContent=action==="approve"?"Approved ("+selectedMode+"). Return to the authorization page and check approval.":"Denied.";
+        await loadOAuth();
+      } catch(error) {
+        if (generation===oauthGeneration) {
+          review.replaceChildren();
+          byId("oauth-message").textContent=error.message+" Inspect again before retrying.";
+        }
+      }
+    };
+  }
+}
+byId("oauth-inspect").addEventListener("submit",async event => {
+  event.preventDefault();
+  const handle=byId("oauth-handle").value.trim();
+  const generation=++oauthGeneration;
+  const review=byId("oauth-review");
+  review.replaceChildren();
+  try {
+    const info=await request("oauth",{action:"inspect",request:handle});
+    renderOAuthReview(handle, info, generation);
+  } catch(error) {
+    if(generation===oauthGeneration) byId("oauth-message").textContent=error.message;
+  }
 });
 const automaticPair = location.hash.match(/^#pair=([a-f0-9]{48})$/);
 if (automaticPair) {

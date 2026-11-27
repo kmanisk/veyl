@@ -1,5 +1,7 @@
 //! Compare-and-swap updates to the local Tailscale Serve configuration.
 
+pub(crate) mod oauth_provider;
+
 use std::{
     ffi::OsString,
     net::SocketAddrV4,

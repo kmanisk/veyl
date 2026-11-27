@@ -2,6 +2,10 @@
 use crate::core::credential::token_digest;
 use hyper::header::{HeaderMap, HeaderValue};
 
+pub mod oauth;
+#[cfg(target_os = "linux")]
+pub mod oauth_http;
+
 pub fn one<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     one_value(headers, name)?.to_str().ok()
 }

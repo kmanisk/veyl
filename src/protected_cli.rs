@@ -15,6 +15,7 @@ use crate::protected_paths::{
 
 const USAGE: &str =
     "usage: veyl protected-paths list [--mandatory|--optional|--readonly] --config PATH
+       veyl protected-paths migrate --config PATH
        veyl protected-paths <add|remove|validate> [--optional|--readonly] PATH --config PATH";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
@@ -23,7 +24,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         return Ok(());
     }
     let action = args.first().and_then(|arg| arg.to_str()).ok_or(USAGE)?;
-    if !matches!(action, "list" | "add" | "remove" | "validate") {
+    if !matches!(action, "list" | "add" | "remove" | "validate" | "migrate") {
         return Err(USAGE.into());
     }
     if args.len() == 2 && args[1] == "--help" {
@@ -50,7 +51,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         }
     }
     let config = config.ok_or(USAGE)?;
-    let mutates = matches!(action, "add" | "remove");
+    let mutates = matches!(action, "add" | "remove" | "migrate");
     let policy = PolicyFile::lock(&config, mutates)?;
     let pending = policy.pending_client()?;
     let bytes = policy.bytes()?;
@@ -62,6 +63,12 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         }
         list(&config, &settings, filter);
         return Ok(());
+    }
+    if action == "migrate" {
+        if target.is_some() || filter.is_some() {
+            return Err(USAGE.into());
+        }
+        return migrate_rules(&config, &policy, &bytes, pending.as_deref(), settings);
     }
 
     let path = target.ok_or(USAGE)?;
@@ -194,4 +201,74 @@ fn list(config: &Path, settings: &crate::http::admission::Configuration, filter:
         }
     }
     println!("enforcement=broad-yolo-unavailable");
+}
+
+fn migrate_rules(
+    config: &Path,
+    policy: &PolicyFile,
+    bytes: &[u8],
+    pending: Option<&str>,
+    settings: crate::http::admission::Configuration,
+) -> Result<(), String> {
+    let transaction = "protected-paths:migrate";
+    if pending.is_some_and(|marker| marker != transaction) {
+        return Err(
+            "Interrupted policy update requires repeating the original local command".into(),
+        );
+    }
+    let mut rules = settings.protected_paths;
+    let mut migrated = 0usize;
+    for kind in [Kind::Optional, Kind::ReadOnly] {
+        for rule in rules.selected_mut(kind) {
+            if rule.migrate_legacy(kind)? {
+                migrated += 1;
+            }
+        }
+    }
+    if migrated == 0 && pending.is_none() {
+        println!("migrated 0 rules (already versioned)");
+        return Ok(());
+    }
+    let mut document = parse_document(bytes)?;
+    if !rules.is_empty() {
+        document["protected_paths"] =
+            serde_json::to_value(rules).map_err(|_| "Cannot encode protected paths")?;
+    }
+    let mut candidate = serde_json::to_vec_pretty(&document).map_err(|_| "Cannot encode policy")?;
+    candidate.push(b'\n');
+    if candidate.len() > 65_536 {
+        return Err("Credential configuration exceeds size limit".into());
+    }
+    parse_clients(config, &candidate)?;
+    let ledger = settings
+        .audit_log
+        .as_ref()
+        .ok_or("Protected-path updates require an audit ledger")?;
+    let audit = AuditSink::open_with_limits(ledger, settings.audit_limits)
+        .map_err(|_| "Protected-path updates require a healthy audit ledger")?;
+    let digest = format!("{:x}", Sha256::digest(transaction.as_bytes()));
+    let record = |phase| {
+        let at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        audit.record_protected_paths("migrate", "all", &digest, phase, at)
+    };
+    record(AuditPhase::Intent).map_err(|_| "Cannot persist protected-path intent")?;
+    if pending.is_none() {
+        policy
+            .begin(transaction)
+            .map_err(|_| "Cannot persist policy transaction marker")?;
+    }
+    if policy.replace(&candidate).is_err() {
+        let _ = record(AuditPhase::Uncertain);
+        return Err("Protected-path migration requires local command recovery".into());
+    }
+    record(AuditPhase::Success)
+        .map_err(|_| "Protected-path migration requires local command recovery")?;
+    policy
+        .finish()
+        .map_err(|_| "Protected-path migration requires local command recovery")?;
+    println!("migrated {migrated} rules to durable identity");
+    Ok(())
 }

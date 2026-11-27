@@ -1,5 +1,27 @@
 # Connect MCP clients
 
+## Direct OAuth MCP — next-release candidate
+
+Use the same public HTTPS `/mcp` endpoint and OAuth discovery contract in
+any compatible client. Start quickly with `veyl login` (or low-level
+`veyl oauth setup/run` for isolated scoped previews). See
+[direct remote plan](development/DIRECT_REMOTE_PLAN.md) for onboarding,
+per-connection Standard/YOLO selection, exact scope, sandbox constraints,
+and acceptance. Choose Streamable HTTP, OAuth DCR, PKCE S256 and scope `mcp`.
+Every newly registered OAuth connection defaults to Standard; the local
+operator can select YOLO during dashboard approval or switch modes via
+`veyl mode yolo|standard <CLIENT_ID>` (or `veyl logout --client <ID>` /
+`veyl logout --all`). Escalation revokes prior Standard grants and requires
+fresh OAuth authorization; downgrade or revocation immediately denies
+elevated admissions and job launches. No separate ChatGPT plugin, cloud relay
+or Veyl account is required. Client-specific authentication and tool support
+vary; verify read, write, commands, revoke and reconnect against the real
+client before claiming compatibility. A mobile client can use a remote Linux
+host only when the mobile client supports this connection; native Windows and
+Android/Termux gateway support remains future work.
+
+## Existing bearer-authenticated connections
+
 Give each client an independent bearer and explicit tool grants. Connect
 to the local MCP URL `http://127.0.0.1:7331/mcp`, or the dedicated HTTPS
 MCP URL printed by `mcp-gateway serve plan` after private activation. The

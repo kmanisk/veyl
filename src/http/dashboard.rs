@@ -171,6 +171,22 @@ pub(crate) fn issue_pairing(policy: &PolicyFile) -> Result<String, String> {
     Ok(token)
 }
 
+pub(super) fn open_paired_local(config: &Path, addr: SocketAddr) -> Result<(),String> {
+    let token = {
+        let policy=PolicyFile::lock(config,true)?;
+        let settings=policy.snapshot()?;
+        verify_approvals(&settings)?;
+        issue_pairing(&policy)?
+    };
+    std::process::Command::new("xdg-open")
+        .arg(format!("http://{addr}/dashboard/login#pair={token}"))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn().map_err(|_|"Cannot open local dashboard")?;
+    Ok(())
+}
+
 fn digest(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
 }
@@ -353,6 +369,46 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
     }
     if method == Method::POST && !csrf_matches {
         return forbidden();
+    }
+    if path == "/api/dashboard/oauth" {
+        // Unlike the legacy dashboard compatibility origin, consent accepts
+        // only the exact local admin origin and one unambiguous session.
+        if remote || !csrf_matches || method != Method::POST
+            || request.uri().query().is_some()
+            || mcp_gateway::http_common::one(request.headers(), "origin") != Some(format!("http://{local}").as_str())
+            || request.headers().get_all(header::COOKIE).iter().count() != 1
+            || request.headers().get(header::COOKIE).and_then(|v|v.to_str().ok())
+                .is_none_or(|v|v.split(';').filter(|c|c.trim().split_once('=').is_some_and(|(name,_)|name==COOKIE)).count()!=1)
+            || ["forwarded","x-forwarded-host","x-forwarded-proto","x-forwarded-for"].iter().any(|h|request.headers().contains_key(*h))
+        {
+            return forbidden();
+        }
+        if mcp_gateway::http_common::one(request.headers(),"content-type") != Some("application/json") {
+            return bad();
+        }
+        if state.oauth.is_none() {
+            return missing();
+        }
+        let key=key.map(str::to_owned);
+        let Ok(bytes) = super::bounded_body(request.into_body(),8192).await else { return bad(); };
+        let snapshot=state.clone();
+        // Revalidate the paired session after collecting the body. Keep it
+        // live through normal transaction completion. A timed-out blocking
+        // worker may already have been admitted; do not retry blindly.
+        let sessions=admin.sessions.lock().await;
+        if !key.as_deref().and_then(|key|sessions.get(key)).is_some_and(|s|!s.remote && s.active_at(Instant::now()) && s.csrf==csrf) {
+            return forbidden();
+        }
+        let server=state.oauth.as_ref().expect("checked OAuth state").server.clone();
+        let response=match server.admission_work(true,move || {
+            let Some(oauth)=&snapshot.oauth else { return missing(); };
+            oauth.consent(&snapshot,&bytes)
+        }).await {
+            Ok(response)=>response,
+            Err(_)=>unavailable(),
+        };
+        drop(sessions);
+        return response;
     }
     if path == "/api/dashboard/trace" {
         // Raw command/response previews are explicitly enabled by one
@@ -684,8 +740,8 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
             return bad();
         };
         let cursor = parameter(&query, "cursor").unwrap_or_default().to_owned();
-        return job_request(state, client, None, move |jobs, client, _| {
-            jobs.list_admin(client, &cursor)
+        return job_request(state, client, None, move |jobs, client, _, oauth| {
+            if oauth {jobs.list_admin_oauth(&cursor)} else {jobs.list_admin(client, &cursor)}
         })
         .await;
     }
@@ -697,7 +753,7 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         let Some(client) = parameter(&query, "client") else {
             return missing();
         };
-        return job_request(state, client, Some(id), |jobs, client, id| {
+        return job_request(state, client, Some(id), |jobs, client, id, _| {
             let empty = serde_json::Map::new();
             jobs.owned_tool(Tool::JobLogs, id, client, &empty)
         })
@@ -714,7 +770,7 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         ) else {
             return bad();
         };
-        return job_request(state, client, Some(id), |jobs, client, id| {
+        return job_request(state, client, Some(id), |jobs, client, id, _| {
             let empty = serde_json::Map::new();
             jobs.owned_tool(Tool::CancelJob, id, client, &empty)
         })
@@ -812,6 +868,7 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
                 .ok()
         });
     let jobs_configured = state.jobs.is_some();
+    let oauth_preview = state.oauth.is_some();
     let listener = state.addr;
     let active_tcp = super::MAX_CONNECTIONS - state.mcp_connections.available_permits();
     let (active_calls, active_tools) = match admin.activity.active_summary() {
@@ -861,6 +918,7 @@ async fn status(state: &State, admin: &Admin, csrf: String) -> Reply {
             "csrf": csrf, "listener": listener.to_string(), "audit": audit,
             "jobs_configured": jobs_configured, "job_state_dir": settings.job_state_path(), "audit_log": settings.audit_log,
             "version": env!("CARGO_PKG_VERSION"), "skills_configured": settings.skills.is_some(),
+            "oauth_preview": oauth_preview,
             "configuration": {
                 "authorization": if settings.managed { "Managed" } else { "Legacy" },
                 "broad_state_layout": layout,
@@ -926,7 +984,7 @@ async fn job_request(
     state: &Arc<State>,
     client: &str,
     job_id: Option<&str>,
-    perform: impl FnOnce(&crate::jobs::Jobs, &str, &str) -> std::io::Result<Value> + Send + 'static,
+    perform: impl FnOnce(&crate::jobs::Jobs, &str, &str,bool) -> std::io::Result<Value> + Send + 'static,
 ) -> Reply {
     let snapshot = Arc::clone(state);
     let Some(admin) = &state.admin else {
@@ -939,7 +997,9 @@ async fn job_request(
             return Err(Status::NOT_FOUND);
         }
         let jobs = snapshot.jobs.as_ref().ok_or(Status::NOT_FOUND)?;
-        let value = perform(jobs, &client, &id).map_err(|error| match error.kind() {
+        let oauth=snapshot.oauth.as_ref().is_some_and(|o|o.workspace_jobs);
+        let owner=if oauth && !id.is_empty(){jobs.oauth_admin_owner(&id).map_err(|_|Status::NOT_FOUND)?} else {client};
+        let value = perform(jobs, &owner, &id,oauth).map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound
             | std::io::ErrorKind::InvalidInput
             | std::io::ErrorKind::PermissionDenied => Status::NOT_FOUND,

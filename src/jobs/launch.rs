@@ -44,7 +44,55 @@ impl Jobs {
             super::sandbox::validate_executable(&profile.executable)?;
         }
         let root = root.identity();
-        root.handle()?;
+        let handle=root.handle()?;
+        let oauth_binding = policy.oauth.map(super::session::OAuthBinding::from_auth);
+        if policy.oauth_bounded_workspace {
+            if !policy.oauth_family || policy.yolo || policy.broad.is_some() {
+                return Err(invalid());
+            }
+            mcp_gateway::security::linux_fs::bounded_oauth_workspace(root.path())?;
+        }
+        if policy.oauth_family {
+            if self.scopes.is_none() {
+                return Err(io::Error::from(ErrorKind::Unsupported));
+            }
+            let interactive_allowed = profile.interactive
+                && policy.session.as_ref().is_some_and(|session| session.oauth.is_some());
+            let oauth_yolo = policy.yolo
+                && policy.broad.is_some()
+                && !policy.full
+                && !policy.oauth_bounded_workspace
+                && policy.workspace_mounts.is_none()
+                && oauth_binding.is_some();
+            let oauth_standard = !policy.yolo
+                && !policy.full
+                && policy.broad.is_none()
+                && worktree_repo.is_none()
+                && policy.workspace_mounts.is_some_and(|r| r.is_empty());
+            if !super::oauth_owner(owner)
+                || !(oauth_yolo || oauth_standard)
+                || profile.extended_runtime
+                || (!interactive_allowed && (profile.interactive || profile.pty || policy.session.is_some()))
+            {
+                return Err(invalid());
+            }
+            if profile.timeout_seconds > super::config::SHORT_RUNTIME_MAX
+                || profile.cpu_percent > policy.job_cpu_percent_limit.min(100)
+                || profile.memory_bytes > policy.job_memory_bytes_limit.min(super::config::default_memory())
+                || profile.max_output_bytes > policy.job_output_limit_bytes.min(super::config::MAX_OUTPUT)
+            {
+                return Err(invalid());
+            }
+            use std::os::unix::fs::MetadataExt;
+            if !std::fs::metadata(&profile.executable)
+                .is_ok_and(|m| m.is_file() && m.uid() == 0 && m.mode() & 0o6022 == 0)
+            {
+                return Err(invalid());
+            }
+            if !oauth_yolo {
+                super::sandbox::verify_oauth_workspace(&handle)?;
+            }
+        }
         let session = if profile.interactive {
             if self.scopes.is_none()
                 || policy.full
@@ -92,11 +140,14 @@ impl Jobs {
             if let Some(receipt) = self.read_if_published(&self.store.job(&id)?)? {
                 if request_key.is_some() && receipt.request_key == request_key {
                     if receipt.client_id != owner
+                        || receipt.oauth_family != policy.oauth_family
+                        || receipt.oauth_bounded_workspace != policy.oauth_bounded_workspace
                         || receipt.ephemeral_worktree != worktree_repo.is_some()
                         || receipt.profile != name
                         || receipt.argv_sha256 != profile.argv_hash()
                         || receipt.cwd != root.path()
                         || receipt.session != session
+                        || receipt.oauth != oauth_binding
                         || receipt.timeout_seconds != profile.timeout_seconds
                         || receipt.max_output_bytes != profile.max_output_bytes
                         || receipt.cpu_percent != profile.cpu_percent
@@ -160,6 +211,8 @@ impl Jobs {
         let receipt = Receipt {
             job_id,
             client_id: owner.to_owned(),
+            oauth_family:policy.oauth_family,
+            oauth_bounded_workspace:policy.oauth_bounded_workspace,
             profile: name,
             argv_sha256: profile.argv_hash(),
             executable: Some(profile.executable.clone()),
@@ -169,6 +222,8 @@ impl Jobs {
             worktree_cleaned: worktree.as_ref().map(|_| false),
             root: root.path().to_owned(),
             session,
+            oauth: oauth_binding,
+            oauth_launch: policy.session.and_then(super::session::LaunchAuthority::new),
             cwd: root.path().to_owned(),
             timeout_seconds: profile.timeout_seconds,
             max_output_bytes: profile.max_output_bytes,
@@ -224,6 +279,7 @@ impl Jobs {
             job_id: receipt.job_id.clone(),
             nonce: receipt.launch_nonce.clone(),
             session: receipt.session.clone(),
+            oauth: receipt.oauth.clone(),
             scoped: self.scopes.is_some(),
             yolo: receipt.yolo,
             isolated: receipt.isolated,

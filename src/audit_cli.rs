@@ -8,7 +8,7 @@ use mcp_gateway::security::audit::{AuditLimits, AuditSink};
 use crate::http::admission::read_config;
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), (i32, String)> {
-    const USAGE: &str = "usage: veyl audit <verify|status|inspect|rotate|export-head> [--config PATH | --log PATH] [--json] [--anchor FILE | --out PATH]";
+    const USAGE: &str = "usage: veyl audit <verify|status|inspect|rotate|export-head|recover-identity> [--config PATH | --log PATH] [--json] [--anchor FILE | --out PATH]";
     let invalid = || (2, USAGE.to_owned());
     let action = args
         .first()
@@ -20,7 +20,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), (i32, String)> {
     }
     if !matches!(
         action,
-        "verify" | "status" | "inspect" | "rotate" | "export-head"
+        "verify" | "status" | "inspect" | "rotate" | "export-head" | "recover-identity"
     ) {
         return Err(invalid());
     }
@@ -63,6 +63,22 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), (i32, String)> {
         AuditSink::export_head(&path, &out)
             .map_err(|error| (1, format!("Audit checkpoint export failed: {error}")))?;
         println!("AUDIT_ANCHOR=EXPORTED");
+        return Ok(());
+    }
+    if action == "recover-identity" {
+        if anchor.is_some() || out.is_some() {
+            return Err(invalid());
+        }
+        let recovered = AuditSink::recover_legacy_identity(&path, limits)
+            .map_err(|error| (1, format!("Audit identity recovery failed: {error}")))?;
+        if json {
+            println!("{recovered}");
+        } else {
+            println!(
+                "AUDIT_IDENTITY=RECOVERED records={} segments={} bytes={}",
+                recovered["sequence"], recovered["segments"], recovered["bytes"]
+            );
+        }
         return Ok(());
     }
     if action == "rotate" {

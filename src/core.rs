@@ -6,6 +6,7 @@ pub mod protocol;
 
 pub mod capability;
 pub mod lifecycle;
+pub mod oauth;
 pub mod session;
 pub mod timeshift;
 pub mod tools;

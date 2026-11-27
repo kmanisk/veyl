@@ -44,6 +44,7 @@
       <a href="#servers">Extensions</a>
       <a id="skills-nav" href="#skills" hidden>Skills</a>
       <a href="#clients">Clients</a>
+      <a id="oauth-nav" href="#oauth" hidden>OAuth connections</a>
       <a href="#configuration">Connection & settings</a>
       <a href="#protection">Access & security</a>
     </nav>
@@ -80,6 +81,19 @@
           <button id="timeshift-retention-save" type="button">Save retention</button>
           </div>
         </div>
+      </section>
+      <section aria-labelledby="oauth" class="panel">
+        <h2 id="oauth">OAuth connections</h2>
+        <p class="muted">Local authorization preview. Inspect the exact client, callback and resource before allowing access. Display names are unverified. Approval never changes native permissions.</p>
+        <form id="oauth-inspect" class="row">
+          <label for="oauth-handle">Pending request code</label>
+          <input id="oauth-handle" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="64" required pattern="[a-f0-9]{64}">
+          <button type="submit">Inspect request</button>
+        </form>
+        <div id="oauth-review"></div>
+        <div class="row"><h3>Registered clients</h3><button id="oauth-refresh" type="button">Refresh</button></div>
+        <p id="oauth-message" role="status" class="muted"></p>
+        <div id="oauth-registrations"></div>
       </section>
       <section aria-labelledby="diagnostics" class="panel">
         <h2 id="diagnostics">System diagnostics</h2>

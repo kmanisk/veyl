@@ -321,6 +321,7 @@ impl MutationAudit {
             match action {
                 AuditAction::WriteFile => {
                     if tool == Tool::CreateDirectory {
+                        journal.prepare(None)?;
                         root.create_directory(path)?;
                         return Ok("directory_created".to_string());
                     }
@@ -521,6 +522,99 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn create_directory_dispatch_checks_paths_and_audits_outcomes() {
+        use mcp_gateway::security::policy::ExecutionMode;
+        use std::os::unix::fs::{MetadataExt, symlink};
+
+        let fixture = Fixture::new();
+        let workspace = fixture.0.join("workspace");
+        let sibling = fixture.0.join("sibling");
+        let ledger = workspace.join("ledger");
+        for dir in [&workspace, &sibling, &ledger] {
+            fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+        }
+        let audit_path = ledger.join("events.jsonl");
+        let credentials = workspace.join("clients.json");
+        fs::write(&credentials, "fixture credentials").unwrap();
+        let audit =
+            MutationAudit::open(&credentials, Some(&audit_path), AuditLimits::default()).unwrap();
+        let root = MutationRoot::open(&workspace).unwrap();
+        let call = |path: &str| {
+            audit.call(
+                Tool::CreateDirectory,
+                Some(&json!({"path": path})),
+                &root,
+                "client",
+                1,
+                (ExecutionMode::Standard, None),
+            )
+        };
+
+        assert_eq!(call("nested//child/")["isError"], false);
+        let original = fs::metadata(workspace.join("nested/child")).unwrap();
+        assert_eq!(call("nested/child")["isError"], false);
+        let existing = fs::metadata(workspace.join("nested/child")).unwrap();
+        assert_eq!(
+            (original.dev(), original.ino()),
+            (existing.dev(), existing.ino())
+        );
+
+        symlink(&sibling, workspace.join("escape")).unwrap();
+        fs::write(sibling.join("file"), "outside").unwrap();
+        fs::hard_link(sibling.join("file"), workspace.join("alias")).unwrap();
+        let absolute = sibling.join("escaped");
+        for path in [
+            "escape",
+            "escape/escaped",
+            "alias",
+            "alias/escaped",
+            "../sibling/escaped",
+            "missing/./child",
+            "invalid\0name",
+            "",
+            absolute.to_str().unwrap(),
+        ] {
+            assert_eq!(call(path)["isError"], true, "{path:?}");
+        }
+        assert_eq!(call("ledger/reserved")["isError"], true);
+        assert_eq!(call("clients.json")["isError"], true);
+        assert!(!ledger.join("reserved").exists());
+        assert!(!workspace.join("missing").exists());
+        assert!(!absolute.exists());
+        assert_eq!(fs::read_to_string(sibling.join("file")).unwrap(), "outside");
+        assert_eq!(
+            fs::read_to_string(&credentials).unwrap(),
+            "fixture credentials"
+        );
+
+        let partial = call(&format!("partial/{}", "a".repeat(256)));
+        assert_eq!(partial["isError"], true);
+        assert!(
+            partial["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("uncertain")
+        );
+        assert!(workspace.join("partial").is_dir());
+
+        let contents = AuditSink::inspect(&audit_path, true).unwrap();
+        let phases: Vec<_> = contents["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|record| record["phase"].as_str().unwrap())
+            .collect();
+        let mut expected = ["intent", "success"].repeat(2);
+        expected.extend(["intent", "failure"].repeat(9));
+        expected.extend(["intent", "uncertain"]);
+        assert_eq!(phases, expected);
+
+        fs::rename(&audit_path, ledger.join("moved.jsonl")).unwrap();
+        assert_eq!(call("without-audit")["isError"], true);
+        assert!(!workspace.join("without-audit").exists());
     }
 
     #[test]

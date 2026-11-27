@@ -305,6 +305,27 @@ fn test_mutation_tools_parity() {
     assert_eq!(mkdir_res["isError"], false);
     assert!(fixture.root("created_dir").is_dir());
 
+    let nested = json!({"path": "created_dir/nested/child"});
+    for _ in 0..2 {
+        assert_eq!(
+            client.call("create_directory", nested.clone())["isError"],
+            false
+        );
+    }
+    assert!(fixture.root("created_dir/nested/child").is_dir());
+
+    let sibling = fixture.0.join("sibling");
+    fs::create_dir(&sibling).unwrap();
+    std::os::unix::fs::symlink(&sibling, fixture.root("escape")).unwrap();
+    for path in ["escape", "escape/escaped"] {
+        assert_eq!(
+            client.call("create_directory", json!({"path": path}))["isError"],
+            true,
+            "{path}"
+        );
+    }
+    assert!(fs::read_dir(&sibling).unwrap().next().is_none());
+
     // 2. write_file
     let write_res = client.call(
         "write_file",

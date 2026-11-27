@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use mcp_gateway::core::timeshift::{changed_region, valid_id};
 use mcp_gateway::security::audit::StageProof;
+use mcp_gateway::security::durable_id::DurableFs;
 use mcp_gateway::security::linux_fs::{open_absolute_dir, publish_new, reopen_regular};
 use rustix::fd::OwnedFd;
 use rustix::fs::{self, AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, ResolveFlags, Stat};
@@ -287,13 +288,30 @@ impl Store {
     }
 
     fn parent_matches(record: &Checkpoint, target: &Target<'_>) -> bool {
-        fs::fstat(&target.directory)
-            .is_ok_and(|parent| [parent.st_dev, parent.st_ino] == record.stage.directory)
+        let Ok(parent) = fs::fstat(&target.directory) else {
+            return false;
+        };
+        match &record.stage.fs {
+            Some(expected_fs @ DurableFs::Persistent { .. }) => {
+                DurableFs::probe(&target.directory, &parent).is_ok_and(|fs| &fs == expected_fs)
+                    && parent.st_ino == record.stage.directory[1]
+            }
+            _ => [parent.st_dev, parent.st_ino] == record.stage.directory,
+        }
     }
 
     fn matches(record: &Checkpoint, target: &Target<'_>, stat: &Stat, current: &str) -> bool {
+        let Ok(parent) = fs::fstat(&target.directory) else {
+            return false;
+        };
+        let file_matches = match &record.stage.fs {
+            Some(DurableFs::Persistent { .. }) => {
+                stat.st_dev == parent.st_dev && stat.st_ino == record.stage.file[1]
+            }
+            _ => [stat.st_dev, stat.st_ino] == record.stage.file,
+        };
         Self::parent_matches(record, target)
-            && [stat.st_dev, stat.st_ino] == record.stage.file
+            && file_matches
             && stat.st_nlink == 1
             && stat.st_uid == record.stage.uid
             && record.mode.is_none_or(|mode| mode == stat.st_mode)
