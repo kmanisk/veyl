@@ -1,5 +1,13 @@
 # Gate 3d status
 
+## 2026-11-27 — 0.6.1-beta single-executable release deployed and published
+
+Operator explicitly accepted bundle `single-binary.WbADoDZC/release-0.6.1-beta` (veyl SHA-256 `b534c40338a9a52e2d9e7805ee551051bbb88ce0655cbffdc23d37b9ffea9a39`). BridgeDev verified 214 source manifest entries, 28 locked pins, 13 focused integration cases and four isolated migration/rollback scenarios against this exact ELF. AGY reported 153 Rust and 293 locked/supplementary cases passing and warning-denied Clippy clean. One privileged host-tmpfs Funnel case was skipped; external ChatGPT and Android remain unverified.
+
+Production upgrade process `mwz1z62j-s8a6ej` exit 0: 0.6.1-beta installed in both managed bin directories, each containing one regular `veyl` executable and relative `mcp-gateway` and `veyl-monitor` symlinks. Existing unit and configuration hashes unchanged. Service active PID 26100, all 2590 audit records verify against pre-upgrade anchor, ChatGPT YOLO/Codex Standard/AGY Standard grants unchanged. Updater rollback bundle `~/.veyl-update-backups/938f20130c352c2eb26eff80e0ab10d4` retained; private deployment receipts and prior binaries in candidate parent `production-upgrade-0.6.1-beta.Fukd25vv`.
+
+Accepted source committed and promoted to main at `ac2c3f8cb9fdf21e1b2858fafeeecaf11c95e7db`, tag `v0.6.1-beta` published. GitHub Latest API confirms v0.6.1-beta; exactly two uploaded assets (`veyl`, `SHA256SUMS`), both remote SHA-256 digests verified, with automatic GitHub source archives. Historical releases preserved. Crates.io 0.6.1-beta published and confirmed by registry search from a clean detached checkout of accepted commit (`cargo publish --locked --no-verify` after independent full acceptance). Final deployment/publication verification `mwz20mtx-7b6rai` exit 0; no active update journal. Existing TUI processes may require reopening. Next gate: real client interoperability and opt-in BridgeDev replacement trials.
+
 ## 2026-11-27 — Independent AGY acceptance PASS on `0.6.1-beta` single-executable candidate (`single-binary.WbADoDZC`); operator release acceptance pending
 
 Completed independent verification, code/security audit, version bump to `0.6.1-beta`, guarded rebuild, and release staging in candidate `single-binary.WbADoDZC/source` (base `46527bfd94974703a30237b2df71d2cdaec9d54e`, dirty candidate working tree with single-ELF changes + `0.6.1-beta` bump) and optimized single-ELF bundle `../release-0.6.1-beta/`:

@@ -1,5 +1,9 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current gate: 0.6.1-beta single executable released and running
+
+Production, GitHub Latest, and crates.io are all verified at 0.6.1-beta. Release tag `v0.6.1-beta` corresponds to `ac2c3f8cb9fdf21e1b2858fafeeecaf11c95e7db`. One ELF per installed bin directory, compatibility symlinks, unchanged service/configuration and grants, full audit chain preserved. GitHub release has exactly `veyl` and `SHA256SUMS` as uploaded assets. Both match the accepted bundle. See STATUS.md for evidence and rollback locations. Prior acceptance-pending sections are historical. Remaining work is real external client interoperability and practical BridgeDev parity; keep BridgeDev as fallback. One privileged Funnel test was skipped in this release's acceptance; Android not verified.
+
 ## Current gate: Independent AGY acceptance PASS for `0.6.1-beta` (`single-binary.WbADoDZC`); explicit operator acceptance required before release
 
 - **Version**: `0.6.1-beta` (`Cargo.toml`, `Cargo.lock`, `README.md`; single compiled binary target `veyl`)
