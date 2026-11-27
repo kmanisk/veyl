@@ -1,5 +1,19 @@
 # Gateway Milestone 1 — Working Handoff
 
+## Current gate: 0.7.0-beta published / external interoperability pending
+
+Accepted source `e09ea9e88001ee487f3611ae5cfa29f1055d0fb4`; single executable
+SHA-256 `f5d216d92968edd6a8c7c21053dfd12590d2e09cff94ed0bbda7cf2043718552`.
+AGY v7 and BridgeDev each passed 8/8 replacement cases. The exact historical
+matrix remains 228/293; 28 pins intact. Production migrated to schema 4 with
+preserved audit anchor, job receipts, roots and explicit tool grants.
+GitHub Latest v0.7.0-beta and crates.io 0.7.0-beta verified. ChatGPT, Codex and
+AGY are Standard. No automatic native consent. The live ChatGPT connector
+returned SSE 404; diagnose external MCP routing/authentication without
+altering existing grants or unrelated routes. Obtain explicit local native
+confirmation before live native execution. Do not roll back to a schema-3
+reader; retain the new bundle for forward recovery. See STATUS.md.
+
 ## Current gate: staged 0.7.0-beta recovery checkpoint
 
 Use `../release-0.7.0-beta/veyl` and its SHA256SUMS, not the superseded

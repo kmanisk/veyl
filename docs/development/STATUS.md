@@ -1,5 +1,43 @@
 # Gate 3d status
 
+## 2026-11-27 — 0.7.0-beta deployed and published
+
+Operator approved the exact staged 0.7.0-beta release. Accepted commit
+`e09ea9e88001ee487f3611ae5cfa29f1055d0fb4`, executable SHA-256
+`f5d216d92968edd6a8c7c21053dfd12590d2e09cff94ed0bbda7cf2043718552`.
+AGY v7 independent replacement gate 8/8; BridgeDev repeated the unchanged
+suite 8/8 (process `mwz80zrb-9r289o`, exit 0), verified 222 source files
+and all 28 historical pins against the trusted harness. AGY 149 Rust tests
+and clean Clippy; historical exact matrix 228/293, 65 legacy-contract failures
+documented in LEGACY_FAILURES.md. AGY aggregate log initially reported
+230/293; the exact supplementary rerun recorded six failures, not four.
+The v7 pipe/PTY readiness polling deadline is tautological, and its
+cross-client job denial also lacks a matched secondary job_status grant;
+these limit those assertions, not the separately verified process-session
+and ownership regressions. No new implementation defect confirmed.
+Privileged Funnel positive and Android remain unverified.
+
+Production update and schema-4 migration `mwz83in1-0bqvrq` exit 0.
+Both managed bin directories contain the accepted ELF and relative aliases;
+the running service matches the binary and is active. All 29 prior job
+receipts and unit bytes preserved. Audit anchor verified before and after
+migration (2,792 -> 2,796 records). Client tool grants, roots, activation and
+credential verifiers unchanged; all three clients are Standard because
+legacy sandboxed YOLO cannot silently become native. No new native grant
+was authorized. Keep the exact new bundle for forward recovery, not a
+schema-incompatible old executable.
+
+GitHub main fast-forwarded to accepted commit; v0.7.0-beta release published
+as Latest, both uploaded asset digests match the local bundle.
+Crates.io 0.7.0-beta publication from a clean detached accepted checkout
+completed and registry search confirmed the version. Receipts retained
+under the accepted commit's private artifacts directory.
+Live ChatGPT MCP connector returned a ts.net SSE 404; local unauthenticated
+MCP POST returns 401 and existing public route returns 403. No route or
+grant modification. Authenticated external interoperability and fresh
+locally confirmed native consent remain separate outstanding gates; keep
+BridgeDev available.
+
 ## 2026-11-27 — 0.7.0-beta recovery checkpoint (staged, not promoted)
 
 Codex corrected disabled legacy FULL migration, stale policy replay handling,
