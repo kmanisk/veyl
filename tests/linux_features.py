@@ -519,6 +519,63 @@ class LinuxFeatures(unittest.TestCase):
             self.assertEqual(peer.configuration["Web"][authority]["Handlers"]["/veyl-other"], {"Text":"another app"})
             self.assertNotEqual(command("funnel-retire-dedicated", "--confirm").returncode, 0)
 
+    def test_atomic_legacy_shared_route_retirement(self):
+        _, env = self.prepare_public_client(shared=True)
+        self.f.doc["admin_listen"] = "127.0.0.1:7332"
+        self.f.write_config()
+        authority = TAIL["hostname"] + ":443"
+        dedicated = TAIL["hostname"] + ":8443"
+        private = TAIL["hostname"] + ":9443"
+        with self.tail_peer() as (socket, peer):
+            def command(action, *args):
+                return self.cli("serve", action, "--socket", socket, *args, env=env)
+
+            self.assertEqual(command("apply", "--confirm").returncode, 0)
+            self.assertEqual(command("funnel-apply", "--confirm").returncode, 0)
+            peer.configuration["AllowFunnel"][dedicated] = True
+            peer.configuration["Web"][authority]["Handlers"]["/other/"] = {"Text":"independent"}
+            before = copy.deepcopy(peer.configuration)
+            receipt = self.f.config.with_name("." + self.f.config.name + ".serve-receipt")
+            proof = receipt.read_bytes()
+            posts = peer.posts
+
+            self.assertNotEqual(command("funnel-retire-legacy").returncode, 0)
+            self.assertNotEqual(command("rollback", "--confirm").returncode, 0)
+            peer.configuration["Web"][private]["Handlers"]["/"] = {"Proxy":"http://127.0.0.1:9999"}
+            self.assertNotEqual(command("funnel-retire-legacy", "--confirm").returncode, 0)
+            self.assertEqual(peer.posts, posts)
+            peer.configuration = copy.deepcopy(before)
+
+            peer.race = True
+            self.assertNotEqual(command("funnel-retire-legacy", "--confirm").returncode, 0)
+            self.assertEqual(peer.configuration["Web"], before["Web"])
+            self.assertEqual(receipt.read_bytes(), proof)
+            expected = copy.deepcopy(peer.configuration)
+            expected["Web"][authority]["Handlers"]["/veyl/"] = {"Text":"Veyl public MCP disabled"}
+            del expected["Web"][dedicated]
+            del expected["Web"][private]
+            del expected["TCP"]["8443"]
+            del expected["TCP"]["9443"]
+            del expected["AllowFunnel"][dedicated]
+
+            posts = peer.posts
+            result = command("funnel-retire-legacy", "--confirm")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(peer.posts, posts + 1)
+            self.assertEqual(peer.configuration, expected)
+            self.assertEqual(receipt.read_bytes(), proof)
+            self.assertEqual(command("funnel-retire-legacy", "--confirm").returncode, 0)
+            self.assertEqual(peer.posts, posts + 1)
+            self.assertEqual(peer.configuration, expected)
+
+            # Restore the old pair using the retained receipt, then prove the
+            # same retirement works after the old public mount was disabled.
+            self.assertEqual(command("apply", "--confirm").returncode, 0)
+            self.assertEqual(command("funnel-apply", "--confirm").returncode, 0)
+            self.assertEqual(command("funnel-rollback", "--confirm").returncode, 0)
+            self.assertEqual(command("funnel-retire-legacy", "--confirm").returncode, 0)
+            self.assertEqual(peer.configuration, expected)
+
     def test_standalone_funnel_first_run_and_rollback(self):
         _, env = self.prepare_public_client(shared=True)
         self.f.doc["tailscale_serve"]["standalone_funnel"] = True
@@ -843,7 +900,7 @@ class LinuxFeatures(unittest.TestCase):
             self.assertIn(b"primary",result)
             self.assertIn(b"\x1b[?1049h",result)
             self.assertIn(b"\x1b[?1049l",result)
-            self.assertIn(b"SESSIONS / GRANTS",result)
+            self.assertIn(b"CLIENT / AUTH / MODE / CONNECTION / SESSIONS",result)
             # The live interface must inherit the terminal background. No
             # reverse video, fixed black/white fills or RGB backgrounds.
             styles = re.findall(rb"\x1b\[([0-9;]*)m", result)

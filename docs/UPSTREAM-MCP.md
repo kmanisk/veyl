@@ -99,3 +99,39 @@ deadline. The overall discovery or alias-resolution operation is capped
 at three seconds and six concurrent links. Slow tools and server features
 that require a persistent notification stream are outside this checkpoint.
 Protocol details follow the [MCP transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
+
+## Unified OAuth provider grants
+
+The local unified policy may enable `oauth.workspace_upstreams` and provide an
+`oauth.allowed_server_tools` object mapping existing provider IDs to explicit
+tool-name arrays. Standard OAuth clients receive only those tools after local
+consent. The configuration admits up to four providers. Trusted sandboxed
+runtime bundles are eligible alongside the established offline stdio and
+credential-free loopback transports. Provider definitions and exact grants
+are included in the OAuth state binding. Changing them requires a reviewed
+OAuth state transition. A legacy approved provider map is retained during
+migration if its definitions can be reconciled with the static catalog.
+
+Use the dashboard probe or `p` on a provider in the terminal Upstreams view to
+check initialization and live discovery. Providers run in an offline sandbox
+when registered as stdio. Veyl creates a fresh upstream session for each
+request, which is appropriate for standalone tools such as REA's Python
+artifact inspection and Rust Anything's source analysis. Some REA tasks depend
+on an open target or previously retained evidence in the same upstream
+session. Check the installed tool's stated prerequisites before granting it.
+
+Rust Anything's `diff` and `report` can use a prepared crate beneath
+`/upstream/bundle`. The gateway copies that crate into a bounded per-request
+scratch mount for providers registered under the canonical `rust-anything`
+ID. Benchmark and comparison writes stay in the sandbox. Report files
+created there expire when the request ends. Keep durable report production
+in an explicitly authorized development job when artifacts must be retained.
+
+Bundled Rust Anything reports run benchmarks. An explicitly granted report
+call has a 30-second upstream deadline, separate from the shorter discovery
+and regular tool deadlines. Upon timeout the same per-call sandbox cleanup
+applies. Set a corresponding client request timeout for report invocations.
+The installed report implementation can rebuild the prepared addon. Cargo
+in its scratch sandbox runs offline with one build job. Use an already
+self-contained crate or supply local vendored dependencies as part of the
+prepared crate.

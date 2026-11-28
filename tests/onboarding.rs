@@ -103,10 +103,14 @@ fn short_mode_commands_select_single_client_and_reject_ambiguous_changes() {
     doc["clients"].as_array_mut().unwrap().push(other);
     fs::write(&config, serde_json::to_vec(&doc).unwrap()).unwrap();
     let before = fs::read(&config).unwrap();
-    let ambiguous = invoke(&["mode", "yolo", "--confirm-native"]);
+    let ambiguous = invoke(&["mode", "get"]);
     assert!(!ambiguous.status.success());
     assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("Multiple clients configured"));
     assert_eq!(fs::read(&config).unwrap(), before);
+    ok(invoke(&["mode", "yolo", "--confirm-native"]));
+    assert!(ok(invoke(&["mode"])).contains("default_mode=yolo"));
+    assert!(ok(invoke(&["mode"])).contains("dev\tyolo\tenabled"));
+    ok(invoke(&["mode", "standard"]));
     ok(invoke(&["mode", "disable", "other"]));
     assert!(ok(invoke(&["mode"])).contains("other\tstandard\tdisabled"));
     assert!(ok(invoke(&["mode"])).contains("dev\tstandard\tenabled"));

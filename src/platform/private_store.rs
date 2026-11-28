@@ -48,6 +48,27 @@ impl Store {
         Self::open_named(&parent.join(name), "goals.json", 2 * 1024 * 1024, true)
     }
 
+    pub fn goal_run_guard(&self, id: &str) -> Result<OwnedFd, String> {
+        if self.1 != "goals.json" || id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("Invalid goal run lock".into());
+        }
+        let name = format!("runner-{id}.lock");
+        let fd = fs::openat(
+            &self.0, name.as_str(),
+            OFlags::RDWR | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::CREATE,
+            Mode::from_raw_mode(0o600),
+        ).map_err(|_| "Cannot open goal run lock")?;
+        let stat = fs::fstat(&fd).map_err(|_| "Cannot inspect goal run lock")?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_mode & 0o7777 != 0o600 || stat.st_uid != geteuid().as_raw() || stat.st_nlink != 1
+        {
+            return Err("Unsafe goal run lock".into());
+        }
+        fs::flock(&fd, fs::FlockOperation::NonBlockingLockExclusive)
+            .map_err(|_| "Another controller already owns this goal run")?;
+        Ok(fd)
+    }
+
     fn open_named(
         path: &Path,
         name: &'static str,

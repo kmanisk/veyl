@@ -10,6 +10,7 @@ let nextPage;
 let currentJobCursor = "";
 let jobRequest = 0;
 let logRequest = 0;
+let openJobLog;
 const tabs = [...document.querySelectorAll('nav a[href^="#"]')];
 let activeTab = "health";
 let traceEnabled = false;
@@ -278,7 +279,7 @@ byId("detail-dialog").addEventListener("close", () => {
 });
 document.addEventListener("keydown", event => {
   if (event.key !== "/" || event.ctrlKey || event.altKey || event.metaKey || byId("dashboard").hidden || byId("detail-dialog").open || ["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName)) return;
-  const field = activeTab === "audit" ? "audit-filter" : activeTab === "jobs" ? "job-filter" : null;
+  const field = activeTab === "audit" ? "audit-filter" : activeTab === "jobs" ? "job-filter" : activeTab === "clients" && byId("client-grants-card").open ? "grant-search" : null;
   if (field) { event.preventDefault(); byId(field).focus(); }
 });
 function selectTab(id, focus = false) {
@@ -301,9 +302,13 @@ function selectTab(id, focus = false) {
     page.setAttribute("aria-labelledby", tab.id);
     page.classList.toggle("inactive-tab", !selected);
     if (selected && focus) tab.focus();
+    if (selected && changed && matchMedia("(max-width:650px)").matches) {
+      tab.scrollIntoView({block:"nearest", inline:"nearest"});
+    }
   }
   if (id === "diagnostics") loadDiagnostics();
   if (id === "goals" && changed) loadGoals().catch(goalError);
+  if (id === "clients" && changed) loadOAuthClients().catch(error => byId("client-message").textContent = error.message);
   if (id === "oauth" && changed) loadOAuth().catch(error => byId("oauth-message").textContent = error.message);
 }
 for (const tab of tabs) {
@@ -342,6 +347,13 @@ async function request(path, body) {
 
 function showPair() {
   oauthGeneration++;
+  goalGeneration++;
+  goalSelection = undefined;
+  renderedGoalRevision = undefined;
+  oauthClients = [];
+  oauthClientsLoaded = 0;
+  clientRowsKey = undefined;
+  grantsKey = undefined;
   byId("oauth-handle").value = "";
   byId("oauth-review").replaceChildren();
   byId("oauth-registrations").replaceChildren();
@@ -355,6 +367,7 @@ function showPair() {
   activityRequest++;
   jobRequest++;
   logRequest++;
+  openJobLog = undefined;
   traceRequest++;
   byId("job-rows").replaceChildren();
   byId("logs").hidden = true;
@@ -410,6 +423,7 @@ let catalogPage = 0;
 const catalogPageSize = 20;
 let registeredIds = new Set();
 const probedTools = new Map();
+const providerHealth = new Map();
 let lastStatus = null;
 let marketplaceState = { recipes: [], installedById: new Map(), operations: [] };
 let marketplacePollDue = false;
@@ -731,41 +745,204 @@ function renderStatus(state) {
       add(tr, "td", scope);
     }
   }
-  table("client-rows", state.clients.map(client => [
-    client.id, (modes[client.mode] || client.mode) + (client.disabled ? " (disabled)" : "") + (client.expired ? " (expired)" : ""),
-    client.connections, [
-      client.grants.join(", "),
-      client.skills.length ? "Skills: " + client.skills.join(", ") : "",
-      client.upstreams.length ? "Upstream: " + client.upstreams.map(id => client.upstream_tools === null
-        ? id + " (server-wide)" : id + " (" + (client.upstream_tools[id] || []).join(", ") + ")").join("; ") : ""
-    ].filter(Boolean).join(" · ")
-  ]));
-  byId("client-empty").hidden = state.clients.length !== 0;
+  renderClients(state);
   renderNativeGrants(state);
+}
+
+let oauthClients = [];
+let oauthClientsLoaded = 0;
+let clientRowsKey;
+let grantsKey;
+
+function actionButton(parent, label, action) {
+  const button = add(parent, "button", label);
+  button.type = "button";
+  button.onclick = async () => {
+    button.disabled = true;
+    try { await action(); }
+    catch (error) { byId("client-message").textContent = error.message; }
+    finally { button.disabled = false; }
+  };
+  return button;
+}
+
+async function changeClient(action, client, mode, oauth = false) {
+  const label = modeLabels[mode] || mode;
+  const message = action === "revoke"
+    ? "Revoke access for " + client + "?"
+    : action === "default"
+      ? "Use " + label + " as the default for new OAuth approvals? Existing grants stay in place."
+      : "Change " + client + " to " + label + "?";
+  const warning = mode === "yolo"
+    ? "\n\nNative YOLO grants host-user access, including Veyl state. OAuth clients must still complete local consent."
+    : "";
+  if (!window.confirm(message + warning)) return;
+  if (oauth) await request("oauth", {action, client_id:client, ...(mode && {mode}), confirm:true});
+  else await request("clients/mode", {action, client, mode, confirm:true});
+  byId("client-message").textContent = "Client permissions updated.";
+  const state = await request("status");
+  lastStatus = state;
+  clientRowsKey = undefined;
+  renderStatus(state);
+  if (oauth) await loadOAuthClients(true);
+}
+
+function renderClients(state) {
+  const visibleOAuth = !remote && state.oauth_preview;
+  const all = state.clients.map(client => ({
+    ...client, name:client.id, auth:"Bearer",
+    status:client.disabled ? "Revoked" : client.expired ? "Expired" : client.connections ? "Connected" : "Idle",
+  }));
+  if (visibleOAuth) {
+    for (const registration of oauthClients) {
+      const count = registration.active_families ? (state.oauth_sessions?.[registration.client_id] || 0) : 0;
+      all.push({id:registration.client_id, name:registration.client_name || registration.client_id,
+        auth:"OAuth", mode:registration.mode, connections:count,
+        status:count ? "Connected" : registration.active_families ? "Authorized" : "Awaiting consent",
+        eligible:registration.eligible, nativeSupported:registration.nativeSupported,
+        callback:registration.redirect_uris});
+    }
+  }
+  byId("client-default").hidden = remote || !state.unified;
+  if (document.activeElement !== byId("client-default-mode") && !byId("client-default-mode").dataset.dirty) {
+    byId("client-default-mode").value = state.default_mode || "standard";
+  }
+  byId("client-empty").hidden = all.length !== 0;
+  byId("client-grants-card").hidden = state.clients.length === 0;
+  const key = JSON.stringify(all);
+  if (clientRowsKey === key) return;
+  const rows = byId("client-rows");
+  if (rows.contains(document.activeElement) && clientRowsKey !== undefined) return;
+  clientRowsKey = key;
+  rows.replaceChildren();
+  for (const client of all) {
+    const row = add(rows, "tr", "");
+    const addCell = (label, text) => {
+      const cell = add(row, "td", text);
+      cell.dataset.label = label;
+      return cell;
+    };
+    const name = addCell("Client", client.name);
+    if (client.auth === "OAuth") name.title = "Unverified OAuth display name · " + client.id;
+    addCell("Auth", client.auth);
+    addCell("Mode", modeLabels[client.mode] || client.mode);
+    const status = addCell("Connection", client.status);
+    status.className = client.status === "Connected" ? "client-connected" : "muted";
+    addCell("Sessions", String(client.connections)).className = "client-sessions";
+    const actions = addCell("Actions", "");
+    const group = add(actions, "div", "");
+    group.className = "client-actions";
+    const oauth = client.auth === "OAuth";
+    if (!remote && !client.disabled && !client.expired) {
+      const target = client.mode === "yolo" ? "standard" : "yolo";
+      if (!oauth || target === "standard" || client.eligible && client.nativeSupported) {
+        actionButton(group, modeLabels[target], () => changeClient("mode", client.id, target, oauth));
+      }
+      actionButton(group, "Revoke", () => changeClient("revoke", client.id, undefined, oauth));
+    }
+    if (oauth) {
+      actionButton(group, "Details", () => showDetails({id:client.id, display_name:client.name,
+        authentication:"OAuth", mode:client.mode, sessions:client.connections, callbacks:client.callback}));
+    } else {
+      actionButton(group, "Grants", () => {
+        const panel = byId("client-grants-card");
+        panel.open = true;
+        byId("grant-client").value = client.id;
+        renderNativeGrants(lastStatus);
+        byId("grant-search").focus();
+      });
+    }
+  }
+}
+
+async function loadOAuthClients(force = false) {
+  if (remote || !lastStatus?.oauth_preview || !force && performance.now() - oauthClientsLoaded < 15000 && oauthClientsLoaded) return;
+  const generation = oauthGeneration;
+  const result = await request("oauth", {action:"list"});
+  if (generation !== oauthGeneration || byId("dashboard").hidden) return;
+  oauthClients = result.registrations.map(client => ({...client, eligible:result.eligible, nativeSupported:result.supports_yolo}));
+  oauthClientsLoaded = performance.now();
+  if (lastStatus) renderClients(lastStatus);
+}
+
+function grantGroup(tool, name) {
+  if (tool.git) return "Git";
+  if (tool.process || /^(job_|task_|exec_|list_jobs|start_job|cancel_job|run_command)/.test(name)) return "Jobs and processes";
+  if (name.startsWith("goal_")) return "Goals";
+  if (tool.extension || /^(skills_|mcp_|extensions_)/.test(name)) return "Skills and extensions";
+  if (name.startsWith("rewind")) return "TimeShift";
+  if (/^(system_|project_|network_|diagnostics_)/.test(name)) return "Context and diagnostics";
+  return "Workspace";
+}
+
+function filterGrants() {
+  const query = byId("grant-search").value.trim().toLowerCase();
+  let shown = 0;
+  for (const section of byId("native-grant-grid").querySelectorAll("details")) {
+    let matches = 0;
+    for (const label of section.querySelectorAll("label")) {
+      label.hidden = query !== "" && !label.textContent.toLowerCase().includes(query);
+      matches += Number(!label.hidden);
+    }
+    section.hidden = query !== "" && !matches;
+    if (query && matches) section.open = true;
+    shown += matches;
+  }
+  byId("grant-empty").hidden = shown !== 0;
 }
 
 function renderNativeGrants(state) {
   const select = byId("grant-client");
   const grid = byId("native-grant-grid");
-  if (!select || !grid) return;
-  const previous = select.value;
-  select.replaceChildren();
-  for (const c of state.clients) add(select, "option", c.id).value = c.id;
-  if (state.clients.some(c => c.id === previous)) select.value = previous;
+  const clients = state.clients.map(client => client.id);
+  if (clients.join("|") !== [...select.options].map(option => option.value).join("|")) {
+    const previous = select.value;
+    select.replaceChildren();
+    for (const id of clients) add(select, "option", id).value = id;
+    if (clients.includes(previous)) select.value = previous;
+  }
   const client = state.clients.find(c => c.id === select.value);
+  if (!client || !Array.isArray(state.all_tools)) {
+    grid.replaceChildren();
+    grantsKey = undefined;
+    return;
+  }
+  const key = JSON.stringify([client.id, client.mode, client.grants, client.native_tool_preset,
+    client.timeshift_retention_count, state.all_tools]);
+  if (key === grantsKey) return;
+  if (grid.dataset.dirty && grid.dataset.client === client.id && grantsKey !== undefined) {
+    byId("client-message").textContent = "The saved grants changed. Switch clients or refresh before applying this draft.";
+    byId("grant-native-save").disabled = true;
+    return;
+  }
+  grantsKey = key;
+  grid.dataset.client = client.id;
+  delete grid.dataset.dirty;
+  byId("grant-native-save").disabled = false;
   grid.replaceChildren();
-  if (!client || !Array.isArray(state.all_tools)) return;
   byId("timeshift-retention").value = client.timeshift_retention_count || 64;
   byId("timeshift-retention-save").disabled = remote;
   const granted = new Set(client.grants || []);
+  const sections = new Map();
   for (const t of state.all_tools) {
     const name = typeof t === "string" ? t : t.name;
     const preset = typeof t === "object" && t.yolo_preset && client.mode === "yolo" && client.native_tool_preset;
-    const label = add(grid, "label", "");
+    const group = grantGroup(t, name);
+    if (!sections.has(group)) {
+      const details = add(grid, "details", "");
+      add(details, "summary", group);
+      const fields = add(details, "div", "");
+      fields.className = "grant-grid";
+      sections.set(group, fields);
+    }
+    const label = add(sections.get(group), "label", "");
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.value = name;
     cb.checked = granted.has(name) || !!preset;
+    // Preset access follows the native grant. Do not write it into the explicit list.
+    cb.disabled = !!preset;
+    cb.dataset.explicit = granted.has(name) ? "1" : "0";
     if (typeof t === "object") {
       cb.dataset.git = t.git ? "1" : "0";
       cb.dataset.ext = t.extension ? "1" : "0";
@@ -773,6 +950,7 @@ function renderNativeGrants(state) {
     }
     label.append(cb, " " + name + (preset ? " (preset)" : ""));
   }
+  filterGrants();
 }
 
 function renderUpstreamBulkGrid() {
@@ -817,7 +995,10 @@ async function refresh() {
   const selected = select.value;
   select.replaceChildren();
   for (const client of state.clients) add(select, "option", client.id).value = client.id;
-  if (state.clients.some(client => client.id === selected)) select.value = selected;
+  if (state.oauth_preview && !state.clients.some(client => client.id === "oauth-preview" || client.id === "oauth")) {
+    add(select, "option", "OAuth connections").value = "oauth";
+  }
+  if (selected && (state.clients.some(client => client.id === selected) || (selected === "oauth" && state.oauth_preview))) select.value = selected;
   const serverClient = byId("server-client");
   const previousServerClient = serverClient.value;
   serverClient.replaceChildren();
@@ -867,25 +1048,42 @@ async function loadJobs(cursor = "", preserveLogs = false) {
   const generation = ++jobRequest;
   const client = byId("job-client").value;
   const list = byId("job-rows");
-  if (!preserveLogs) byId("logs").hidden = true;
+  if (!preserveLogs) {
+    openJobLog = undefined;
+    byId("logs").hidden = true;
+  }
   if (!client) { list.replaceChildren(); byId("more-jobs").hidden = true; return; }
   const { jobs, next_cursor: next } = await request("jobs?client=" + encodeURIComponent(client) + "&cursor=" + cursor);
-  const trace = await localTrace();
+  const trace = traceEnabled ? await localTrace() : [];
   if (jobRequest !== generation || byId("dashboard").hidden) return;
+  if (preserveLogs && openJobLog && byId("logs").open && openJobLog.client === client) {
+    await readJobLog(openJobLog, false);
+  }
+  if (preserveLogs && list.contains(document.activeElement)) return;
   list.replaceChildren();
   if (jobs.length === 0) add(list, "li", "No job records.");
   for (const job of jobs) {
     const row = add(list, "li", "");
     row.dataset.search = JSON.stringify(job);
-    add(row, "code", job.job_id);
-    const status = add(row, "span", job.state + (job.exit_code != null ? " · exit " + job.exit_code : ""));
+    add(row, "code", job.job_id.slice(0, 8)).title = job.job_id;
+    const failure = job.exit_code != null && job.exit_code !== 0 || job.signal != null && job.signal !== 0;
+    const state = job.state === "completed" && failure ? "failed" : job.state;
+    const status = add(row, "span", state + (job.exit_code != null ? " · exit " + job.exit_code : ""));
     status.className = "job-state";
-    status.dataset.state = job.state === "completed"
-      ? (job.exit_code != null && job.exit_code !== 0 || job.signal != null && job.signal !== 0
-        ? "failed" : job.exit_code === 0 ? "completed" : "uncertain")
-      : job.state;
-    const details = add(row, "span", [job.created_at ? new Date(job.created_at * 1000).toLocaleString() : "", job.client, job.cwd, job.executable || job.profile, job.execution_duration_ms != null ? "Job duration " + formatDuration(job.execution_duration_ms) : job.live_elapsed_ms != null ? "Live job elapsed " + formatDuration(job.live_elapsed_ms) : ""].filter(Boolean).join(" · "));
+    status.dataset.state = state;
+    const details = add(row, "div", "");
     details.className = "job-details";
+    const cwd = job.cwd?.split("/").filter(Boolean).slice(-3).join("/");
+    const commandName = job.executable?.split("/").pop();
+    add(details, "strong", commandName && commandName !== "sh" ? commandName : job.profile || "Command");
+    if (cwd) {
+      const directory = add(details, "code", "…/" + cwd);
+      directory.title = job.cwd;
+    }
+    const elapsed = job.execution_duration_ms ?? job.live_elapsed_ms;
+    const metadata = [job.created_at ? new Date(job.created_at * 1000).toLocaleString() : "",
+      elapsed != null ? formatDuration(elapsed) : ""].filter(Boolean).join(" · ");
+    if (metadata) add(details, "small", metadata);
     const preview = traceEnabled && commandPreview(jobTrace(trace, job));
     if (preview) {
       const command = add(row, "code", preview);
@@ -899,12 +1097,8 @@ async function loadJobs(cursor = "", preserveLogs = false) {
       if (!byId("dashboard").hidden) showDetails(record ? {...job, local_trace:record} : {...job, trace_note:"No captured launch arguments; enable local trace before starting a new job."});
     });
     button(row, "Logs", async () => {
-      const requestId = ++logRequest;
-      const logs = await request("jobs/" + job.job_id + "/logs?client=" + encodeURIComponent(client));
-      if (requestId !== logRequest || byId("job-client").value !== client || activeTab !== "jobs" || byId("dashboard").hidden) return;
-      byId("output").textContent = "STDOUT\n" + (logs.stdout || "(empty)") + "\n\nSTDERR\n" + (logs.stderr || "(empty)") + (logs.stdout_truncated || logs.stderr_truncated ? "\n\n[Output truncated]" : "");
-      byId("logs").hidden = false;
-      byId("logs").open = true;
+      openJobLog = {client, id:job.job_id};
+      await readJobLog(openJobLog, true);
     });
     if (["starting", "running", "uncertain"].includes(job.state)) {
       button(row, "Cancel", async () => {
@@ -918,6 +1112,19 @@ async function loadJobs(cursor = "", preserveLogs = false) {
   nextPage = next;
   filterRows("job-rows", byId("job-filter").value);
   byId("more-jobs").hidden = !next;
+}
+
+async function readJobLog(selection, show) {
+  const requestId = ++logRequest;
+  const logs = await request("jobs/" + selection.id + "/logs?client=" + encodeURIComponent(selection.client));
+  if (requestId !== logRequest || openJobLog !== selection || activeTab !== "jobs" || byId("dashboard").hidden) return;
+  const text = "STDOUT\n" + (logs.stdout || "(empty)") + "\n\nSTDERR\n" + (logs.stderr || "(empty)")
+    + (logs.stdout_truncated || logs.stderr_truncated ? "\n\n[Output truncated]" : "");
+  if (byId("output").textContent !== text) byId("output").textContent = text;
+  if (show) {
+    byId("logs").hidden = false;
+    byId("logs").open = true;
+  }
 }
 
 async function editSkill(action, fields) {
@@ -974,6 +1181,7 @@ async function editServer(action, fields) {
       output.dataset.health = result.health;
       output.textContent = result.health + (result.tools.length ? " · " + result.tools.length + " discovered tools" : "");
     }
+    providerHealth.set(fields.id, result.health);
     probedTools.set(fields.id, result.health === "ready" ? result.tools : []);
     updateProbedTools();
     renderUpstreamBulkGrid();
@@ -1058,7 +1266,12 @@ async function loadServers() {
   list.replaceChildren();
   select.replaceChildren();
   if (bulkSelect) bulkSelect.replaceChildren();
-  probedTools.clear();
+  for (const id of providerHealth.keys()) {
+    if (!servers.some(server => server.id === id && server.enabled)) {
+      providerHealth.delete(id);
+      probedTools.delete(id);
+    }
+  }
   renderWorkspaceProviders(servers);
   registeredIds = new Set(servers.map(server => server.id));
   if (catalogLoaded) renderCatalog();
@@ -1070,9 +1283,10 @@ async function loadServers() {
     row.dataset.server = server.id;
     const receipt = marketplaceState.installedById.get(server.id);
     add(row, "strong", server.id + " · " + server.transport + (receipt ? " · Marketplace v" + receipt.version : ""));
-    const health = add(row, "output", server.enabled ? "Registered · health unchecked" : "Disabled");
+    const healthState = server.enabled ? providerHealth.get(server.id) || "unprobed" : "disabled";
+    const health = add(row, "output", healthState + (healthState === "ready" ? " · " + probedTools.get(server.id).length + " tools" : ""));
     health.className = "provider-health";
-    health.dataset.health = server.enabled ? "unchecked" : "disabled";
+    health.dataset.health = healthState;
     button(row, "Details", async () => showDetails({...server, receipt: receipt || null, probed_tools: probedTools.get(server.id) || null}));
     if (server.enabled) button(row, "Probe health and tools", () => editServer("probe", { id: server.id }));
     if (receipt) {
@@ -1111,26 +1325,40 @@ byId("marketplace-recover")?.addEventListener("click", async () => {
   await refresh();
 });
 byId("grant-client")?.addEventListener("change", () => lastStatus && renderNativeGrants(lastStatus));
+byId("grant-search").addEventListener("input", filterGrants);
+byId("native-grant-grid").addEventListener("change", () => byId("native-grant-grid").dataset.dirty = "1");
+byId("client-default-mode").addEventListener("change", event => event.target.dataset.dirty = "1");
+byId("client-default-save").onclick = async () => {
+  const input = byId("client-default-mode");
+  try {
+    await changeClient("default", undefined, input.value);
+    delete input.dataset.dirty;
+  } catch (error) { byId("client-message").textContent = error.message; }
+};
 byId("grant-all-safe")?.addEventListener("click", () => {
   for (const cb of byId("native-grant-grid").querySelectorAll('input[type="checkbox"]')) {
     // Snapshot retention and destructive rewind remain an explicit opt-in.
-    if (!['rewind','rewind_restore','rewind_clear'].includes(cb.value)) cb.checked = true;
+    if (!cb.disabled && !['rewind','rewind_restore','rewind_clear'].includes(cb.value)) cb.checked = true;
   }
+  byId("native-grant-grid").dataset.dirty = "1";
 });
 byId("grant-git-all")?.addEventListener("click", () => {
-  const cbs = [...byId("native-grant-grid").querySelectorAll('input[data-git="1"]')];
+  const cbs = [...byId("native-grant-grid").querySelectorAll('input[data-git="1"]:enabled')];
   const anyUnchecked = cbs.some(cb => !cb.checked);
   for (const cb of cbs) cb.checked = anyUnchecked;
+  byId("native-grant-grid").dataset.dirty = "1";
 });
 byId("grant-ext-all")?.addEventListener("click", () => {
-  const cbs = [...byId("native-grant-grid").querySelectorAll('input[data-ext="1"]')];
+  const cbs = [...byId("native-grant-grid").querySelectorAll('input[data-ext="1"]:enabled')];
   const anyUnchecked = cbs.some(cb => !cb.checked);
   for (const cb of cbs) cb.checked = anyUnchecked;
+  byId("native-grant-grid").dataset.dirty = "1";
 });
 byId("grant-proc-all")?.addEventListener("click", () => {
-  const cbs = [...byId("native-grant-grid").querySelectorAll('input[data-proc="1"]')];
+  const cbs = [...byId("native-grant-grid").querySelectorAll('input[data-proc="1"]:enabled')];
   const anyUnchecked = cbs.some(cb => !cb.checked);
   for (const cb of cbs) cb.checked = anyUnchecked;
+  byId("native-grant-grid").dataset.dirty = "1";
 });
 byId("timeshift-retention-save")?.addEventListener("click", async () => {
   const client = byId("grant-client").value;
@@ -1145,10 +1373,15 @@ byId("timeshift-retention-save")?.addEventListener("click", async () => {
 byId("grant-native-save")?.addEventListener("click", async () => {
   const client = byId("grant-client").value;
   if (!client || !window.confirm("Save native tool grants for " + client + "?")) return;
-  const tools = [...byId("native-grant-grid").querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
-  await request("clients/grants", { client, tools, confirm: true });
-  notice.textContent = "Updated native grants for " + client;
-  await refresh();
+  const grid = byId("native-grant-grid");
+  const tools = [...grid.querySelectorAll('input[type="checkbox"]:checked')]
+    .filter(cb => !cb.disabled || cb.dataset.explicit === "1").map(cb => cb.value);
+  try {
+    await request("clients/grants", { client, tools, confirm: true });
+    delete grid.dataset.dirty;
+    byId("client-message").textContent = "Updated tool grants for " + client;
+    await refresh();
+  } catch (error) { byId("client-message").textContent = error.message; }
 });
 byId("bulk-grant-client")?.addEventListener("change", renderUpstreamBulkGrid);
 byId("bulk-grant-server")?.addEventListener("change", renderUpstreamBulkGrid);
@@ -1322,9 +1555,16 @@ function startLive() {
         renderStatus(state);
       }
       if (tab === activeTab) {
+        if (tab === "clients" && statusDue) await loadOAuthClients();
         if (tab === "audit") await loadActivity();
         else if (tab === "jobs" && !byId("job-controls").hidden) await loadJobs(currentJobCursor, true);
-        else if (diagnosticsDue) await loadDiagnostics();
+        else if (tab === "goals" && statusDue) {
+          if (goalSelection && !byId("goal-detail").contains(document.activeElement)) {
+            await showGoal(goalSelection, true);
+          } else if (!goalSelection && !byId("goals-list").contains(document.activeElement)) {
+            await loadGoals(goalPage);
+          }
+        } else if (diagnosticsDue) await loadDiagnostics();
       }
     } catch (error) { notice.textContent = error.message; }
     finally { liveBusy = false; }
@@ -1365,6 +1605,7 @@ async function loadOAuth() {
   if (generation !== oauthGeneration || byId("dashboard").hidden) return;
   const list = byId("oauth-registrations");
   list.replaceChildren();
+  add(list,"p","Default approval mode for new OAuth clients: " + (result.default_mode === "yolo" ? "YOLO (preselected; explicit confirmation still required)" : "Standard (workspace-scoped)"));
   if (!result.registrations.length) add(list,"p","No registered OAuth clients.");
   for (const registration of result.registrations) {
     const card = add(list,"div","");
@@ -1452,9 +1693,12 @@ function renderOAuthReview(handle, info, generation) {
     const modeSelect=add(modeRow,"select","");
     modeSelect.id="oauth-approve-mode";
     modeLabel.htmlFor="oauth-approve-mode";
-    const stdOpt=add(modeSelect,"option","Standard (default, workspace-scoped)"); stdOpt.value="standard";
+    const stdOpt=add(modeSelect,"option","Standard (workspace-scoped)"); stdOpt.value="standard";
     const yoloOpt=add(modeSelect,"option","YOLO (native host-user access)"); yoloOpt.value="yolo";
-    modeSelect.value=info.mode || "standard";
+    modeSelect.value=info.mode || info.default_mode || "standard";
+    if (info.default_mode === "yolo") {
+      add(card,"p","Default policy is YOLO (preselected below; remote access still requires local confirmation).");
+    }
     modeSelect.onchange=async () => {
       const nextGeneration=++oauthGeneration;
       try {
@@ -1531,6 +1775,7 @@ let goalPage;
 let nextGoalPage;
 let goalSelection;
 let goalGeneration = 0;
+let renderedGoalRevision;
 function goalError(error) {
   byId("goal-message").textContent = error.message;
 }
@@ -1547,9 +1792,11 @@ async function loadGoals(cursor) {
   for (const goal of page.goals) {
     const item = add(list, "li", "");
     const button = add(item, "button", goal.description);
+    if (goal.id === goalSelection) button.setAttribute("aria-current", "true");
     button.type = "button";
     button.onclick = () => showGoal(goal.id).catch(goalError);
-    add(item, "span", " " + goal.state + " · " + goal.completed_milestones + "/" + goal.milestones + " milestones");
+    add(item, "span", " " + goal.state + " · " + goal.completed_milestones + "/" + goal.milestones + " milestones"
+      + (goal.iterations ? " · " + goal.iterations + " iterations" : ""));
   }
   if (goalSelection) await showGoal(goalSelection);
 }
@@ -1566,15 +1813,29 @@ function renderMilestone(row, task) {
   row.textContent = (task.completed ? "Completed · " : "") + task.description;
   if (task.subtasks?.length) renderGoalItems(row, task.subtasks, renderMilestone);
 }
-async function showGoal(id) {
+async function showGoal(id, live = false) {
   const generation = ++goalGeneration;
   const goal = await request("goals?goal_id=" + encodeURIComponent(id));
-  if (generation !== goalGeneration) return;
+  if (generation !== goalGeneration || live && activeTab !== "goals") return;
+  if (live && renderedGoalRevision === goal.revision && goalSelection === id) return;
+  if (live && byId("goal-detail").contains(document.activeElement)) return;
+  renderedGoalRevision = goal.revision;
   goalSelection = id;
   const detail = byId("goal-detail");
   detail.replaceChildren();
   add(detail, "h2", goal.description);
-  add(detail, "p", goal.state + " · " + goal.workspace + " · " + goal.owner);
+  const state = add(detail, "p", goal.state + " · " + goal.owner + " · " + goal.workspace);
+  state.className = "muted";
+  const execution = goal.execution;
+  if (execution?.active) {
+    add(detail, "p", "Iteration " + execution.active.number + " running"
+      + (execution.active.job_id ? " · " + execution.active.job_id.slice(0, 8) : " · Starting"));
+  }
+  if (execution?.stop_reason) add(detail, "p", execution.stop_reason);
+  if (execution?.budget && !execution.stop_reason) {
+    add(detail, "p", "Budget through iteration " + execution.budget.through
+      + " · deadline " + new Date(execution.budget.deadline * 1000).toLocaleString());
+  }
   if (goal.progress) add(detail, "p", goal.progress);
   if (goal.active_task) {
     const find = tasks => {
@@ -1594,9 +1855,9 @@ async function showGoal(id) {
     for (const action of available) {
       const button = add(actions, "button", action[0].toUpperCase() + action.slice(1));
       button.type = "button";
-      if (action === "resume" && goal.blockers.length) button.disabled = true;
+      if (action === "resume" && (goal.blockers.length || execution?.active)) button.disabled = true;
       button.onclick = async () => {
-        if (action === "cancel" && !window.confirm("Cancel this goal? Associated jobs keep their own lifecycle.")) return;
+        if (action === "cancel" && !window.confirm("Cancel this goal? Its active runner will stop. Other linked jobs keep their own lifecycle.")) return;
         button.disabled = true;
         try {
           await request("goals", {action, goal_id: id, revision: goal.revision, confirm: action === "cancel"});
@@ -1616,8 +1877,13 @@ async function showGoal(id) {
   for (const [field, label] of [["blockers","Blockers"], ["evidence","Verification"], ["decisions","Decisions"], ["findings","Findings"]]) {
     goalItems(detail, label, goal[field], (row, value) => row.textContent = value);
   }
+  goalItems(detail, "Iteration history", execution?.history?.slice().reverse(), (row, turn) => {
+    const seconds = turn.ended_at - turn.started_at;
+    row.textContent = "#" + turn.number + " · " + turn.outcome + " · " + seconds + " s · " + turn.detail;
+  });
   goalItems(detail, "Jobs", goal.jobs, (row, job) => {
-    const button = add(row, "button", "Logs for " + job);
+    const button = add(row, "button", "Logs for " + job.slice(0, 8));
+    button.title = job;
     button.type = "button";
     const output = add(row, "pre", "");
     output.hidden = true;

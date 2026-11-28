@@ -8,7 +8,7 @@ use rustix::fd::AsFd;
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use serde_json::Value;
 
-use super::MAX_FRAME;
+use super::{Cancellation, MAX_FRAME};
 
 pub(super) struct Process {
     child: Child,
@@ -22,6 +22,7 @@ impl Process {
         args: &[String],
         bundle: Option<&std::path::Path>,
         workspace: Option<&super::workspace::Input>,
+        scratch: Option<&str>,
     ) -> io::Result<Self> {
         let mut worker = Command::new(std::env::current_exe()?);
         worker.arg("--mcp-upstream-worker");
@@ -36,6 +37,9 @@ impl Process {
                 .arg(input.identity[1].to_string())
                 .arg(&input.relative)
                 .arg(if input.tree { "tree" } else { "file" });
+        }
+        if let Some(path) = scratch {
+            worker.arg("--crate-scratch").arg(path);
         }
         let mut child = worker
             .arg(command)
@@ -62,7 +66,10 @@ impl Process {
         Ok(process)
     }
 
-    pub fn send(&mut self, message: &Value, deadline: Instant) -> io::Result<()> {
+    pub fn send(&mut self, message: &Value,
+        deadline: Instant,
+        cancellation: Option<&Cancellation>,
+    ) -> io::Result<()> {
         let mut payload = serde_json::to_vec(message)?;
         if payload.len() >= MAX_FRAME {
             return Err(io::Error::other("MCP message too large"));
@@ -71,7 +78,7 @@ impl Process {
         let mut data = payload.as_slice();
         let input = self.input.as_mut().expect("open stdin");
         while !data.is_empty() {
-            wait(input.as_fd(), PollFlags::OUT, deadline)?;
+            wait(input.as_fd(), PollFlags::OUT, deadline, cancellation)?;
             match input.write(data) {
                 Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
                 Ok(n) => data = &data[n..],
@@ -82,9 +89,16 @@ impl Process {
         Ok(())
     }
 
-    pub fn read(&mut self, deadline: Instant, remaining: &mut usize) -> io::Result<Value> {
+    pub fn read(&mut self, deadline: Instant,
+        remaining: &mut usize,
+        max_frame: usize,
+        cancellation: Option<&Cancellation>,
+    ) -> io::Result<Value> {
         let mut frame = Vec::new();
         loop {
+            if let Some(token) = cancellation {
+                token.check()?;
+            }
             if Instant::now() >= deadline {
                 return Err(io::ErrorKind::TimedOut.into());
             }
@@ -92,14 +106,14 @@ impl Process {
                 Ok([]) => return Err(io::ErrorKind::UnexpectedEof.into()),
                 Ok(bytes) => bytes,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    wait(self.output.get_ref().as_fd(), PollFlags::IN, deadline)?;
+                    wait(self.output.get_ref().as_fd(), PollFlags::IN, deadline, cancellation)?;
                     continue;
                 }
                 Err(error) => return Err(error),
             };
             let end = bytes.iter().position(|&byte| byte == b'\n');
             let n = end.map_or(bytes.len(), |idx| idx + 1);
-            if n > *remaining || frame.len() + n > MAX_FRAME {
+            if n > *remaining || frame.len() + n > max_frame {
                 return Err(io::Error::other("MCP response too large"));
             }
             *remaining -= n;
@@ -124,7 +138,15 @@ impl Drop for Process {
     }
 }
 
-fn wait(fd: impl AsFd, events: PollFlags, deadline: Instant) -> io::Result<()> {
+fn wait(
+    fd: impl AsFd,
+    events: PollFlags,
+    deadline: Instant,
+    cancellation: Option<&Cancellation>,
+) -> io::Result<()> {
+    if let Some(token) = cancellation {
+        token.check()?;
+    }
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining == Duration::ZERO {
         return Err(io::ErrorKind::TimedOut.into());
@@ -133,8 +155,15 @@ fn wait(fd: impl AsFd, events: PollFlags, deadline: Instant) -> io::Result<()> {
         tv_sec: remaining.as_secs() as i64,
         tv_nsec: i64::from(remaining.subsec_nanos()),
     };
-    let mut fds = [PollFd::new(&fd, events)];
-    if poll(&mut fds, Some(&timeout))? == 0 {
+    let ready = if let Some(token) = cancellation {
+        let mut fds = [PollFd::new(&fd, events), PollFd::new(token.fd(), PollFlags::IN)];
+        let ready = poll(&mut fds, Some(&timeout))?;
+        token.check()?;
+        ready
+    } else {
+        poll(&mut [PollFd::new(&fd, events)], Some(&timeout))?
+    };
+    if ready == 0 {
         return Err(io::ErrorKind::TimedOut.into());
     }
     Ok(())

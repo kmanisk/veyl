@@ -6,9 +6,30 @@ commands, durable jobs, native diagnostics, skills and upstream MCP servers.
 
 **Linux · Native Rust · Local or Tailscale · Web dashboard + terminal monitor**
 
+## Long-running goals
+
+Track a roadmap, acceptance criteria and verification evidence across MCP
+sessions. Use `veyl goal create`, `list`, `get`, `pause`, `resume` and `cancel`
+locally. To supply automatic model turns, explicitly select an approved adapter
+with `veyl goal run`. Each turn has a durable receipt and a bounded run budget.
+See [Durable development goals](docs/GOALS.md).
+
 ## Install
 
-Install the Linux beta from [GitHub Releases](https://github.com/kmanisk/veyl/releases). Download the Linux x86_64 bundle and `SHA256SUMS` into a private folder, verify `sha256sum -c SHA256SUMS`, and use the **verified new bundle's** `/absolute/path/to/bundle/veyl update --from-dir /absolute/path/to/bundle` for an existing installation. The 0.6 audit checkpoint migration requires the new updater; an older updater cannot safely reverse the schema change and is refused before migration. Keep the verified bundle until completion and use its `veyl update --recover` for interrupted transactions. The updater restores a verified legacy checkpoint format only when the current chain extends the original prefix and the policy remains unchanged; it refuses incompatible new history instead of discarding records. Veyl builds and distributes a single executable, `veyl`. The terminal monitor runs as `veyl monitor` (or `veyl tui`) and the experimental foreground loopback connector runs as `veyl connector`. The updater migrates legacy `mcp-gateway` and `veyl-monitor` installations to relative compatibility symlinks pointing at `veyl`, preserving the existing generated systemd unit. For the first migration, use the verified new bundle executable, not the older installed updater. Keep the new bundle for interrupted recovery. Release assets consist of `veyl`, `SHA256SUMS`, and GitHub's automatic source archives. No duplicate source bundles or separate monitor/connector executables are needed. To install the checked-out source:
+Download the Linux x86_64 `veyl` executable and `SHA256SUMS` from the
+published release. Keep both in a private directory and run
+`sha256sum -c SHA256SUMS`. For an existing installation, invoke the verified
+binary with `veyl update --from-dir /absolute/path/to/bundle`.
+
+Veyl distributes a single executable. Run the terminal monitor with
+`veyl tui` and use `veyl service install` for an opt-in systemd user service.
+The updater preserves compatibility aliases used by legacy installations.
+Keep the verified bundle for recovery. Schema-4 state requires a compatible
+reader, and the updater refuses rollback across an incompatible state change.
+See [permission and recovery documentation](docs/BROAD-YOLO.md).
+[GitHub Releases](https://github.com/kmanisk/veyl/releases)
+
+To install a checked-out source tree:
 
 ```sh
 cargo install --path . --locked --bin veyl
@@ -17,14 +38,14 @@ cargo install --path . --locked --bin veyl
 Veyl is open source under the MIT license. Source code and prebuilt Linux
 binaries are available on GitHub; see [crates.io](https://crates.io/crates/veyl) for published Cargo versions.
 
-Requires Linux, Bubblewrap (`bwrap`) and Git. Add Tailscale for remote
-access and a systemd user session for persistent service mode.
+Requires Linux. Standard execution and local stdio upstreams use Bubblewrap.
+Git tools require Git. Remote access uses the configured HTTPS tunnel.
 Cargo's bin directory must be on PATH.
 
 ## Connect a remote client — legacy bearer/secret-path compatibility
 
 The commands below describe the legacy bearer/secret-path compatibility path.
-For `0.7.0-beta`, prefer direct OAuth MCP over a public HTTPS
+For `0.8.0-beta`, prefer direct OAuth MCP over a public HTTPS
 endpoint (see the OAuth section below). No Veyl-hosted account, relay or
 standalone ChatGPT plugin is required by the direct architecture.
 
@@ -41,9 +62,9 @@ veyl setup --root "$PWD" --yolo
 
 Veyl creates the configuration, starts the user service, configures
 the Funnel route and opens the paired dashboard. The URL is itself a
-credential. Keep it private. YOLO enables the native developer tool preset
-and broad sandboxed access with protected paths excluded. See [ChatGPT setup](docs/CHATGPT.md)
-for prerequisites and troubleshooting.
+credential. Keep it private. Explicitly approved native YOLO runs as the
+gateway user and can access that user’s data, including Veyl state.
+[ChatGPT setup](docs/CHATGPT.md)
 
 ## Local only
 
@@ -55,39 +76,49 @@ veyl run
 Run the monitor or dashboard in another terminal. Ctrl+C stops the
 foreground gateway. Tailscale and systemd are not required for this flow.
 
-## Direct OAuth MCP (next-release candidate)
+## Unified Gateway & Direct OAuth MCP (`0.8.0-beta`)
 
 The client-independent remote interface is Streamable HTTP MCP with OAuth
-DCR, authorization-code PKCE S256, local consent and explicit scoped tools.
-Use the MCP connection settings of a compatible client; no separate plugin
-package or hosted connector is needed. Linux is the implemented gateway host;
-Windows and Android/Termux gateway ports are future work. A phone can connect
-to a remote Linux gateway only if its chosen AI client supports the connection.
-Actual ChatGPT, Claude and other client capability/plan support must be tested.
+DCR, authorization-code PKCE S256, local consent and explicit scoped tools,
+served from a single `veyl serve` process alongside configured loopback
+static clients under `~/.local/state/veyl/`. Use the MCP connection settings
+of a compatible client; no separate plugin package or hosted relay is needed.
+Linux is the implemented gateway host; Windows and Android/Termux gateway ports
+are future work.
 
-The simplest onboarding entry point uses one foreground command:
+Start and manage the unified gateway directly:
 
 ```sh
-veyl login
+veyl up --root "$PWD"          # initialize/reconcile unified state and start veyl serve
+veyl status                     # inspect unified state root, default_mode, runtime and clients
+veyl mode standard              # switch default_mode and enabled clients to Standard
+veyl mode yolo                  # typed YOLO confirmation (`Type YOLO to confirm:`) + update all enabled clients
+veyl clients                    # list static + OAuth registrations
+veyl clients revoke <ID|NAME>   # revoke a static or OAuth client permanently
+veyl down                       # stop the running foreground gateway or active veyl.service
 ```
 
-`veyl login` guides interactive workspace selection (defaulting to the
-current directory, or `--root DIR`), checks Tailscale MagicDNS/HTTPS/Funnel
-prerequisites on port 8443 or 10000, starts an owner-private profile in
-`~/.veyl-login/profile` defaulting new OAuth connections to **Standard**,
-copies the HTTPS `/mcp` URL to your clipboard when available, and opens the
-local dashboard (`--no-ui` suppresses browser launch). During local approval
-in the dashboard you can keep **Standard** (default) or explicitly select
-**YOLO** (native access as the gateway user, including Veyl state).
-
-Manage persisted per-connection modes and disconnect remote clients locally:
+Optional persistent systemd user unit (opt-in; disabled by default until explicitly started):
 
 ```sh
-veyl mode                          # list connected OAuth clients and modes
-veyl mode yolo <CLIENT_ID> --confirm-native  # Reauthorize the remote client
-veyl mode standard <CLIENT_ID>     # downgrade (denies elevated operations immediately)
-veyl logout --client <CLIENT_ID>   # revoke one OAuth connection
-veyl logout --all                  # revoke all managed OAuth connections and stop Funnel
+veyl service install            # writes ~/.config/systemd/user/veyl.service (inactive/disabled)
+veyl service enable --now       # explicitly enables and starts veyl.service
+```
+
+Tunnel providers for `veyl up` / `veyl serve`:
+- `--tailscale` (default when Tailscale is available): manages an owned foreground Tailscale Funnel lease cleanly and removes only Veyl's lease on exit.
+- `--cloudflare`: requires an explicit named tunnel (`--cf-hostname`, `--cf-tunnel`, `--cf-credentials`); ephemeral `.trycloudflare.com` quick tunnels are refused and `cloudflared` is never downloaded automatically.
+- `--local`: binds local loopback only with no public tunnel.
+
+Legacy `veyl login` / `veyl logout` and `~/.config/mcp-gateway` / `~/.veyl-login/profile` layouts are preserved and transactionally reconciled into `~/.local/state/veyl/` without overwriting existing credentials, jobs, goals, or audit history (live legacy processes/services must be stopped first). During dashboard consent, fresh unapproved OAuth registrations default to the persisted `default_mode` (`standard` unless switched to `yolo`), still requiring explicit local confirmation before granting access.
+
+Legacy targeted management remains supported:
+
+```sh
+veyl mode yolo <CLIENT_ID> --confirm-native  # reauthorize a specific client in YOLO mode
+veyl mode standard <CLIENT_ID>               # downgrade a specific client immediately
+veyl logout --client <CLIENT_ID>             # revoke one OAuth connection
+veyl logout --all                            # revoke all OAuth connections and stop tunnel
 ```
 
 For low-level manual Flag/Profile control (`veyl oauth setup/run`), choose a
@@ -223,7 +254,7 @@ The existing package generator is retained for future use; no plugin
 installation is required for direct MCP.
 Direct OAuth MCP onboarding (`veyl login`, `veyl logout`), per-connection
 Standard/YOLO mode selection, and interactive/upstream controls are included in
-the `0.7.0-beta` release candidate.
+the `0.8.0-beta` release.
 See [the direct remote plan](docs/development/DIRECT_REMOTE_PLAN.md).
 
 ## Dashboard and monitor
@@ -241,7 +272,7 @@ Enter for readable Activity command/target details (d toggles JSON), and l for j
 local dashboard's Capture button) for a bounded, temporary command/response trace.
 The durable audit remains metadata-only.
 
-## Upgrading to 0.7.0-beta
+## Upgrading to 0.8.0-beta
 
 Keep the verified single-executable bundle for forward recovery. Policy
 migration is an audited local step and disables latent native authority
@@ -265,20 +296,21 @@ live local-timezone AM/PM millisecond monitoring. TimeShift covers opt-in native
 
 | Command | Action |
 | --- | --- |
+| `veyl up` / `veyl serve` | Reconcile unified state (`~/.local/state/veyl/`) and run the single gateway runtime |
+| `veyl down` | Stop the foreground runtime or active `veyl.service` |
+| `veyl status` | Show unified state, `default_mode`, runtime, and client status |
 | `veyl ui` / `veyl dashboard` | Open the browser dashboard |
 | `veyl tui` / `veyl monitor` | Open the terminal monitor |
 | `veyl ui --remote` | Open the private Tailscale dashboard |
 | `veyl connect` | Copy your existing connector URL |
-| `veyl service on` | Start and enable the user service |
-| `veyl service status` | Inspect the service |
-| `veyl portable` | Switch from service to foreground |
-| `veyl mode` | List client modes |
-| `veyl mode get` | Show the selected client's mode and enabled state |
-| `veyl mode yolo --confirm-native` | Authorize native host-user execution and applicable tools |
-| `veyl mode standard` | Select workspace-restricted access with explicit tool grants |
+| `veyl service install` | Install opt-in `veyl.service` (inactive until enabled) |
+| `veyl service enable --now` | Enable and start `veyl.service` |
+| `veyl service status` | Inspect `veyl.service` (or pass `--config` for legacy units) |
+| `veyl mode` | List unified clients and `default_mode` |
+| `veyl mode yolo` / `standard` | Switch `default_mode` and apply to enabled static and OAuth clients |
+| `veyl clients [revoke]` | List or revoke unified static and OAuth clients |
 | `veyl goal list` | List durable development goals |
-| `veyl mode disable` | Disable client access |
-| `veyl mode enable` | Restore client access |
+| `veyl mode disable` / `enable` | Disable or restore static client access |
 | `veyl help` | Show commands |
 
 Mode changes take effect at the next admission. Disabling a client revokes

@@ -117,6 +117,13 @@ class WorkspaceTests(unittest.TestCase):
         args = {"path":str(self.sample),"delay":4.5}
         self.assertEqual(self.answer("rea__inspect_python_pyc",args)["content"],"original")
         self.assertTrue(self.call("rea__inspect_python_pyc",args,other=True)["isError"])
+        # An explicit file in the existing read-only runtime bundle gets the
+        # cold-start budget. A host path without a workspace grant does not.
+        bundle = self.answer("rea__inspect_python_pyc",
+                             {"path":"/upstream/bundle/server.py","delay":4.5},other=True)
+        self.assertTrue(bundle["visible"])
+        self.assertTrue(bundle["readonly"])
+        self.assertFalse(bundle["workspace"])
 
     def test_operator_revoke_and_regrant(self):
         self.f.cli("mcp-servers","unworkspace","primary","rea")

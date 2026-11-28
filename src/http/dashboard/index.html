@@ -57,31 +57,43 @@
       </section>
       <section aria-labelledby="clients" class="panel">
         <h2 id="clients">Clients</h2>
-        <div class="table">
+        <div class="row" id="client-default" hidden>
+          <label for="client-default-mode">Default for new OAuth approvals</label>
+          <select id="client-default-mode"><option value="standard">Standard</option><option value="yolo">YOLO</option></select>
+          <button id="client-default-save" type="button">Save default</button>
+        </div>
+        <div class="clients-table">
           <table>
-            <thead><tr><th scope="col">Client</th><th scope="col">Mode</th><th scope="col">Sessions</th><th scope="col">Grants</th></tr></thead>
+            <thead><tr><th scope="col">Client</th><th scope="col">Auth</th><th scope="col">Mode</th><th scope="col">Connection</th><th scope="col">Sessions</th><th scope="col">Actions</th></tr></thead>
             <tbody id="client-rows"></tbody>
           </table>
         </div>
         <p id="client-empty" hidden>No clients configured.</p>
-        <div class="section-card" id="client-grants-card">
-          <h3>Client tool grants</h3>
-          <p class="muted">Select a client and apply per-tool or bulk native tool grants. Existing YOLO presets remain active where configured.</p>
+        <p id="client-message" role="status"></p>
+        <details class="section-card" id="client-grants-card">
+          <summary>Static client tool grants</summary>
           <div class="row">
             <label for="grant-client">Client</label>
             <select id="grant-client"></select>
-            <button id="grant-all-safe" type="button">Select all eligible</button>
-            <button id="grant-git-all" type="button">Toggle Git tools</button>
-            <button id="grant-ext-all" type="button">Toggle extension tools</button>
-            <button id="grant-proc-all" type="button">Toggle process tools</button>
-            <button id="grant-native-save" type="button">Apply native grants</button>
+            <input id="grant-search" type="search" aria-label="Search tool grants" placeholder="Find a tool">
+            <button id="grant-native-save" type="button">Apply grants</button>
           </div>
-          <div id="native-grant-grid" class="grant-grid"></div>
+          <details class="grant-bulk">
+            <summary>Bulk selection</summary>
+            <div class="row">
+              <button id="grant-all-safe" type="button">Select all eligible</button>
+              <button id="grant-git-all" type="button">Toggle Git tools</button>
+              <button id="grant-ext-all" type="button">Toggle extension tools</button>
+              <button id="grant-proc-all" type="button">Toggle process tools</button>
+            </div>
+          </details>
+          <div id="native-grant-grid"></div>
+          <p id="grant-empty" hidden>No matching tools.</p>
           <div class="workspace-intro"><strong>TimeShift (optional)</strong><p>Grant rewind to capture pre-edit text snapshots; grant restore and clear separately. No shell or Git tracking. Rewind is excluded from bulk selection. When retention is full, checkpointed edits stop until you clear history or raise the limit.</p>
           <label>Retained checkpoints per client <input id="timeshift-retention" type="number" min="1" max="256" step="1" value="64"></label>
           <button id="timeshift-retention-save" type="button">Save retention</button>
           </div>
-        </div>
+        </details>
       </section>
       <section aria-labelledby="oauth" class="panel">
         <h2 id="oauth">OAuth connections</h2>

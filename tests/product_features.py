@@ -368,21 +368,24 @@ class ProductFeatures(unittest.TestCase):
         self.assertIn("local__probe", self.audit.read_text())
         self.assertNotIn("FIRED", self.audit.read_text())
 
-    def test_upstream_timeout_reaps_descendants(self):
+    def test_upstream_timeout_and_cancellation_reap_descendants(self):
         probe = self.base / "waiting.py"
-        source = STDIO_PEER.replace(
-            '            status = pathlib.Path("/proc/self/status").read_text()',
-            '            os.fork()\n            while True:\n                __import__("signal").pause()',
-        )
+        source = STDIO_PEER[:STDIO_PEER.index('        case "tools/call":')] + """
+        case "tools/call":
+            if req["params"]["arguments"].get("wait"):
+                os.fork()
+                while True:
+                    __import__("signal").pause()
+            result = {"content": [{"type": "text", "text": "ready after cleanup"}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
+"""
         probe.write_text(source)
         marker = "veyl_upstream_probe_" + secrets.token_hex(16)
         self.cli("mcp-servers", "add-stdio", "waiting", "/usr/bin/python3", probe, marker)
         self.cli("mcp-servers", "grant", "primary", "waiting", "probe")
         self.start()
         session = self.connect()
-        result = []
-        caller = threading.Thread(target=lambda: result.append(self.call("waiting__probe", {}, session)))
-        caller.start()
+        sibling = self.connect()
 
         def matching():
             processes = []
@@ -397,24 +400,42 @@ class ProductFeatures(unittest.TestCase):
                     processes.append(entry.name)
             return processes
 
-        child_observed = False
-        try:
-            deadline = time.monotonic() + 1.2
+        def wait_for(check, limit):
+            deadline = time.monotonic() + limit
             while time.monotonic() < deadline:
-                if len(matching()) > 1:
-                    child_observed = True
-                    break
+                if check():
+                    return
                 time.sleep(.015)
-        finally:
-            caller.join(timeout=5)
-        self.assertTrue(child_observed, "provider did not fork the disposable descendant")
-        self.assertFalse(caller.is_alive())
-        self.assertTrue(result[0]["isError"], result)
-        self.assertIn("timed out", result[0]["content"][0]["text"])
-        deadline = time.monotonic() + .8
-        while matching() and time.monotonic() < deadline:
-            time.sleep(.02)
-        self.assertEqual(matching(), [], "sandbox descendants survived the upstream timeout")
+            self.assertTrue(check(), "provider did not reach the expected process state")
+
+        for outcome in ("timed out", "cancelled"):
+            with self.subTest(outcome=outcome):
+                result = []
+                caller = threading.Thread(target=lambda: result.append(
+                    self.call("waiting__probe", {"wait": True}, session)))
+                caller.start()
+                try:
+                    wait_for(lambda: len(matching()) > 1, 1.2)
+                    if outcome == "cancelled":
+                        notice = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}}
+                        status, _, _ = self.request(self.mcp, "POST", "/mcp", notice,
+                            Authorization="Bearer " + OTHER_TOKEN, **{"Mcp-Session-Id": session})
+                        self.assertEqual(status, 403)
+                        self.rpc("notifications/cancelled", sibling, params={"requestId": 1})
+                        self.rpc("notifications/cancelled", session, params={"requestId": "1"})
+                        self.assertTrue(caller.is_alive())
+                        self.assertGreater(len(matching()), 1)
+                        self.rpc("notifications/cancelled", session, params={"requestId": 1})
+                        caller.join(timeout=.8)
+                        self.assertFalse(caller.is_alive(), "cancellation did not wake the upstream")
+                finally:
+                    caller.join(timeout=5)
+                self.assertFalse(caller.is_alive())
+                self.assertTrue(result[0]["isError"], result)
+                self.assertIn(outcome, result[0]["content"][0]["text"])
+                wait_for(lambda: not matching(), .8)
+                recovered = self.call("waiting__probe", {}, session)
+                self.assertEqual(recovered["content"][0]["text"], "ready after cleanup")
 
     def test_https_upstream_private_ca_bearer_and_sse(self):
         ca, leaf, key, csr = (self.base / name for name in ("ca.pem", "leaf.pem", "leaf.key", "leaf.csr"))
@@ -431,6 +452,8 @@ class ProductFeatures(unittest.TestCase):
                 "-days", "1", "-extfile", extensions, "-out", leaf)
         seen = []
         credential = "UPSTREAM_ONLY_BEARER_TEST_FIXTURE"
+        tool_started, tool_cancelled = threading.Event(), threading.Event()
+        provider_ids = {}
 
         class Peer(BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -458,6 +481,16 @@ class ProductFeatures(unittest.TestCase):
                 seen.append(method)
                 if method == "notifications/initialized":
                     self.reply(202)
+                    return
+                if method == "notifications/cancelled":
+                    provider_ids["cancelled"] = request["params"]["requestId"]
+                    tool_cancelled.set()
+                    self.reply(202)
+                    return
+                if method == "tools/call" and request["params"]["arguments"].get("wait"):
+                    provider_ids["running"] = request["id"]
+                    tool_started.set()
+                    tool_cancelled.wait(timeout=4)
                     return
                 value = {
                     "initialize": {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}},
@@ -497,6 +530,20 @@ class ProductFeatures(unittest.TestCase):
         self.assertNotIn(credential, self.audit.read_text())
         self.assertNotIn(credential, self.cli("dashboard", "servers"))
         self.assertTrue(self.call("tls__hello", {}, self.connect(OTHER_TOKEN), OTHER_TOKEN)["isError"])
+        replies = []
+        caller = threading.Thread(target=lambda: replies.append(self.call("tls__hello", {"wait": True}, session)))
+        caller.start()
+        try:
+            self.assertTrue(tool_started.wait(timeout=1.1))
+            self.rpc("notifications/cancelled", session, params={"requestId": 1})
+            self.assertTrue(tool_cancelled.wait(timeout=.8))
+            self.assertEqual(provider_ids["cancelled"], provider_ids["running"])
+            self.assertNotEqual(provider_ids["running"], 1)
+        finally:
+            caller.join(timeout=5)
+        self.assertFalse(caller.is_alive())
+        self.assertIn("cancelled", replies[0]["content"][0]["text"])
+        self.assertFalse(self.call("tls__hello", {}, session).get("isError"))
 
 
 if __name__ == "__main__":

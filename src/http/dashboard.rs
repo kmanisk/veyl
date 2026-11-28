@@ -457,7 +457,7 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         };
     }
     if method == Method::GET && path == "/api/dashboard/status" {
-        return status(state, admin, csrf).await;
+        return status(state, admin, csrf, remote).await;
     }
     if method == Method::GET && path == "/api/dashboard/servers" {
         return manage(admin, vec!["list".into()], crate::upstream::admin::manage).await;
@@ -567,6 +567,38 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         return match tokio::task::spawn_blocking(move || installer.state(&config)).await {
             Ok(Ok(val)) => ok(val),
             Ok(Err(err)) => json_response(Status::BAD_REQUEST, json!({"error": err}), None),
+            Err(_) => unavailable(),
+        };
+    }
+    if method == Method::POST && path == "/api/dashboard/clients/mode" {
+        if remote || mcp_gateway::http_common::one(request.headers(), "origin")
+            != Some(format!("http://{local}").as_str())
+        {
+            return forbidden();
+        }
+        let Ok(body) = body(request).await else { return bad(); };
+        if body["confirm"] != true {
+            return forbidden();
+        }
+        let config = admin.config.clone();
+        return match tokio::task::spawn_blocking(move || {
+            use crate::http::operator::Mode;
+            use crate::mode_cli::transition::{revoke_static_client, set_default, set_static_mode};
+
+            let mode = |value: &Value| match value.as_str() {
+                Some("standard") => Ok(Mode::Standard),
+                Some("yolo") => Ok(Mode::NativeYolo),
+                _ => Err("Invalid permission mode"),
+            };
+            match body["action"].as_str() {
+                Some("default") => set_default(&config, mode(&body["mode"])?),
+                Some("mode") => set_static_mode(&config, body["client"].as_str().ok_or("Missing client")?, mode(&body["mode"])?),
+                Some("revoke") => revoke_static_client(&config, body["client"].as_str().ok_or("Missing client")?),
+                _ => Err("Invalid client action".into()),
+            }
+        }).await {
+            Ok(Ok(())) => ok(json!({"updated":true})),
+            Ok(Err(error)) => json_response(Status::BAD_REQUEST, json!({"error":error}), None),
             Err(_) => unavailable(),
         };
     }
@@ -767,6 +799,9 @@ async fn route(request: Request<Incoming>, state: &Arc<State>) -> Reply {
         return match tokio::task::spawn_blocking(move || {
             let (_policy, settings) = state.policy.read()?;
             let goal = crate::goals::operator_call(state.policy.path(), &settings, None, tool, args)?;
+            if let Some(jobs) = state.jobs.as_ref() {
+                crate::goals::stop_active_runner(jobs, tool, &goal)?;
+            }
             if let Some(job_id) = job_id {
                 if !goal["jobs"].as_array().is_some_and(|jobs| jobs.iter().any(|job| job == &job_id)) {
                     return Err(String::from("Job is unavailable for this goal"));
@@ -874,18 +909,26 @@ async fn pair_with_ids(
     cookie(reply, &session, SESSION_TTL.as_secs())
 }
 
-async fn status(state: &Arc<State>, admin: &Admin, csrf: String) -> Reply {
+async fn status(state: &Arc<State>, admin: &Admin, csrf: String, remote: bool) -> Reply {
     let mut counts = HashMap::new();
+    let mut oauth_counts = HashMap::new();
+    let mut connected = 0;
     {
         let sessions = state.sessions.lock().await;
         for session in sessions
             .values()
             .filter(|s| s.is_live())
         {
-            *counts.entry(session.owner().clone()).or_insert(0) += 1;
+            connected += 1;
+            if let Some((_, registration)) = &session.scope().1 {
+                if !remote {
+                    *oauth_counts.entry(registration.clone()).or_insert(0) += 1;
+                }
+            } else {
+                *counts.entry(session.owner().clone()).or_insert(0) += 1;
+            }
         }
     }
-    let connected: usize = counts.values().sum();
     let cpu = std::fs::read_to_string("/proc/self/stat")
         .ok()
         .and_then(|stat| {
@@ -968,8 +1011,15 @@ async fn status(state: &Arc<State>, admin: &Admin, csrf: String) -> Reply {
             "jobs_configured": jobs_configured, "job_state_dir": settings.job_state_path(), "audit_log": settings.audit_log,
             "version": env!("CARGO_PKG_VERSION"), "skills_configured": settings.skills.is_some(),
             "oauth_preview": oauth_preview,
+            "default_mode": settings.default_mode.as_str(),
+            "oauth_sessions": oauth_counts,
+            "workspace": settings.workspace,
+            "unified": settings.oauth.is_some() || settings.default_mode_configured,
+            "cloudflare": settings.cloudflare.as_ref().map(|c| c.origin()),
+            "tailscale": settings.tailnet.as_ref().map(|t| t.authority(false)),
             "configuration": {
                 "authorization": if settings.managed { "Managed" } else { "Legacy" },
+                "default_mode": settings.default_mode.as_str(),
                 "native_yolo": native_yolo,
                 "configured_job_profiles": settings.jobs.is_some(),
                 "configured_skills_store": settings.skills.is_some(),
@@ -1043,13 +1093,22 @@ async fn job_request(
     let client = client.to_owned();
     let id = job_id.unwrap_or_default().to_owned();
     with_policy(admin, move |settings| {
-        if !settings.clients.iter().any(|entry| entry.id == client) {
+        let is_oauth = snapshot.oauth.as_ref().is_some_and(|o| {
+            (client == "oauth-preview" && o.workspace_jobs)
+                || (client == "oauth"
+                    && (o.unified || o.workspace_jobs)
+                    && !settings.clients.iter().any(|entry| entry.id == "oauth"))
+        });
+        if !is_oauth && !settings.clients.iter().any(|entry| entry.id == client) {
             return Err(Status::NOT_FOUND);
         }
         let jobs = snapshot.jobs.as_ref().ok_or(Status::NOT_FOUND)?;
-        let oauth=snapshot.oauth.as_ref().is_some_and(|o|o.workspace_jobs);
-        let owner=if oauth && !id.is_empty(){jobs.oauth_admin_owner(&id).map_err(|_|Status::NOT_FOUND)?} else {client};
-        let value = perform(jobs, &owner, &id,oauth).map_err(|error| match error.kind() {
+        let owner = if is_oauth && !id.is_empty() {
+            jobs.oauth_admin_owner(&id).map_err(|_| Status::NOT_FOUND)?
+        } else {
+            client
+        };
+        let value = perform(jobs, &owner, &id, is_oauth).map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound
             | std::io::ErrorKind::InvalidInput
             | std::io::ErrorKind::PermissionDenied => Status::NOT_FOUND,

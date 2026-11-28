@@ -11,7 +11,7 @@ import tempfile
 import time
 
 GIB = 1024 ** 3
-START_FREE = 40 * GIB
+START_FREE = 38 * GIB
 STOP_FREE = 15 * GIB
 INTERVAL = 0.5
 COMMANDS = {"build", "test", "check", "clippy"}
@@ -41,7 +41,7 @@ def stop_group(child):
 def supervise(command, env, paths, measure=free_bytes, stdout=None):
     available = measure(paths)
     if available < START_FREE:
-        print(f"Build refused: {available / GIB:.2f} GiB free; need 40 GiB.", file=sys.stderr)
+        print(f"Build refused: {available / GIB:.2f} GiB free; need {START_FREE / GIB:g} GiB.", file=sys.stderr)
         return 75
     child = subprocess.Popen(command, env=env, start_new_session=True, stdout=stdout)
     try:

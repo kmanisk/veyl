@@ -25,6 +25,9 @@ impl<O: PartialEq, S: PartialEq, P> OwnedSession<O, S, P> {
     pub fn owner(&self) -> &O {
         &self.owner
     }
+    pub fn scope(&self) -> &S {
+        &self.scope
+    }
     pub fn is_live(&self) -> bool {
         self.last_used.elapsed() < IDLE_TIMEOUT
     }

@@ -43,7 +43,8 @@ Build safety (2026-11-26 disk-exhaustion incident): use the on-demand
 `python3 -B tests/guarded_cargo.py <build|test|check|clippy> ...` wrapper for
 agent Cargo verification. It serializes cooperating builds with a shared
 lock, uses the canonical shared target/build cache, disables incremental and
-dev/test debug symbols, refuses admission below 40 GiB free, and stops its
+dev/test debug symbols, refuses admission below 38 GiB free (operator-approved
+2026-11-28 revision from 40 GiB), and stops its
 own process group below 15 GiB. No permanent watcher or automatic cleanup.
 Coordinate with other agents; unguarded builds and instantaneous disk spikes
 are not contained by this cooperative guard. Do not bypass a storage refusal.

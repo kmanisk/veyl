@@ -24,6 +24,7 @@ pub(super) struct Native {
     pub server: Server,
     pub legacy_operator: bool,
     pub managed_login: bool,
+    pub unified: bool,
     workspace_edit: bool,
     workspace_tools: bool,
     pub workspace_jobs: bool,
@@ -32,7 +33,7 @@ pub(super) struct Native {
     pub workspace_interactive: bool,
     funnel_advanced: bool,
     pub(super) bounded_workspace: bool,
-    verifier: [u8; 32],
+    verifier: Option<[u8; 32]>,
     root: PathBuf,
     durable_policy: Option<[u8; 32]>,
     durable_root: Option<(u64, u64)>,
@@ -40,13 +41,89 @@ pub(super) struct Native {
 }
 
 #[derive(Clone, Copy)]
-struct Scope {
+pub(super) struct Scope {
     edit: bool,
     tools: bool,
     jobs: bool,
     upstreams: bool,
     commands: bool,
     interactive: bool,
+}
+
+fn unified_oauth_tools(settings: &Configuration, scope: Scope, yolo: bool) -> (std::collections::HashSet<Tool>, Vec<Action>) {
+    use std::collections::HashSet;
+    let jobs = settings.jobs.is_some();
+    let skills = settings.skills.is_some();
+    let mut tools: HashSet<Tool> = if yolo {
+        Tool::ALL
+            .into_iter()
+            .filter(|tool| tool.in_yolo_preset(jobs, skills))
+            .collect()
+    } else {
+        let mut set = HashSet::from([
+            Tool::ReadFile,
+            Tool::GoalCreate,
+            Tool::GoalGet,
+            Tool::GoalList,
+            Tool::GoalUpdate,
+            Tool::GoalCheckpoint,
+            Tool::GoalNext,
+            Tool::GoalPause,
+            Tool::GoalResume,
+            Tool::GoalComplete,
+            Tool::GoalCancel,
+        ]);
+        if scope.edit {
+            set.extend([Tool::WriteFile, Tool::ApplyPatch, Tool::EditFile]);
+        }
+        if scope.tools {
+            set.extend([
+                Tool::CreateDirectory,
+                Tool::ListDirectory,
+                Tool::DirectoryTree,
+                Tool::FileInfo,
+                Tool::SearchFiles,
+            ]);
+        }
+        if scope.jobs && jobs {
+            set.extend([
+                Tool::RunCommand,
+                Tool::JobStart,
+                Tool::JobStatus,
+                Tool::JobLogs,
+                Tool::JobCancel,
+                Tool::ListJobs,
+                Tool::JobWait,
+            ]);
+            if scope.commands {
+                set.extend([Tool::ExecCommand, Tool::TaskRun]);
+            }
+            if scope.interactive {
+                set.extend([
+                    Tool::ProcessStart,
+                    Tool::ProcessInput,
+                    Tool::ProcessResize,
+                    Tool::ShellStatus,
+                    Tool::ShellReset,
+                ]);
+            }
+        }
+        if scope.upstreams && !settings.upstreams.empty() {
+            set.extend([Tool::UpstreamsList, Tool::UpstreamsCall]);
+        }
+        set
+    };
+    if !yolo && !skills {
+        tools.retain(|t| !matches!(t, Tool::SkillsList | Tool::SkillsRead));
+    }
+    let mut actions = vec![Action::ListTools];
+    for tool in &tools {
+        let action = tool.action();
+        if !actions.contains(&action) {
+            actions.push(action);
+        }
+    }
+    (tools, actions)
 }
 
 fn eligible_client(client: &Client, now: u64, scope: Scope) -> bool {
@@ -78,64 +155,142 @@ pub(super) fn job_owner(identity:&Identity)->String{
     format!("oauth-job-v1-{digest:x}")
 }
 
+pub(crate) fn compute_unified_binding(
+    config_canonical: &Path,
+    oauth_binding_digest: &[u8; 32],
+    local_client: &str,
+    workspace: &Path,
+    durable_id: &DurableObjectId,
+) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::json!([
+                "veyl-unified-oauth-v1",
+                oauth_binding_digest,
+                config_canonical,
+                local_client,
+                workspace,
+                durable_id,
+            ])
+            .to_string()
+            .as_bytes()
+        )
+    )
+}
+
 impl Native {
     pub fn consent(&self, state: &State, bytes: &[u8]) -> Reply {
         // Keep the native shared policy lock through the actual approval
         // transaction. Failure to read policy must not block revocation.
         let current = state.policy.read().ok();
-        let selected = current.as_ref().and_then(|(_,settings)|
-            self.client_index(settings,unix_seconds()).map(|i|&settings.clients[i]));
-        let profiles=current.as_ref().and_then(|(_,settings)|settings.jobs.as_ref()).and_then(|(_,profiles)|profiles.oauth_summary(self.workspace_interactive).ok());
-        let providers=selected.and_then(|client|current.as_ref().and_then(|(_,settings)|settings.upstreams.oauth_summary(&client.upstreams).ok()));
-        let eligible=selected.is_some() && state.mutations.available()
-            && (!self.workspace_jobs || profiles.is_some() && state.jobs.as_ref().is_some_and(crate::jobs::Jobs::oauth_launch_available))
-            && (!self.workspace_interactive || state.jobs.as_ref().is_some_and(|jobs| jobs.sessions_available(false)))
+        let selected = current.as_ref().and_then(|(_, settings)| {
+            self.client_index(settings, unix_seconds())
+                .map(|i| &settings.clients[i])
+        });
+        let unified_ok = current
+            .as_ref()
+            .is_some_and(|(_, settings)| self.unified_ready(settings));
+        let profiles = current
+            .as_ref()
+            .and_then(|(_, settings)| settings.jobs.as_ref())
+            .and_then(|(_, profiles)| profiles.oauth_summary(self.workspace_interactive).ok());
+        let providers = if let Some(client) = selected {
+            current
+                .as_ref()
+                .and_then(|(_, settings)| settings.upstreams.oauth_summary(&client.upstreams).ok())
+        } else if unified_ok {
+            current.as_ref().and_then(|(_, settings)| {
+                let tools = settings.oauth.as_ref()?.allowed_server_tools.as_ref()?;
+                settings.upstreams.unified_oauth_summary(tools).ok()
+            })
+        } else {
+            None
+        };
+        let eligible = (selected.is_some() || unified_ok)
+            && state.mutations.available()
+            && (!self.workspace_jobs
+                || profiles.is_some()
+                    && state
+                        .jobs
+                        .as_ref()
+                        .is_some_and(crate::jobs::Jobs::oauth_launch_available))
+            && (!self.workspace_interactive
+                || state
+                    .jobs
+                    .as_ref()
+                    .is_some_and(|jobs| jobs.sessions_available(false)))
             && (!self.workspace_upstreams || providers.is_some());
-        let tools=selected.map(|client| {
-            let mut names:Vec<_>=client.tools.iter().map(|t|t.name()).collect();
+        let scope_struct = Scope {
+            edit: self.workspace_edit,
+            tools: self.workspace_tools,
+            jobs: self.workspace_jobs,
+            upstreams: self.workspace_upstreams,
+            commands: self.workspace_commands,
+            interactive: self.workspace_interactive,
+        };
+        let tools = if let Some(client) = selected {
+            let mut names: Vec<_> = client.tools.iter().map(|t| t.name()).collect();
             names.sort_unstable();
             names
-        }).unwrap_or_default();
-        let mut scope=serde_json::json!({
-            "root":self.root,"mode":"standard","workspace_edit":self.workspace_edit,"tools":tools
+        } else if unified_ok {
+            let settings = &current.as_ref().unwrap().1;
+            let (set, _) = unified_oauth_tools(settings, scope_struct, false);
+            let mut names: Vec<_> = set.into_iter().map(|t| t.name()).collect();
+            names.sort_unstable();
+            names
+        } else {
+            Vec::new()
+        };
+        let mut scope = serde_json::json!({
+            "root": self.root, "mode": "standard", "workspace_edit": self.workspace_edit, "tools": tools
         });
         if self.workspace_jobs {
-            scope["workspace_jobs"]=serde_json::json!(true);
-            scope["job_profiles"]=serde_json::json!(profiles);
-            scope["jobs_may_write_workspace"]=serde_json::json!(true);
+            scope["workspace_jobs"] = serde_json::json!(true);
+            scope["job_profiles"] = serde_json::json!(profiles);
+            scope["jobs_may_write_workspace"] = serde_json::json!(true);
         }
         if self.workspace_upstreams {
-            scope["workspace_upstreams"]=serde_json::json!(true);
-            scope["upstream_providers"]=serde_json::json!(providers);
-            scope["upstream_shared_state"]=serde_json::json!(true);
+            scope["workspace_upstreams"] = serde_json::json!(true);
+            scope["upstream_providers"] = serde_json::json!(providers);
+            scope["upstream_shared_state"] = serde_json::json!(true);
         }
         if self.workspace_commands {
-            scope["workspace_commands"]=serde_json::json!(true);
-            scope["dynamic_command_scope"]=serde_json::json!({"arbitrary_code":true,"offline":true,"workspace_writable":true,
-                "cwd":"workspace_root_only","runtime_seconds_max":300,"cpu_percent_max":100,"memory_bytes_max":268435456,
-                "output_bytes_per_stream_max":65536,"wait_seconds_max":2,"ephemeral_worktree":false,"interactive":false});
+            scope["workspace_commands"] = serde_json::json!(true);
+            scope["dynamic_command_scope"] = serde_json::json!({
+                "arbitrary_code": true, "offline": true, "workspace_writable": true,
+                "cwd": "workspace_root_only", "runtime_seconds_max": 300, "cpu_percent_max": 100,
+                "memory_bytes_max": 268435456, "output_bytes_per_stream_max": 65536,
+                "wait_seconds_max": 2, "ephemeral_worktree": false, "interactive": false
+            });
         }
         if self.workspace_interactive {
-            scope["workspace_interactive"]=serde_json::json!(true);
-            scope["interactive_session_scope"]=serde_json::json!({"stdin":true,"pty":true,"resize":true,"offline":true,
-                "workspace_writable":true,"cwd":"workspace_root_only","runtime_seconds_max":300,"cpu_percent_max":100,
-                "memory_bytes_max":268435456,"output_bytes_per_stream_max":65536});
+            scope["workspace_interactive"] = serde_json::json!(true);
+            scope["interactive_session_scope"] = serde_json::json!({
+                "stdin": true, "pty": true, "resize": true, "offline": true,
+                "workspace_writable": true, "cwd": "workspace_root_only", "runtime_seconds_max": 300,
+                "cpu_percent_max": 100, "memory_bytes_max": 268435456, "output_bytes_per_stream_max": 65536
+            });
         }
         if self.bounded_workspace {
-            scope["bounded_workspace"]=serde_json::json!({
-                "backend":"tmpfs","max_bytes":mcp_gateway::security::linux_fs::OAUTH_WORKSPACE_MAX_BYTES,
-                "max_inodes":mcp_gateway::security::linux_fs::OAUTH_WORKSPACE_MAX_INODES,
-                "volatile":true
+            scope["bounded_workspace"] = serde_json::json!({
+                "backend": "tmpfs",
+                "max_bytes": mcp_gateway::security::linux_fs::OAUTH_WORKSPACE_MAX_BYTES,
+                "max_inodes": mcp_gateway::security::linux_fs::OAUTH_WORKSPACE_MAX_INODES,
+                "volatile": true
             });
         }
         if self.funnel_advanced {
-            scope["funnel_advanced"]=serde_json::json!(true);
-            scope["public_capability_limits"]=serde_json::json!({"public_https":true,"local_approval_required":true,
-                "workspace_disk_quota_enforced":self.bounded_workspace,"upstream_shared_state":self.workspace_upstreams});
+            scope["funnel_advanced"] = serde_json::json!(true);
+            scope["public_capability_limits"] = serde_json::json!({
+                "public_https": true,
+                "local_approval_required": true,
+                "workspace_disk_quota_enforced": self.bounded_workspace,
+                "upstream_shared_state": self.workspace_upstreams
+            });
         }
         let yolo_scope = if self.managed_login && eligible {
             current.as_ref().and_then(|(_, settings)| {
-                let client = selected?;
                 if !settings.managed
                     || settings.jobs.is_none()
                     || !state.jobs.as_ref().is_some_and(crate::jobs::Jobs::available)
@@ -144,14 +299,22 @@ impl Native {
                 }
                 let jobs = settings.jobs.is_some();
                 let skills = settings.skills.is_some();
-                let mut yolo_tools: Vec<_> = Tool::ALL
-                    .into_iter()
-                    .filter(|tool| {
-                        tool.in_yolo_preset(jobs, skills)
-                            && !client.denied_actions.contains(&tool.action())
-                    })
-                    .map(|tool| tool.name())
-                    .collect();
+                let mut yolo_tools: Vec<_> = if let Some(client) = selected {
+                    Tool::ALL
+                        .into_iter()
+                        .filter(|tool| {
+                            tool.in_yolo_preset(jobs, skills)
+                                && !client.denied_actions.contains(&tool.action())
+                        })
+                        .map(|tool| tool.name())
+                        .collect()
+                } else {
+                    Tool::ALL
+                        .into_iter()
+                        .filter(|tool| tool.in_yolo_preset(jobs, skills))
+                        .map(|tool| tool.name())
+                        .collect()
+                };
                 yolo_tools.sort_unstable();
                 Some(serde_json::json!({
                     "root": self.root,
@@ -166,8 +329,11 @@ impl Native {
         } else {
             None
         };
+        let default_mode = current
+            .as_ref()
+            .map_or(ConnectionMode::Standard, |(_, s)| s.default_mode);
         self.server
-            .local_consent_with_modes(bytes, eligible, scope, yolo_scope)
+            .local_consent_with_default(bytes, eligible, scope, yolo_scope, default_mode)
     }
     pub fn open(origin: &str, settings: &Configuration, config_path: &Path, automated: Option<serde_json::Value>, funnel:bool) -> Result<Self, String> {
         // Public ingress is selected only by automated onboarding after
@@ -300,6 +466,7 @@ impl Native {
             server,
             legacy_operator,
             managed_login,
+            unified: false,
             workspace_edit,
             workspace_tools,
             workspace_jobs,
@@ -308,7 +475,7 @@ impl Native {
             workspace_interactive,
             funnel_advanced,
             bounded_workspace,
-            verifier: client.credential_digest(),
+            verifier: Some(client.credential_digest()),
             root: client.root.clone(),
             durable_policy,
             durable_root,
@@ -316,13 +483,130 @@ impl Native {
         })
     }
 
+    pub fn open_unified(
+        origin: &str,
+        settings: &Configuration,
+        config_path: &Path,
+        ingress: oauth_http::IngressKind,
+        initialize: bool,
+    ) -> Result<Self, String> {
+        let oauth_cfg = settings
+            .oauth
+            .as_ref()
+            .ok_or("Unified OAuth settings missing")?;
+        let workspace = settings
+            .workspace
+            .as_ref()
+            .ok_or("Unified OAuth workspace missing")?;
+        if !settings.managed || settings.jobs.is_none() || settings.audit_log.is_none() {
+            return Err("Unified OAuth requires managed policy, audit ledger, and jobs config".into());
+        }
+        let dir = &oauth_cfg.state_dir;
+        if !dir.exists() {
+            if initialize {
+                std::fs::create_dir_all(dir).map_err(|_| "Cannot create OAuth state dir")?;
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                    .map_err(|_| "Cannot secure OAuth state dir")?;
+            } else {
+                return Err("Unified OAuth state directory unavailable".into());
+            }
+        }
+        let canonical = dir.canonicalize().map_err(|_| "State directory unavailable")?;
+        let root_meta = std::fs::symlink_metadata(workspace).map_err(|_| "Root unavailable")?;
+        if !root_meta.is_dir() {
+            return Err("Root unavailable".into());
+        }
+        let root_fd = open_absolute_dir(workspace).map_err(|_| "Root unavailable")?;
+        let root_stat = rustix::fs::fstat(&root_fd).map_err(|_| "Root unavailable")?;
+        if (root_stat.st_dev, root_stat.st_ino) != (root_meta.dev(), root_meta.ino()) {
+            return Err("Root unavailable".into());
+        }
+        let durable_id = DurableObjectId::probe(&root_fd, &root_stat)
+            .map_err(|_| "Root filesystem identity unavailable")?;
+        let config_canonical = config_path.canonicalize().map_err(|_| "Policy unavailable")?;
+        let binding = compute_unified_binding(
+            &config_canonical,
+            &settings.oauth_binding_digest,
+            &oauth_cfg.local_client,
+            workspace,
+            &durable_id,
+        );
+        let operator = mcp_gateway::core::session::random_id::<32>()
+            .map_err(|_| "Secure randomness unavailable")?;
+        let config_val = serde_json::json!({
+            "operator_token": operator,
+            "local_fixture_client": oauth_cfg.local_client,
+        });
+        let server = oauth_http::open_durable_with_legacy(
+            origin,
+            config_val,
+            &canonical,
+            &binding,
+            None,
+            initialize,
+        )?;
+        let server = match ingress {
+            oauth_http::IngressKind::TailscaleFunnel => server.with_funnel_ingress(),
+            oauth_http::IngressKind::CloudflareTunnel => server.with_cloudflare_ingress(),
+            oauth_http::IngressKind::Direct => server,
+        };
+        Ok(Self {
+            server,
+            legacy_operator: false,
+            managed_login: true,
+            unified: true,
+            workspace_edit: oauth_cfg.workspace_edit,
+            workspace_tools: oauth_cfg.workspace_tools,
+            workspace_jobs: oauth_cfg.workspace_jobs,
+            workspace_upstreams: oauth_cfg.workspace_upstreams,
+            workspace_commands: oauth_cfg.workspace_commands,
+            workspace_interactive: oauth_cfg.workspace_interactive,
+            funnel_advanced: oauth_cfg.funnel_advanced,
+            bounded_workspace: false,
+            verifier: None,
+            root: workspace.clone(),
+            durable_policy: Some(settings.oauth_binding_digest),
+            durable_root: Some((root_meta.dev(), root_meta.ino())),
+            durable_state_dir: Some(canonical),
+        })
+    }
+
+    pub fn unified_ready(&self, settings: &Configuration) -> bool {
+        if !self.unified {
+            return false;
+        }
+        if self.durable_policy.is_some_and(|digest| digest != settings.oauth_binding_digest) {
+            return false;
+        }
+        if let Some(expected) = self.durable_root {
+            let Ok(metadata) = std::fs::symlink_metadata(&self.root) else {
+                return false;
+            };
+            if !metadata.is_dir() || (metadata.dev(), metadata.ino()) != expected {
+                return false;
+            }
+        }
+        settings.oauth.as_ref().is_some_and(|o| {
+            o.enabled
+                && o.local_client == self.server.local_client()
+                && settings.workspace.as_ref() == Some(&self.root)
+                && settings.managed
+                && settings.jobs.is_some()
+        })
+    }
+
     pub fn client_index(&self, settings: &Configuration, now: u64) -> Option<usize> {
+        if self.unified {
+            return None;
+        }
         if settings.tailnet.is_some() || self.durable_policy.is_some_and(|digest| digest!=settings.digest) { return None; }
         if self.bounded_workspace && mcp_gateway::security::linux_fs::bounded_oauth_workspace(&self.root).is_err() { return None; }
         if let Some(expected) = self.durable_root {
             let metadata = std::fs::symlink_metadata(&self.root).ok()?;
             if !metadata.is_dir() || (metadata.dev(),metadata.ino()) != expected { return None; }
         }
+        let verifier = self.verifier?;
         let scope = Scope {
             edit: self.workspace_edit,
             tools: self.workspace_tools,
@@ -332,16 +616,53 @@ impl Native {
             interactive: self.workspace_interactive,
         };
         settings.clients.iter().position(|c| c.id == self.server.local_client() && c.root == self.root
-            && c.has_digest(&self.verifier) && eligible_client(c, now, scope)
+            && c.has_digest(&verifier) && eligible_client(c, now, scope)
             && (!self.workspace_jobs || settings.jobs.as_ref().is_some_and(|(_,p)|p.oauth_summary(self.workspace_interactive).is_ok()))
             && (!self.workspace_upstreams || settings.upstreams.oauth_summary(&c.upstreams).is_ok()))
     }
 
-    pub fn admit(&self, settings: &Configuration, bearer: Option<&str>, now: u64) -> Option<(usize, Identity)> {
+    pub fn admit(&self, settings: &Configuration, bearer: Option<&str>, now: u64) -> Option<(Option<usize>, Identity)> {
         let identity = self.server.authenticate(bearer)?;
+        if self.unified {
+            if !self.unified_ready(settings) || identity.local_client != self.server.local_client() {
+                return None;
+            }
+            return Some((None, identity));
+        }
         let index = self.client_index(settings, now)?;
         if identity.local_client != settings.clients[index].id { return None; }
-        Some((index, identity))
+        Some((Some(index), identity))
+    }
+
+    pub fn resolve_unified_client(
+        &self,
+        settings: &Configuration,
+        identity: &Identity,
+        now: u64,
+    ) -> Result<Client, &'static str> {
+        if !self.unified_ready(settings) || identity.local_client != self.server.local_client() {
+            return Err("OAuth policy unavailable or restart required");
+        }
+        let yolo = identity.mode == ConnectionMode::Yolo;
+        let scope = Scope {
+            edit: self.workspace_edit,
+            tools: self.workspace_tools,
+            jobs: self.workspace_jobs,
+            upstreams: self.workspace_upstreams,
+            commands: self.workspace_commands,
+            interactive: self.workspace_interactive,
+        };
+        let (tools, actions) = unified_oauth_tools(settings, scope, yolo);
+        let expires_at = identity.expires_at.max(now.saturating_add(1));
+        Client::from_unified_oauth(
+            self.server.local_client().to_owned(),
+            self.root.clone(),
+            actions,
+            tools,
+            yolo,
+            expires_at,
+            settings,
+        )
     }
 
     pub fn resolve_client_override(

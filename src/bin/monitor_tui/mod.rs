@@ -1,13 +1,14 @@
-//! Terminal activity monitor. No persistent workers or terminal dependencies.
+//! Terminal activity monitor with no persistent workers.
 use super::{Monitor, clean_id};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::termios::{OptionalActions, Termios, tcgetattr, tcgetwinsize, tcsetattr};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
     time::{Duration, Instant},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const VIEWS: [&str; 8] = [
     "health",
@@ -101,15 +102,15 @@ impl Drop for Screen {
     }
 }
 
-// All remote strings are escaped before reaching the terminal. Keep
-// single-column printable characters so clipping is exact in any locale.
+// Control characters and bidirectional overrides can change terminal state
+// or falsify the displayed order of trusted fields.
 fn safe(text: &str) -> String {
     text.chars()
         .map(|c| {
-            if c.is_ascii_graphic() || c == ' ' {
-                c
-            } else {
+            if c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
                 '?'
+            } else {
+                c
             }
         })
         .collect()
@@ -124,12 +125,77 @@ fn strval(value: &Value) -> String {
     }
 }
 fn cell(text: &str, width: usize) -> String {
-    let mut s: String = safe(text).chars().take(width).collect();
-    if s.len() < width {
-        s.push_str(&" ".repeat(width - s.len()));
+    let mut result = String::new();
+    let mut used = 0;
+    for character in safe(text).chars() {
+        let size = character.width().unwrap_or(0);
+        if used + size > width {
+            break;
+        }
+        used += size;
+        result.push(character);
     }
-    s
+    result.push_str(&" ".repeat(width - used));
+    result
 }
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut line = String::new();
+    let mut used = 0;
+    let mut rows = Vec::new();
+    for character in safe(text).chars() {
+        let size = character.width().unwrap_or(0);
+        if used + size > width && !line.is_empty() {
+            rows.push(std::mem::take(&mut line));
+            used = 0;
+        }
+        if size <= width {
+            line.push(character);
+            used += size;
+        }
+    }
+    rows.push(line);
+    rows
+}
+fn short_path(path: &str, width: usize) -> String {
+    let short = std::env::var("HOME")
+        .ok()
+        .and_then(|home| {
+            path.strip_prefix(&home)
+                .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+                .map(|suffix| format!("~{suffix}"))
+        })
+        .unwrap_or_else(|| path.to_owned());
+    if short.width() <= width {
+        return short;
+    }
+    let mut used = 1;
+    let mut tail = Vec::new();
+    for c in short.chars().rev() {
+        used += c.width().unwrap_or_default();
+        if used > width {
+            break;
+        }
+        tail.push(c);
+    }
+    std::iter::once('…').chain(tail.into_iter().rev()).collect()
+}
+fn short_id(value: &Value) -> String {
+    strval(value).chars().take(8).collect()
+}
+fn job_state(job: &Value) -> String {
+    if job["state"] == "completed" {
+        if job["exit_code"].as_i64().is_some_and(|code| code != 0)
+            || job["signal"].as_i64().is_some_and(|sig| sig > 0)
+        {
+            return "failed".into();
+        }
+        if job["exit_code"] == 0 {
+            return "success".into();
+        }
+    }
+    strval(&job["state"])
+}
+
 fn row(out: &mut String, text: &str, width: usize, color: &str) {
     out.push_str(color);
     out.push_str(&cell(text, width));
@@ -274,6 +340,10 @@ struct View {
     confirm: Option<String>,
     notice: String,
     cursor: String,
+    sort_ascending: bool,
+    probes: std::collections::BTreeMap<String, Value>,
+    oauth_clients: Vec<Value>,
+    next_oauth_sample: Option<Instant>,
 }
 impl View {
     fn live_status(&self) -> (String, &'static str) {
@@ -314,11 +384,19 @@ impl View {
             .to_ascii_lowercase()
             .contains(&self.filter.to_ascii_lowercase())
     }
+    fn filtered(&self, key: &str) -> Vec<Value> {
+        let mut rows = table_rows(&self.value, key);
+        if !self.filter.is_empty() {
+            rows.retain(|row| self.matches(row));
+        }
+        if self.sort_ascending {
+            rows.reverse();
+        }
+        rows
+    }
+
     fn activity_rows(&self) -> Vec<Value> {
-        table_rows(&self.value, "events")
-            .into_iter()
-            .filter(|value| self.matches(value))
-            .collect()
+        self.filtered("events")
     }
     fn trace_preview(&self, call: &Value) -> Option<String> {
         if !self.trace_enabled || self.trace_until.is_none_or(|until| Instant::now() >= until) {
@@ -385,10 +463,16 @@ impl View {
     }
 
     fn refresh_interval(&self) -> Duration {
-        if (self.tab == 3 && !self.audit_ledger) || self.tab == 2 {
+        if self.trace_enabled && matches!(self.tab, 2 | 3) {
             Duration::from_millis(500)
-        } else {
+        } else if self.logs.is_some()
+            || self.tab == 3 && self.health["active_calls"].as_u64().unwrap_or_default() > 0
+        {
+            Duration::from_secs(1)
+        } else if self.tab == 2 || self.tab == GOALS || self.tab == 3 {
             Duration::from_secs(2)
+        } else {
+            Duration::from_secs(5)
         }
     }
 
@@ -427,15 +511,9 @@ impl View {
         match self.tab {
             2 => self.job_rows().get(self.selected).cloned(),
             3 => self.activity_rows().get(self.selected).cloned(),
-            1 => table_rows(&self.value, "clients")
-                .get(self.selected)
-                .cloned(),
-            4 => table_rows(&self.value, "skills")
-                .get(self.selected)
-                .cloned(),
-            5 => table_rows(&self.value, "servers")
-                .get(self.selected)
-                .cloned(),
+            1 => self.filtered("clients").get(self.selected).cloned(),
+            4 => self.filtered("skills").get(self.selected).cloned(),
+            5 => self.filtered("servers").get(self.selected).cloned(),
             GOALS => self.goal_rows().get(self.selected).cloned(),
             _ => Some(self.value.clone()),
         }
@@ -445,11 +523,21 @@ impl View {
             && self.logs.is_none()
             && let Some(mut value) = self.selected_record()
         {
+            if self.tab == 5
+                && let Some(probe) = value["id"].as_str().and_then(|id| self.probes.get(id))
+            {
+                value["latest_probe"] = probe.clone();
+            }
             if self.tab == GOALS {
-                let Some(id) = value["id"].as_str().filter(|s| clean_id(s)) else { return; };
+                let Some(id) = value["id"].as_str().filter(|s| clean_id(s)) else {
+                    return;
+                };
                 match monitor.request(&format!("goals?goal_id={id}"), None) {
                     Ok((goal, _)) => value = goal,
-                    Err(error) => { self.notice = error; return; }
+                    Err(error) => {
+                        self.notice = error;
+                        return;
+                    }
                 }
             }
             if (self.tab == 2 || self.tab == 3 && !self.audit_ledger) && self.trace_enabled {
@@ -467,11 +555,22 @@ impl View {
         }
     }
     fn goal_log(&mut self, monitor: &Monitor) {
-        let Some(record) = self.details.as_ref() else { return; };
+        let Some(record) = self.details.as_ref() else {
+            return;
+        };
         let goal = record.get("goal").unwrap_or(record);
-        let Some(id) = goal["id"].as_str().filter(|id| clean_id(id)) else { return; };
-        let Some(jobs) = goal["jobs"].as_array().filter(|jobs| !jobs.is_empty()) else { return; };
-        let Some(job) = jobs[self.goal_log_index % jobs.len()].as_str().filter(|id| clean_id(id)) else { return; };
+        let Some(id) = goal["id"].as_str().filter(|id| clean_id(id)) else {
+            return;
+        };
+        let Some(jobs) = goal["jobs"].as_array().filter(|jobs| !jobs.is_empty()) else {
+            return;
+        };
+        let Some(job) = jobs[self.goal_log_index % jobs.len()]
+            .as_str()
+            .filter(|id| clean_id(id))
+        else {
+            return;
+        };
         match monitor.request(&format!("goals?goal_id={id}&job_id={job}"), None) {
             Ok((logs, _)) => {
                 self.details = Some(serde_json::json!({"goal":goal,"logs":logs,"job_id":job}));
@@ -482,31 +581,178 @@ impl View {
         }
     }
     fn goal_rows(&self) -> Vec<Value> {
-        table_rows(&self.value, "goals").into_iter().filter(|goal| self.matches(goal)).collect()
+        self.filtered("goals")
     }
     fn goal_action(&mut self, monitor: &Monitor, action: &str) {
         if let Some(goal) = self.selected_record() {
             self.notice = monitor.request(
-                "goals", Some(serde_json::json!({
+                "goals", Some(json!({
                     "action": action, "goal_id": goal["id"], "revision": goal["revision"], "confirm": true
                 })),
             ).err().unwrap_or_default();
         }
     }
     fn job_rows(&self) -> Vec<Value> {
-        let mut rows: Vec<_> = table_rows(&self.value, "jobs")
-            .into_iter()
-            .filter(|job| {
-                self.filter.is_empty()
-                    || job
-                        .to_string()
-                        .to_ascii_lowercase()
-                        .contains(&self.filter.to_ascii_lowercase())
-            })
-            .collect();
-        rows.sort_by_key(|v| std::cmp::Reverse(v["created_at"].as_u64().unwrap_or(0)));
+        let mut rows = self.filtered("jobs");
+        if self.sort_ascending {
+            rows.sort_by_key(|job| job["created_at"].as_u64().unwrap_or_default());
+        } else {
+            rows.sort_by_key(|job| {
+                std::cmp::Reverse(job["created_at"].as_u64().unwrap_or_default())
+            });
+        }
         rows
     }
+
+    fn client_action(&mut self, monitor: &Monitor, action: &str) {
+        let Some(client) = self.selected_record() else {
+            return;
+        };
+        let oauth = client["authentication"] == "OAuth";
+        let (route, key) = if oauth {
+            ("oauth", "client_id")
+        } else {
+            ("clients/mode", "client")
+        };
+        let mut args =
+            json!({"action":if action == "revoke" { action } else { "mode" }, "confirm":true});
+        args[key] = client["id"].clone();
+        if action != "revoke" {
+            args["mode"] = action.into();
+        }
+        match monitor.request(route, Some(args)) {
+            Ok(_) => {
+                self.next_oauth_sample = None;
+                self.notice.clear();
+            }
+            Err(error) => self.notice = error,
+        }
+    }
+
+    fn probe(&mut self, monitor: &Monitor) {
+        let Some(record) = self.selected_record() else {
+            return;
+        };
+        let Some(id) = record["id"].as_str() else {
+            return;
+        };
+        match monitor.request(
+            "servers",
+            Some(json!({"action":"probe","id":id,"confirm":true})),
+        ) {
+            Ok((probe, _)) => {
+                self.probes.insert(id.to_owned(), probe);
+                self.notice.clear();
+                self.open_details(monitor);
+            }
+            Err(error) => self.notice = error,
+        }
+    }
+
+    fn goal_detail_rows(&self, goal: &Value) -> Vec<(String, &'static str)> {
+        let mut rows = Vec::new();
+        let mut item = |text: String, color| {
+            rows.extend(
+                wrap(&text, self.detail_width.saturating_sub(2).max(1))
+                    .into_iter()
+                    .map(|line| (line, color)),
+            )
+        };
+        item(strval(&goal["description"]), "\x1b[1m");
+        item(
+            format!(
+                "{}  {}  {}",
+                strval(&goal["state"]),
+                strval(&goal["owner"]),
+                strval(&goal["workspace"])
+            ),
+            "",
+        );
+        let execution = &goal["execution"];
+        if let Some(active) = execution["active"]["number"].as_u64() {
+            item(
+                format!(
+                    "Iteration {active} running · job {}",
+                    short_id(&execution["active"]["job_id"])
+                ),
+                "\x1b[36m",
+            );
+        }
+        for (label, value) in [
+            ("Active task", &goal["active_task"]),
+            ("Progress", &goal["progress"]),
+            ("Stopped", &execution["stop_reason"]),
+        ] {
+            if value.as_str().is_some_and(|text| !text.is_empty()) {
+                item(format!("{label}: {}", strval(value)), "");
+            }
+        }
+        fn roadmap(tasks: &Value, depth: usize, output: &mut Vec<(String, &'static str)>) {
+            for task in tasks.as_array().into_iter().flatten() {
+                let done = task["completed"] == true;
+                output.push((
+                    format!(
+                        "{}{} {}",
+                        "  ".repeat(depth),
+                        if done { "[x]" } else { "[ ]" },
+                        strval(&task["description"])
+                    ),
+                    if done { "\x1b[32m" } else { "" },
+                ));
+                roadmap(&task["subtasks"], depth + 1, output);
+            }
+        }
+        let mut tasks = Vec::new();
+        roadmap(&goal["roadmap"], 0, &mut tasks);
+        item("Roadmap".into(), "\x1b[1m");
+        for (text, color) in tasks {
+            item(text, color);
+        }
+        item("Acceptance criteria".into(), "\x1b[1m");
+        for criterion in goal["acceptance_criteria"].as_array().into_iter().flatten() {
+            item(format!("- {}", strval(&criterion["description"])), "");
+            if !criterion["evidence"].is_null() {
+                item(
+                    format!("  Evidence: {}", strval(&criterion["evidence"])),
+                    "\x1b[32m",
+                );
+            }
+        }
+        for (field, label) in [
+            ("blockers", "Blocker"),
+            ("evidence", "Evidence"),
+            ("decisions", "Decision"),
+            ("findings", "Finding"),
+            ("jobs", "Linked job"),
+        ] {
+            for entry in goal[field].as_array().into_iter().flatten() {
+                item(format!("{label}: {}", strval(entry)), "");
+            }
+        }
+        for turn in execution["history"].as_array().into_iter().flatten().rev() {
+            item(
+                format!(
+                    "#{} {} · {}",
+                    strval(&turn["number"]),
+                    strval(&turn["outcome"]),
+                    strval(&turn["detail"])
+                ),
+                "",
+            );
+        }
+        for entry in goal["checkpoints"].as_array().into_iter().flatten().rev() {
+            item(
+                format!(
+                    "Checkpoint {} · {}",
+                    local_time_label(&entry["at"]),
+                    strval(&entry["handoff"]["next_action"])
+                ),
+                "",
+            );
+        }
+        rows
+    }
+
     fn activity_detail(&self) -> bool {
         self.tab == 3 && !self.audit_ledger && self.details.is_some()
     }
@@ -621,42 +867,74 @@ impl View {
             if self.activity_detail() && !self.detail_json {
                 return self.activity_detail_rows(value);
             }
-            if self.tab == GOALS && let Some(logs) = value.get("logs") {
+            if self.tab == GOALS
+                && let Some(logs) = value.get("logs")
+            {
                 let mut lines = vec![(format!("Job {}", strval(&value["job_id"])), "\x1b[36m")];
                 for stream in ["stdout", "stderr"] {
                     lines.push((format!("--- {stream} ---"), "\x1b[36m"));
-                    lines.extend(logs[stream].as_str().unwrap_or_default().lines().map(|line| (safe(line), "")));
+                    lines.extend(
+                        logs[stream]
+                            .as_str()
+                            .unwrap_or_default()
+                            .lines()
+                            .map(|line| (safe(line), "")),
+                    );
                 }
                 return lines;
             }
+            if self.tab == GOALS && !self.detail_json {
+                return self.goal_detail_rows(value);
+            }
+            let width = self.detail_width.saturating_sub(2).max(1);
+            let mut rows = Vec::new();
+            if self.tab == 2 {
+                let id = format!("Job {}", strval(&value["job_id"]));
+                rows.extend(wrap(&id, width).into_iter().map(|line| (line, "\x1b[1m")));
+            }
             let json = serde_json::to_string_pretty(value).unwrap_or_default();
-            return json
-                .lines()
-                .flat_map(|line| {
-                    let line = safe(line);
-                    line.as_bytes()
-                        .chunks(self.detail_width.max(1))
-                        .map(|part| (String::from_utf8_lossy(part).into_owned(), ""))
-                        .collect::<Vec<_>>()
-                })
-                .collect();
+            rows.extend(
+                json.lines()
+                    .flat_map(|line| wrap(line, width))
+                    .map(|part| (part, "")),
+            );
+            return rows;
         }
         if self.logs.is_some() {
             let mut lines = Vec::new();
             for stream in ["stdout", "stderr"] {
                 lines.push((format!("--- {stream} ---"), "\x1b[36m"));
                 for line in self.value[stream].as_str().unwrap_or("").lines() {
-                    lines.push((safe(line), ""));
+                    lines.extend(
+                        wrap(line, self.detail_width.saturating_sub(2).max(1))
+                            .into_iter()
+                            .map(|part| (part, "")),
+                    );
                 }
             }
             return lines;
         }
         match self.tab {
-            GOALS => self.goal_rows().iter().map(|goal| (
-                format!("{:<11} {}/{}  {}", strval(&goal["state"]),
-                    strval(&goal["completed_milestones"]), strval(&goal["milestones"]),
-                    strval(&goal["description"])), ""
-            )).collect(),
+            GOALS => self
+                .goal_rows()
+                .iter()
+                .map(|goal| {
+                    (
+                        format!(
+                            "{} {}/{}  {}{}",
+                            cell(&strval(&goal["state"]), 10),
+                            strval(&goal["completed_milestones"]),
+                            strval(&goal["milestones"]),
+                            strval(&goal["description"]),
+                            goal["iterations"]
+                                .as_u64()
+                                .filter(|n| *n > 0)
+                                .map_or_else(String::new, |n| format!("  · {n} turns"))
+                        ),
+                        phase_color(&strval(&goal["state"])),
+                    )
+                })
+                .collect(),
             0 => {
                 let v = &self.value;
                 let mut lines = vec![
@@ -705,48 +983,81 @@ impl View {
                 }
                 lines
             }
-            1 => table_rows(&self.value, "clients")
+            1 => self
+                .filtered("clients")
                 .iter()
-                .map(|v| {
+                .map(|client| {
+                    let auth = client["authentication"].as_str().unwrap_or("Bearer");
+                    let state = if client["disabled"] == true {
+                        "revoked"
+                    } else if client["expired"] == true {
+                        "expired"
+                    } else if client["connections"].as_u64().unwrap_or_default() > 0 {
+                        "connected"
+                    } else if auth == "OAuth" && client["active_families"] == 0 {
+                        "pending"
+                    } else {
+                        "idle"
+                    };
+                    let name = client.get("display_name").unwrap_or(&client["id"]);
                     (
                         format!(
-                            "{:<18} {:<16} recent={}  grants={}",
-                            strval(&v["id"]),
-                            strval(&v["mode"]),
-                            strval(&v["connections"]),
-                            v["grants"].as_array().map_or(0, Vec::len)
+                            "{} {} {} {} {}",
+                            cell(&strval(name), (self.detail_width / 4).clamp(9, 22)),
+                            cell(auth, 6),
+                            cell(&strval(&client["mode"]), 8),
+                            cell(state, 10),
+                            strval(&client["connections"])
                         ),
-                        "",
+                        if state == "connected" { "\x1b[32m" } else { "" },
                     )
                 })
                 .collect(),
             2 => self
                 .job_rows()
                 .iter()
-                .map(|v| {
-                    let state = strval(&v["state"]);
-                    let color = job_color(&state, &v["exit_code"], &v["signal"]);
-                    (
+                .map(|job| {
+                    let original = strval(&job["state"]);
+                    let state = job_state(job);
+                    let color = job_color(&original, &job["exit_code"], &job["signal"]);
+                    let elapsed = format_duration(
+                        job["execution_duration_ms"]
+                            .as_u64()
+                            .or_else(|| job["live_elapsed_ms"].as_u64()),
+                    );
+                    let exe = job["executable"]
+                        .as_str()
+                        .and_then(|path| path.rsplit('/').next())
+                        .unwrap_or("-");
+                    let command = self.trace_preview(job).unwrap_or_else(|| {
+                        if exe == "sh" {
+                            strval(&job["profile"])
+                        } else {
+                            safe(exe)
+                        }
+                    });
+                    let path = strval(&job["cwd"]);
+                    let main = format!(
+                        "{} {} {}",
+                        short_id(&job["job_id"]),
+                        cell(&state, 11),
+                        cell(&elapsed, 9)
+                    );
+                    let line = if self.detail_width < 62 {
+                        format!("{main} {command}")
+                    } else if self.detail_width < 105 {
+                        format!("{main} {} {command}", cell(&short_path(&path, 20), 20))
+                    } else {
                         format!(
-                            "{:<33} {:<11} {:<6} {:<12} {:<10} {} {}",
-                            strval(&v["job_id"]),
-                            state,
-                            strval(&v["exit_code"]),
-                            local_time_label(&v["created_at"]),
-                            format_duration(
-                                v["execution_duration_ms"]
-                                    .as_u64()
-                                    .or_else(|| v["live_elapsed_ms"].as_u64())
-                            ),
-                            cell(&strval(&v["cwd"]), 26),
-                            self.trace_preview(v).unwrap_or_else(|| format!(
-                                "{} {}",
-                                strval(&v["profile"]),
-                                strval(&v["executable"])
-                            ))
-                        ),
-                        color,
-                    )
+                            "{main} {} {} {command}",
+                            cell(&local_time_label(&job["created_at"]), 11),
+                            cell(
+                                &short_path(&path, self.detail_width.min(132) / 4),
+                                self.detail_width.min(132) / 4
+                            )
+                        )
+                    };
+                    (line, color)
                 })
                 .collect(),
             3 => self
@@ -774,45 +1085,85 @@ impl View {
                         self.trace_preview(v)
                             .unwrap_or_else(|| strval(&v["target_summary"]))
                     };
-                    (
+                    let line = if self.detail_width < 60 {
+                        format!(
+                            "{} {} {} {}",
+                            cell(&local_time_label(&v["time"]), 11),
+                            cell(status, 9),
+                            tool,
+                            summary
+                        )
+                    } else {
                         format!(
                             "{} {} {} {} {} {}",
-                            cell(&local_time_label(&v["time"]), 13),
-                            cell(&tool, 22),
-                            cell(&strval(&v["client"]), 14),
-                            cell(status, 11),
-                            cell(&duration, 15),
+                            cell(&local_time_label(&v["time"]), 11),
+                            cell(&tool, 19),
+                            cell(&strval(&v["client"]), 11),
+                            cell(status, 9),
+                            cell(&duration, 8),
                             summary
-                        ),
-                        phase_color(status),
-                    )
+                        )
+                    };
+                    (line, phase_color(status))
                 })
                 .collect(),
-            4 => table_rows(&self.value, "skills")
+            4 => self
+                .filtered("skills")
                 .iter()
                 .map(|v| {
                     (
                         format!(
-                            "{:<22} enabled={}  {}",
-                            strval(&v["name"]),
-                            strval(&v["enabled"]),
+                            "{} {}  {}",
+                            cell(
+                                if v["enabled"] == true {
+                                    "enabled"
+                                } else {
+                                    "disabled"
+                                },
+                                9
+                            ),
+                            cell(&strval(&v["name"]), (self.detail_width / 3).clamp(12, 24)),
                             strval(&v["description"])
                         ),
                         "",
                     )
                 })
                 .collect(),
-            5 => table_rows(&self.value, "servers")
+            5 => self
+                .filtered("servers")
                 .iter()
-                .map(|v| {
+                .map(|server| {
+                    let id = strval(&server["id"]);
+                    let probe = self.probes.get(&id);
+                    let health = if server["enabled"] != true {
+                        "disabled"
+                    } else {
+                        probe
+                            .and_then(|result| result["health"].as_str())
+                            .unwrap_or("unprobed")
+                    };
+                    let tools = probe
+                        .and_then(|result| result["tools"].as_array())
+                        .map_or(0, Vec::len);
                     (
                         format!(
-                            "{:<22} {:<14} enabled={}",
-                            strval(&v["id"]),
-                            strval(&v["transport"]),
-                            strval(&v["enabled"])
+                            "{} {} {}{}",
+                            cell(&id, (self.detail_width / 3).clamp(12, 22)),
+                            cell(&strval(&server["transport"]), 7),
+                            health,
+                            if health == "ready" {
+                                format!("  · {tools} tools")
+                            } else {
+                                String::new()
+                            }
                         ),
-                        "",
+                        if health == "ready" {
+                            "\x1b[32m"
+                        } else if health == "unavailable" {
+                            "\x1b[31m"
+                        } else {
+                            ""
+                        },
                     )
                 })
                 .collect(),
@@ -880,7 +1231,31 @@ impl View {
             }
             match self.tab {
                 0 => Ok(status),
-                1 => Ok(status["clients"].clone()),
+                1 => {
+                    let mut clients = table_rows(&status, "clients");
+                    if status["oauth_preview"] == true {
+                        if self
+                            .next_oauth_sample
+                            .is_none_or(|due| Instant::now() >= due)
+                        {
+                            if let Ok((data, _)) =
+                                monitor.request("oauth", Some(json!({"action":"list"})))
+                            {
+                                self.oauth_clients = table_rows(&data, "registrations");
+                            }
+                            self.next_oauth_sample = Some(Instant::now() + Duration::from_secs(15));
+                        }
+                        for oauth in &self.oauth_clients {
+                            let id = oauth["client_id"].as_str().unwrap_or_default();
+                            clients.push(json!({"id":id,"display_name":oauth["client_name"],"mode":oauth["mode"],
+                                "authentication":"OAuth","active_families":oauth["active_families"],
+                                "connections":if oauth["active_families"] == 0 { json!(0) } else {
+                                    status["oauth_sessions"][id].as_u64().unwrap_or_default().into()
+                                }, "redirect_uris":oauth["redirect_uris"]}));
+                        }
+                    }
+                    Ok(json!({"clients":clients}))
+                }
                 2 if self.client.is_some() => monitor
                     .request(
                         &format!(
@@ -937,6 +1312,7 @@ impl View {
         self.confirm = None;
         self.cursor.clear();
         self.filter.clear();
+        self.sort_ascending = false;
         self.editing_filter = false;
         self.value = Value::Null;
     }
@@ -1004,7 +1380,9 @@ impl View {
             }
             row(&mut out, &context, w, "\x1b[1m");
             let heading = if self.details.is_some() {
-                if self.activity_detail() && !self.detail_json {
+                if self.tab == GOALS && !self.detail_json {
+                    "Goal details"
+                } else if self.activity_detail() && !self.detail_json {
                     "Activity details - command / target"
                 } else {
                     "Details & Parameters (JSON) - Esc to close"
@@ -1013,13 +1391,14 @@ impl View {
                 "Job output"
             } else {
                 match self.tab {
-                    1 => "CLIENT             MODE             RECENT SESSIONS / GRANTS",
-                    2 => {
-                        "JOB ID                            STATUS      EXIT   CREATED      JOB TIME   DIRECTORY                  COMMAND / PROFILE"
-                    }
-                    3 => {
-                        "TIME          TOOL / EVENT            CLIENT         STATUS      ELAPSED         COMMAND / SUMMARY"
-                    }
+                    1 => "CLIENT / AUTH / MODE / CONNECTION / SESSIONS",
+                    2 if w < 66 => "JOB       STATE       ELAPSED   COMMAND",
+                    2 if w < 109 => "JOB       STATE       ELAPSED   DIRECTORY            COMMAND",
+                    2 => "JOB       STATE       ELAPSED   STARTED / DIRECTORY / COMMAND",
+                    3 if w < 64 => "TIME / STATE / EVENT",
+                    3 => "TIME / TOOL / CLIENT / STATE / ELAPSED / DETAIL",
+                    5 => "PROVIDER / TRANSPORT / HEALTH / TOOLS",
+                    GOALS => "STATE / ROADMAP / OBJECTIVE",
                     _ => LABELS[self.tab],
                 }
             };
@@ -1053,7 +1432,13 @@ impl View {
             }
             border(&mut out, w, false);
             let status = if let Some(id) = &self.confirm {
-                if id == "goal-cancel" {
+                if let Some(action) = id.strip_prefix("client:") {
+                    if action == "yolo" {
+                        "Grant native host-user YOLO? y confirms / n returns".into()
+                    } else {
+                        format!("Apply {action} to the selected client? y confirms / n returns")
+                    }
+                } else if id == "goal-cancel" {
                     "Cancel the selected goal? y confirms / n returns".into()
                 } else if id == "local-trace" {
                     "Capture command arguments and responses for 10 min (may contain secrets)? y confirms".into()
@@ -1098,8 +1483,10 @@ impl View {
                     } else {
                         "[j/k] Scroll  [Esc] Back  [q] Quit"
                     }
+                } else if w < 64 {
+                    "Tab View  j/k Move  Enter Info  / Filter  s Sort"
                 } else {
-                    "[Tab] View  [j/k] Move  [Enter] Details  [/] Filter"
+                    "[Tab] View  [j/k] Move  [Enter] Details  [/] Filter  [s] Sort"
                 },
                 w,
                 "\x1b[39m",
@@ -1109,10 +1496,23 @@ impl View {
             out.push_str(&cell(
                 if self.details.is_some() || self.logs.is_some() {
                     ""
+                } else if w < 64 {
+                    match self.tab {
+                        3 => "t Capture  f Funnel  a Audit  r Ref  q Quit",
+                        GOALS => "P Pause  R Resume  C Cancel  r Ref  q Quit",
+                        1 => "Y YOLO  S Standard  X Revoke  r Ref  q Quit",
+                        5 => "p Probe  r Ref  q Quit",
+                        2 => "p Client l Logs n Next x Cancel t Trace r Ref q Quit",
+                        _ => "r Ref  q Quit",
+                    }
                 } else if self.tab == 3 {
                     "[t] Capture commands  [f] Funnel  [a] Audit  [r] Refresh  [q] Quit"
                 } else if self.tab == GOALS {
                     "[P] Pause  [R] Resume  [C] Cancel  [r] Refresh  [q] Quit"
+                } else if self.tab == 1 {
+                    "[Y] YOLO  [S] Standard  [X] Revoke  [r] Refresh"
+                } else if self.tab == 5 {
+                    "[p] Probe provider  [r] Refresh  [q] Quit"
                 } else if self.tab == 2 {
                     "[p] Client  [l] Logs  [n] Next  [x] Cancel  [t] Trace  [r] Refresh  [q] Quit"
                 } else {
@@ -1141,8 +1541,14 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
     let mut next = Instant::now();
     let mut redraw = true;
     let mut escape = Vec::new();
+    let mut dimensions = (0, 0);
     loop {
-        v.detail_width = screen.size().0.saturating_sub(4).max(1);
+        let current_size = screen.size();
+        if dimensions != current_size {
+            dimensions = current_size;
+            v.detail_width = dimensions.0.saturating_sub(4).max(1);
+            redraw = true;
+        }
         if v.trace_until.is_some_and(|until| Instant::now() >= until) {
             v.trace_enabled = false;
             v.clear_trace_preview();
@@ -1220,6 +1626,11 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                         escape.clear();
                     }
                     continue;
+                } else if escape.len() == 2 && !matches!(key, b'[' | b'O') {
+                    escape.clear();
+                    v.escape();
+                    next = Instant::now();
+                    key
                 } else if escape.len() < 3 {
                     continue;
                 } else {
@@ -1239,6 +1650,13 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                 return Ok(());
             }
             if let Some(id) = v.confirm.take() {
+                if let Some(action) = id.strip_prefix("client:") {
+                    if key == b'y' {
+                        v.client_action(monitor, action);
+                    }
+                    next = Instant::now() + Duration::from_millis(250);
+                    continue;
+                }
                 if id == "goal-cancel" {
                     if key == b'y' {
                         v.goal_action(monitor, "cancel");
@@ -1326,6 +1744,28 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                 }
                 b'j' => v.selected = (v.selected + 1).min(v.rows().len().saturating_sub(1)),
                 b'k' => v.selected = v.selected.saturating_sub(1),
+                b'g' => v.selected = 0,
+                b'G' => v.selected = v.rows().len().saturating_sub(1),
+                4 => {
+                    v.selected =
+                        (v.selected + dimensions.1 / 2).min(v.rows().len().saturating_sub(1))
+                }
+                21 => v.selected = v.selected.saturating_sub(dimensions.1 / 2),
+                b's' if v.details.is_none() && v.logs.is_none() => {
+                    v.sort_ascending = !v.sort_ascending;
+                    v.selected = 0;
+                }
+                b'Y' | b'S' | b'X'
+                    if v.tab == 1 && v.details.is_none() && v.selected_record().is_some() =>
+                {
+                    let action = match key {
+                        b'Y' => "yolo",
+                        b'S' => "standard",
+                        _ => "revoke",
+                    };
+                    v.confirm = Some(format!("client:{action}"));
+                }
+                b'p' if v.tab == 5 && v.details.is_none() => v.probe(monitor),
                 b'P' | b'R' if v.tab == GOALS && v.details.is_none() => {
                     v.goal_action(monitor, if key == b'P' { "pause" } else { "resume" });
                     next = Instant::now();
@@ -1345,7 +1785,7 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                         next = Instant::now();
                     }
                 }
-                b'/' if matches!(v.tab, 2 | 3) && v.logs.is_none() && v.details.is_none() => {
+                b'/' if !matches!(v.tab, 0 | 6) && v.logs.is_none() && v.details.is_none() => {
                     v.editing_filter = true;
                     v.filter.clear();
                 }
@@ -1366,7 +1806,7 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
                     v.selected = 0;
                     next = Instant::now();
                 }
-                b'd' if v.activity_detail() => {
+                b'd' if v.activity_detail() || v.tab == GOALS && v.details.is_some() => {
                     v.detail_json = !v.detail_json;
                     v.selected = 0;
                 }
@@ -1425,6 +1865,14 @@ pub(super) fn run(monitor: &Monitor, client: Option<String>) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn terminal_cells_keep_wide_text_and_escape_remote_controls() {
+        assert_eq!(cell("A界B", 3), "A界");
+        assert_eq!(cell("A界B", 2), "A ");
+        assert_eq!(wrap("ab界é", 2), ["ab", "界", "é"]);
+        assert_eq!(safe("hello\u{1b}\u{202e}"), "hello??");
+    }
+
     #[test]
     fn live_header_distinguishes_idle_running_and_unavailable() {
         let mut v = View::default();

@@ -1,12 +1,14 @@
 # Connect ChatGPT to Veyl through Tailscale Funnel
 
-## Direct OAuth (next-release candidate)
+## Direct OAuth (unified `veyl up` / `veyl serve`)
 
 Create a custom MCP connection in ChatGPT where supported by the account
-and client. Use the HTTPS `/mcp` URL emitted by `veyl oauth setup --funnel`,
-OAuth dynamic client registration, scope `mcp`, and PKCE S256. Approve the
-exact connection locally. Use a dedicated synthetic read-only workspace
-first, and a separate bounded tmpfs profile for write/command testing.
+and client. Use the HTTPS `/mcp` URL printed by `veyl up` (or low-level
+`veyl oauth setup --funnel`), OAuth dynamic client registration, scope `mcp`,
+and PKCE S256. Approve each exact connection locally in the dashboard
+(where `default_mode` preselects `standard` or `yolo` without auto-approving).
+Use a dedicated synthetic read-only workspace first, and a separate bounded
+tmpfs profile for write/command testing in Standard mode.
 The standalone Plugin Creator experiment is optional and deferred; it
 created a desktop-oriented package, not a verified web OAuth connection.
 The direct creation form previously failed before successful registration.

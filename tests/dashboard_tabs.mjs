@@ -1,7 +1,7 @@
 // Disposable Chromium DevTools test. No browser automation dependency.
 // URL (including the one-use pairing fragment) arrives only over stdin.
 import {spawn} from "node:child_process";
-import {mkdtemp, readFile, rm} from "node:fs/promises";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import assert from "node:assert/strict";
@@ -51,6 +51,17 @@ try {
     const response=await send("Runtime.evaluate",{expression,returnByValue:true});
     if(response.exceptionDetails)throw Error("Page script evaluation failed");
     return response.result.value;
+  }
+  const screenshotDir = process.env.VEYL_SCREENSHOTS;
+  const openTab = id => evaluate(`document.querySelector('nav a[href="#${id}"]').click()`);
+  async function capture(id, width, height) {
+    if (!screenshotDir) return;
+    await send("Emulation.setDeviceMetricsOverride", {width,height,deviceScaleFactor:1,mobile:width < 600});
+    await openTab(id);
+    await until(() => evaluate(`!document.querySelector("#page-${id}").classList.contains("inactive-tab")`));
+    await evaluate("scrollTo(0,0)");
+    const {data} = await send("Page.captureScreenshot", {format:"png"});
+    await writeFile(join(screenshotDir, id + "-" + width + ".png"), Buffer.from(data,"base64"));
   }
   await send("Emulation.setTimezoneOverride", {timezoneId:"America/New_York"});
   await send("Page.navigate",{url});
@@ -165,6 +176,38 @@ try {
   await until(()=>evaluate("Boolean("+goalButton("Resume")+")"));
   await evaluate(goalButton("Resume")+".click()");
   await until(()=>evaluate("document.querySelector('#goal-detail').textContent.includes('running')"));
+  if (screenshotDir) {
+    await evaluate("theme='dark';applyTheme()");
+    for (const page of ["health", "clients", "goals", "jobs"]) {
+      await capture(page, 1280, 900);
+      await capture(page, 390, 844);
+    }
+  }
+  if (await evaluate("!!document.querySelector('#grant-search')")) {
+    await openTab("clients");
+    await until(() => evaluate("!!document.querySelector('#client-rows button')"));
+    assert.ok(await evaluate("document.documentElement.scrollWidth <= innerWidth"));
+    assert.equal(await evaluate("document.querySelector('#client-rows td[data-label=Auth]').textContent"), "Bearer");
+    const click = label => evaluate(`Array.from(document.querySelectorAll('#client-rows button')).find(b=>b.textContent===${JSON.stringify(label)}).click()`);
+    assert.equal(await evaluate("document.querySelector('#client-default').hidden"), false);
+    await evaluate("window.confirm=()=>true;document.querySelector('#client-default-mode').value='yolo';document.querySelector('#client-default-save').click()");
+    await until(() => evaluate("lastStatus.default_mode === 'yolo'"));
+    assert.equal(await evaluate("lastStatus.clients[0].mode"),"standard");
+    await evaluate("document.querySelector('#client-default-mode').value='standard';document.querySelector('#client-default-save').click()");
+    await until(() => evaluate("lastStatus.default_mode === 'standard'"));
+    await click("Grants");
+    await evaluate("document.querySelector('#grant-search').value='goal_create';document.querySelector('#grant-search').dispatchEvent(new Event('input'))");
+    assert.equal(await evaluate("Array.from(document.querySelectorAll('#native-grant-grid label')).filter(e=>!e.hidden).length"),1);
+    assert.equal(await evaluate("document.querySelector('#native-grant-grid details[open]:not([hidden]) summary').textContent"),"Goals");
+    await evaluate("window.confirm=()=>true");
+    await click("YOLO");
+    await until(() => evaluate("document.querySelector('#client-rows td[data-label=Mode]').textContent === 'YOLO'"));
+    await click("Standard");
+    await until(() => evaluate("document.querySelector('#client-rows td[data-label=Mode]').textContent === 'Standard'"));
+    await click("Revoke");
+    await until(() => evaluate("document.querySelector('#client-rows td[data-label=Connection]').textContent === 'Revoked'"));
+    console.log("RESPONSIVE_CLIENT_GRANTS_AND_PERMISSIONS_PASS");
+  }
   await evaluate("document.querySelector('nav a[href=\"#audit\"]').click()");
   await send("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
   assert.deepEqual(await evaluate(visible),["audit"]);

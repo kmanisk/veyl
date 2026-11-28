@@ -239,6 +239,108 @@ impl Ledger {
         Ok(ledger)
     }
 
+    pub(super) fn migrate_verified(
+        source_path: &Path,
+        dest_path: &Path,
+        limits: AuditLimits,
+    ) -> io::Result<()> {
+        let source = Self::bind(source_path, limits, false)?;
+        let dest = Self::bind(dest_path, limits, true)?;
+        source.transaction(|src| {
+            let src_head = src.read_head()?.ok_or_else(invalid_audit)?;
+            let mut src_segments = src.segments()?;
+            let src_active = src_segments.last().ok_or_else(invalid_audit)?;
+            if !src_head.matches_segment(src_active) {
+                return Err(mismatch_error(&src_head, src_active));
+            }
+            let (src_insp, src_verified) =
+                src.scan(&src_segments, Some(&src_head), true, false, |_, _| {})?;
+            if src_insp.torn_bytes != 0 {
+                return Err(io::Error::other(
+                    "Source audit ledger has uncommitted tail bytes; open or recover source first",
+                ));
+            }
+            let ledger_id_name = companion(&src.name, ".ledger-id");
+            let src_ledger_id = match open_file(&src.directory, &ledger_id_name, OFlags::RDONLY) {
+                Ok(file) => {
+                    let mut id = String::new();
+                    file.take(65).read_to_string(&mut id)?;
+                    if !anchor::valid_hash(&id) {
+                        return Err(invalid_audit());
+                    }
+                    Some(id)
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e),
+            };
+            let dest_ledger_id_name = companion(&dest.name, ".ledger-id");
+            let active_name = src.name.clone();
+            let src_archives: Vec<_> = if src_segments.len() > 1 {
+                src_segments.drain(..src_segments.len() - 1).collect()
+            } else {
+                Vec::new()
+            };
+            dest.transaction(|dst| {
+                let dst_head = dst.read_head()?;
+                let dst_archives = dst.archives()?;
+                let dst_active = dst.segment(&dst.name)?;
+                if dst_head.is_some()
+                    || !dst_archives.is_empty()
+                    || dst_active.as_ref().is_some_and(|s| s.len() != 0)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "Destination audit ledger is not empty",
+                    ));
+                }
+                for seg in &src_archives {
+                    let mut in_file = src.open_segment(seg, OFlags::RDONLY)?;
+                    let mut bytes = Vec::new();
+                    in_file.read_to_end(&mut bytes)?;
+                    let mut out_file = create_file(&dst.directory, &seg.name)?;
+                    out_file.write_all(&bytes)?;
+                    out_file.sync_all()?;
+                }
+                let src_active_seg = src.segment(&active_name)?.ok_or_else(invalid_audit)?;
+                let mut active_bytes = Vec::new();
+                src.open_segment(&src_active_seg, OFlags::RDONLY)?
+                    .read_to_end(&mut active_bytes)?;
+                if let Some(existing) = dst.segment(&dst.name)? {
+                    let _ = existing;
+                    let mut out = dst.open_segment(
+                        &dst.segment(&dst.name)?.ok_or_else(invalid_audit)?,
+                        OFlags::WRONLY,
+                    )?;
+                    out.write_all(&active_bytes)?;
+                    out.sync_all()?;
+                } else {
+                    let mut out = create_file(&dst.directory, &dst.name)?;
+                    out.write_all(&active_bytes)?;
+                    out.sync_all()?;
+                }
+                if let Some(id) = src_ledger_id.as_deref()
+                    && let Err(e) = publish_new(&dst.directory, &dest_ledger_id_name, id.as_bytes())
+                    && e.kind() != io::ErrorKind::AlreadyExists
+                {
+                    return Err(e);
+                }
+                fs::fsync(&dst.directory)?;
+                let copied_segments = dst.segments()?;
+                let copied_active = copied_segments.last().ok_or_else(invalid_audit)?.clone();
+                let (_, dst_verified) =
+                    dst.scan(&copied_segments, None, true, false, |_, _| {})?;
+                if dst_verified.head.tip != src_verified.head.tip {
+                    return Err(invalid_audit());
+                }
+                let head = Head::for_segment(&copied_active, dst_verified.head.tip);
+                dst.write_head(&head)?;
+                let post_segments = dst.segments()?;
+                let _ = dst.current_snapshot(post_segments, head)?;
+                Ok(())
+            })
+        })
+    }
+
     pub(super) fn inspect_path(path: &Path, collect: bool) -> io::Result<Inspection> {
         let ledger = Self::bind(path, AuditLimits::default(), false)?;
         ledger.transaction(|ledger| ledger.verify(collect, |_, _| {}))

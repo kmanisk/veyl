@@ -393,6 +393,10 @@ impl AuditSink {
         Self::inspection_json(Ledger::recover_legacy_identity(path, limits)?)
     }
 
+    pub fn migrate_verified(source: &Path, dest: &Path, limits: AuditLimits) -> io::Result<()> {
+        Ledger::migrate_verified(source, dest, limits)
+    }
+
     /// Keep only a fixed number of verified events for local inspection.
     pub fn recent(path: &Path) -> io::Result<Vec<Value>> {
         let mut events = std::collections::VecDeque::with_capacity(40);

@@ -11,11 +11,16 @@ pub(crate) mod funnel;
 #[cfg(target_os = "linux")]
 pub(crate) mod operator;
 #[cfg(target_os = "linux")]
-mod oauth;
+pub(crate) mod oauth;
 #[cfg(target_os = "linux")]
 pub(crate) mod scope;
 #[cfg(target_os = "linux")]
 mod trace;
+#[cfg(target_os = "linux")]
+mod upstream_requests;
+
+#[cfg(target_os = "linux")]
+pub(crate) use oauth::compute_unified_binding;
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -143,7 +148,30 @@ async fn handle_control_stream(
             _ => "{\"status\":503,\"body\":{\"error\":\"temporarily_unavailable\"}}\n".into(),
         }
     } else {
-        "{\"status\":503,\"body\":{\"error\":\"oauth_unavailable\"}}\n".into()
+        let parsed: Value = serde_json::from_slice(trimmed.as_bytes()).unwrap_or(Value::Null);
+        if parsed.get("action").and_then(Value::as_str) == Some("list") {
+            let default_mode = state
+                .policy
+                .read()
+                .ok()
+                .map(|(_, s)| s.default_mode.as_str())
+                .unwrap_or("standard");
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "status": 200,
+                    "body": {
+                        "local_client": "veyl-oauth",
+                        "eligible": false,
+                        "supports_yolo": false,
+                        "default_mode": default_mode,
+                        "registrations": []
+                    }
+                })
+            )
+        } else {
+            "{\"status\":503,\"body\":{\"error\":\"oauth_unavailable\"}}\n".into()
+        }
     };
     let bytes = response_line.as_bytes();
     let mut written = 0;
@@ -167,7 +195,8 @@ use mcp_gateway::core::{protocol::MCP_VERSION, session::{OwnedSession, random_id
 
 type Reply = Response<Full<Bytes>>;
 
-type Session = OwnedSession<String, (bool, Option<[u8; 32]>), Protocol>;
+type SessionScope = (bool, Option<([u8; 32], String)>);
+type Session = OwnedSession<String, SessionScope, Protocol>;
 
 struct Failure {
     count: u32,
@@ -199,10 +228,76 @@ struct State {
     mcp_connections: Arc<Semaphore>,
     #[cfg(target_os = "linux")]
     tool_workers: Arc<Semaphore>,
+    #[cfg(target_os = "linux")]
+    upstream_requests: upstream_requests::Requests,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug)]
+pub(crate) enum UnifiedTunnelLaunch {
+    None,
+    Tailscale {
+        socket: Option<PathBuf>,
+        port: Option<u16>,
+    },
+    Cloudflare,
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) struct UnifiedRuntimeOptions {
+    pub listen: SocketAddr,
+    pub path: PathBuf,
+    pub initialize_oauth: bool,
+    pub tunnel: UnifiedTunnelLaunch,
+    pub open_ui: bool,
+    pub control: std::os::unix::net::UnixListener,
+    pub status_path: PathBuf,
+    pub systemd_unit: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn is_oauth_or_tunnel_request(
+    request: &Request<Incoming>,
+    oauth: &oauth::Native,
+) -> bool {
+    let path = request.uri().path();
+    if path.starts_with("/oauth/") || path.starts_with("/.well-known/") {
+        return true;
+    }
+    let headers = request.headers();
+    if [
+        "tailscale-funnel-request",
+        "forwarded",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "x-forwarded-for",
+        "cf-connecting-ip",
+    ]
+    .iter()
+    .any(|h| headers.contains_key(*h))
+    {
+        return true;
+    }
+    let oauth_authority = oauth.server.authority();
+    one(headers, "host") == Some(oauth_authority)
+}
+
+#[cfg(target_os = "linux")]
+struct RuntimeStatusFile(PathBuf);
+#[cfg(target_os = "linux")]
+impl Drop for RuntimeStatusFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 pub fn run(args: Vec<OsString>) -> Result<(), String> {
     run_inner(args,None,false,None,None)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn run_unified(options: UnifiedRuntimeOptions) -> Result<(), String> {
+    run_inner_unified(options)
 }
 
 pub(crate) fn run_onboarded(path: PathBuf, config: Value, open_ui: bool, funnel:Option<crate::tailnet::oauth_provider::Plan>, control: Option<std::os::unix::net::UnixListener>) -> Result<(),String> {
@@ -256,6 +351,140 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
     } else {
         None
     };
+    run_loop(addr, path, onboarded, open_ui, funnel, None, control,
+        #[cfg(target_os = "linux")] policy,
+        #[cfg(target_os = "linux")] config,
+        #[cfg(target_os = "linux")] oauth,
+        None)
+}
+
+#[cfg(target_os = "linux")]
+fn run_inner_unified(options: UnifiedRuntimeOptions) -> Result<(), String> {
+    if options.listen.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) {
+        return Err("HTTP service may only listen on 127.0.0.1".into());
+    }
+    let (policy, config) = operator::PolicyCache::open(&options.path)?;
+    enum TunnelCfg {
+        None,
+        Tailscale(crate::tailnet::oauth_provider::Plan),
+        Cloudflare(crate::cloudflare::Settings),
+    }
+    let tunnel_cfg = match options.tunnel {
+        UnifiedTunnelLaunch::None => TunnelCfg::None,
+        UnifiedTunnelLaunch::Tailscale { socket, port } => {
+            let port = port.or_else(|| config.tailnet.as_ref().map(|t| t.mcp_https_port));
+            let plan = crate::tailnet::oauth_provider::Plan::detect(socket, port)?;
+            TunnelCfg::Tailscale(plan)
+        }
+        UnifiedTunnelLaunch::Cloudflare => {
+            let cf = config
+                .cloudflare
+                .clone()
+                .ok_or("Cloudflare tunnel requested, but cloudflare_tunnel is not configured")?;
+            cf.validate_ready()?;
+            TunnelCfg::Cloudflare(cf)
+        }
+    };
+    let (funnel, cf_settings, origin_and_ingress) = match tunnel_cfg {
+        TunnelCfg::None => {
+            let saved = config
+                .oauth
+                .as_ref()
+                .filter(|o| o.enabled && o.state_dir.join("oauth-state.json").exists())
+                .and_then(|o| mcp_gateway::http_common::oauth_http::persisted_origin(&o.state_dir).ok());
+            (
+                None,
+                None,
+                saved.map(|origin| (origin, mcp_gateway::http_common::oauth_http::IngressKind::Direct)),
+            )
+        }
+        TunnelCfg::Tailscale(plan) => {
+            let origin = plan.origin().to_owned();
+            if let Some(o) = &config.oauth
+                && !options.initialize_oauth
+                && o.state_dir.join("oauth-state.json").exists()
+            {
+                let saved = mcp_gateway::http_common::oauth_http::persisted_origin(&o.state_dir)?;
+                if saved != origin {
+                    return Err(format!(
+                        "OAuth issuer conflict: persisted origin is {saved}, detected Tailscale origin is {origin}"
+                    ));
+                }
+            }
+            (
+                Some(plan),
+                None,
+                Some((origin, mcp_gateway::http_common::oauth_http::IngressKind::TailscaleFunnel)),
+            )
+        }
+        TunnelCfg::Cloudflare(cf) => {
+            let origin = cf.origin();
+            if let Some(o) = &config.oauth
+                && !options.initialize_oauth
+                && o.state_dir.join("oauth-state.json").exists()
+            {
+                let saved = mcp_gateway::http_common::oauth_http::persisted_origin(&o.state_dir)?;
+                if saved != origin {
+                    return Err(format!(
+                        "OAuth issuer conflict: persisted origin is {saved}, configured Cloudflare origin is {origin}"
+                    ));
+                }
+            }
+            (
+                None,
+                Some(cf),
+                Some((origin, mcp_gateway::http_common::oauth_http::IngressKind::CloudflareTunnel)),
+            )
+        }
+    };
+    let oauth = if let (Some(_), Some((origin, ingress))) = (&config.oauth, origin_and_ingress.as_ref()) {
+        Some(oauth::Native::open_unified(
+            origin,
+            &config,
+            &options.path,
+            *ingress,
+            options.initialize_oauth,
+        )?)
+    } else {
+        None
+    };
+    let cf_info = cf_settings.map(|cf| {
+        let dir = options
+            .path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        (cf, dir)
+    });
+    run_loop(
+        options.listen,
+        options.path,
+        true,
+        options.open_ui,
+        funnel,
+        cf_info,
+        Some(options.control),
+        policy,
+        config,
+        oauth,
+        Some((options.status_path, options.systemd_unit)),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_loop(
+    addr: SocketAddr,
+    path: PathBuf,
+    onboarded: bool,
+    open_ui: bool,
+    funnel: Option<crate::tailnet::oauth_provider::Plan>,
+    cf_info: Option<(crate::cloudflare::Settings, PathBuf)>,
+    control: Option<std::os::unix::net::UnixListener>,
+    #[cfg(target_os = "linux")] policy: operator::PolicyCache,
+    #[cfg(target_os = "linux")] config: Arc<Configuration>,
+    #[cfg(target_os = "linux")] oauth: Option<oauth::Native>,
+    #[cfg(target_os = "linux")] unified_status: Option<(PathBuf, bool)>,
+) -> Result<(), String> {
     let has_mutation_grants = config.clients.iter().any(|client| {
         client.actions.contains(&Action::WriteFile) || client.actions.contains(&Action::ApplyPatch)
     });
@@ -386,6 +615,8 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
             mcp_connections: Arc::clone(&permits),
             #[cfg(target_os = "linux")]
             tool_workers: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+            #[cfg(target_os = "linux")]
+            upstream_requests: upstream_requests::Requests::default(),
         });
         // The updater probes the bound TCP listener before committing its
         // transaction. Do not admit requests until the rollback window closes.
@@ -436,8 +667,83 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
             } else if onboarded {
                 eprintln!("Copy the MCP URL above to configure your OAuth MCP client.");
             }
-            Some(lease)
+            Some((lease, mcp_url, "tailscale"))
         } else {None};
+        #[cfg(target_os = "linux")]
+        let mut cf_tunnel = if let Some((cf_cfg, runtime_dir)) = cf_info {
+            let std::net::SocketAddr::V4(target) = actual else {
+                return Err("Expected IPv4 loopback".into());
+            };
+            if !state.mutations.record_runtime_mode(
+                "local_operator",
+                "cloudflare_tunnel_up",
+                "standard",
+                AuditPhase::Intent,
+            ) {
+                return Err("Cloudflare audit unavailable".into());
+            }
+            let owned = match crate::cloudflare::OwnedTunnel::start(&cf_cfg, &runtime_dir, target).await {
+                Ok(t) => t,
+                Err(err) => {
+                    let _ = state.mutations.record_runtime_mode(
+                        "local_operator",
+                        "cloudflare_tunnel_up",
+                        "standard",
+                        AuditPhase::Uncertain,
+                    );
+                    return Err(err);
+                }
+            };
+            if !state.mutations.record_runtime_mode(
+                "local_operator",
+                "cloudflare_tunnel_up",
+                "standard",
+                AuditPhase::Success,
+            ) {
+                let _ = owned.stop().await;
+                return Err("Cloudflare activation receipt unavailable".into());
+            }
+            let mcp_url = format!("{}/mcp", cf_cfg.origin());
+            eprintln!("PUBLIC_MCP_URL={mcp_url}");
+            if onboarded && copy_clipboard(&mcp_url) {
+                eprintln!("Copied MCP URL to clipboard.");
+            }
+            Some((owned, mcp_url, "cloudflare"))
+        } else {
+            None
+        };
+        #[cfg(target_os = "linux")]
+        let _runtime_status_guard = if let Some((status_path, systemd_unit)) = unified_status {
+            let (tunnel_provider, public_mcp_url) = if let Some((_, ref url, provider)) = lease {
+                (Some(provider), Some(url.clone()))
+            } else if let Some((_, ref url, provider)) = cf_tunnel {
+                (Some(provider), Some(url.clone()))
+            } else {
+                (None, None)
+            };
+            let issuer = state
+                .oauth
+                .as_ref()
+                .map(|o| format!("https://{}", o.server.authority()));
+            let payload = serde_json::json!({
+                "pid": std::process::id(),
+                "mcp_listen": actual.to_string(),
+                "admin_listen": state.admin.as_ref().map(|a| a.addr.to_string()),
+                "tunnel_provider": tunnel_provider,
+                "public_mcp_url": public_mcp_url,
+                "issuer": issuer,
+                "started_unix_seconds": unix_seconds(),
+                "systemd_unit": systemd_unit,
+            });
+            if let Ok(encoded) = serde_json::to_vec_pretty(&payload) {
+                let _ = std::fs::write(&status_path, encoded);
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&status_path, std::fs::Permissions::from_mode(0o600));
+            }
+            Some(RuntimeStatusFile(status_path))
+        } else {
+            None
+        };
         // Publish complete readiness records in one short pipe write; formatted
         // eprintln can expose a prefix before the address to a launcher.
         let mut readiness = String::new();
@@ -449,8 +755,7 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
         std::io::stderr().lock().write_all(readiness.as_bytes())
             .map_err(|_| "Cannot publish listener readiness")?;
         if onboarded && let Some(admin) = &state.admin {
-            eprintln!("Private OAuth dashboard: http://{}/dashboard",admin.addr);
-            eprintln!("For local pairing: veyl dashboard pair --config {:?}",path);
+            eprintln!("Private dashboard / local approval: http://{}/dashboard",admin.addr);
             if open_ui && dashboard::open_paired_local(&path,admin.addr).is_err() {
                 eprintln!("Automatic browser opening failed; use local dashboard pairing.");
             }
@@ -461,8 +766,21 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
         let (control_shutdown_tx, mut control_shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
         let mut connections = JoinSet::new();
         let mut lease_lost=false;
+        let mut cf_exited = false;
         let mut ingress_closed=Box::pin(async {
-            if let Some(lease)=lease.as_mut(){lease.ended().await;} else {std::future::pending::<()>().await;}
+            if let Some((ref mut l, _, _)) = lease {
+                l.ended().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        });
+        #[cfg(target_os = "linux")]
+        let mut cf_closed = Box::pin(async {
+            if let Some((ref mut cf, _, _)) = cf_tunnel {
+                cf.exited().await
+            } else {
+                std::future::pending::<Option<i32>>().await
+            }
         });
         enum AcceptEvent {
             Tcp(bool, std::io::Result<(tokio::net::TcpStream, SocketAddr)>),
@@ -472,6 +790,8 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
         loop {
             let event = poll_fn(|cx| {
                 if ingress_closed.as_mut().poll(cx).is_ready(){lease_lost=true;return Poll::Ready(None);}
+                #[cfg(target_os = "linux")]
+                if cf_closed.as_mut().poll(cx).is_ready(){cf_exited=true;return Poll::Ready(None);}
                 #[cfg(unix)]
                 if term.poll_recv(cx).is_ready() || interrupt.poll_recv(cx).is_ready() {
                     return Poll::Ready(None);
@@ -542,7 +862,7 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
                     async move {
                         #[cfg(target_os = "linux")]
                         let mut call = None;
-                        let extend = std::sync::atomic::AtomicBool::new(false);
+                        let extend = std::sync::atomic::AtomicU64::new(0);
                         let deadline = tokio::time::Instant::now() + HTTP_TIMEOUT;
                         let result = {
                             let mut work = std::pin::pin!(async {
@@ -557,10 +877,12 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
                                     return dashboard::serve(request, state).await;
                                 }
                                 #[cfg(target_os = "linux")]
-                                if let Some(oauth) = &state.oauth {
+                                if let Some(oauth) = &state.oauth
+                                    && (!oauth.unified || is_oauth_or_tunnel_request(&request, oauth))
+                                {
                                     let server = oauth.server.clone();
                                     return server.handle(request, None, |request| async {
-                                        serve_admitted(request, state.clone(), peer.ip(), false, None, &mut call, &extend).await
+                                        serve_admitted(request, state.clone(), peer.ip(), false, None, true, &mut call, &extend).await
                                     }).await;
                                 }
                                 serve(
@@ -575,12 +897,13 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
                                 .await
                             });
                             match tokio::time::timeout_at(deadline, &mut work).await {
-                                Err(_) if extend.load(std::sync::atomic::Ordering::Relaxed) => {
-                                    tokio::time::timeout_at(
-                                        deadline + Duration::from_secs(8),
-                                        &mut work,
-                                    )
-                                    .await
+                                Err(elapsed) => {
+                                    let extra = extend.load(std::sync::atomic::Ordering::Relaxed);
+                                    if extra == 0 {
+                                        Err(elapsed)
+                                    } else {
+                                        tokio::time::timeout_at(deadline + Duration::from_secs(extra), &mut work).await
+                                    }
                                 }
                                 result => result,
                             }
@@ -626,7 +949,9 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
             });
         }
         drop(ingress_closed);
-        if let Some(lease)=lease {
+        #[cfg(target_os = "linux")]
+        drop(cf_closed);
+        if let Some((lease, _, _)) = lease {
             if !state.mutations.record_runtime_mode("local_operator","oauth_funnel_down","standard",AuditPhase::Intent){
                 // Dropping the watcher still removes the foreground route.
                 return Err("Funnel shutdown audit unavailable".into());
@@ -639,6 +964,22 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
                 return Err("Funnel removal receipt unavailable".into());
             }
         }
+        #[cfg(target_os = "linux")]
+        if let Some((cf_owned, _, _)) = cf_tunnel {
+            let _ = state.mutations.record_runtime_mode(
+                "local_operator",
+                "cloudflare_tunnel_down",
+                "standard",
+                AuditPhase::Intent,
+            );
+            let _ = cf_owned.stop().await;
+            let _ = state.mutations.record_runtime_mode(
+                "local_operator",
+                "cloudflare_tunnel_down",
+                "standard",
+                AuditPhase::Success,
+            );
+        }
         drop(listener);
         let _ = shutdown.send(true);
         tokio::time::timeout(Duration::from_secs(7), async {
@@ -646,7 +987,13 @@ fn run_inner(args: Vec<OsString>, automated: Option<Value>, open_ui: bool, funne
         })
         .await
         .map_err(|_| "Timed out draining HTTP connections")?;
-        if lease_lost {Err("Funnel foreground lease lost; gateway stopped".into())} else {Ok(())}
+        if lease_lost {
+            Err("Funnel foreground lease lost; gateway stopped".into())
+        } else if cf_exited {
+            Err("Configured Cloudflare tunnel process exited unexpectedly; gateway stopped".into())
+        } else {
+            Ok(())
+        }
     });
     // Detached job runners own their leases. Reaping waiters must not keep
     // the gateway alive after its listener and in-flight HTTP work drain.
@@ -659,7 +1006,7 @@ async fn serve(
     state: Arc<State>,
     peer: IpAddr,
     #[cfg(target_os = "linux")] call: &mut Option<activity::Call>,
-    #[cfg(target_os = "linux")] extend: &std::sync::atomic::AtomicBool,
+    #[cfg(target_os = "linux")] extend: &std::sync::atomic::AtomicU64,
 ) -> Reply {
     let marker = request.headers().contains_key("Tailscale-Funnel-Request");
     let raw_path = request.uri().path();
@@ -754,6 +1101,8 @@ async fn serve(
         false,
         None,
         #[cfg(target_os = "linux")]
+        false,
+        #[cfg(target_os = "linux")]
         call,
         #[cfg(target_os = "linux")]
         extend,
@@ -769,7 +1118,7 @@ async fn serve_public(
     origin: funnel::Origin,
     allow_secret_path: bool,
     call: &mut Option<activity::Call>,
-    extend: &std::sync::atomic::AtomicBool,
+    extend: &std::sync::atomic::AtomicU64,
 ) -> Reply {
     let options = request.method() == Method::OPTIONS;
     let valid_path = funnel::route_matches(request.uri().path(), allow_secret_path);
@@ -818,7 +1167,7 @@ async fn serve_public(
         }
     } else {
         let proof = funnel::proof(request.uri().path(), request.headers(), allow_secret_path);
-        serve_admitted(request, state, peer, true, proof, call, extend).await
+        serve_admitted(request, state, peer, true, proof, false, call, extend).await
     };
     if valid_path {
         funnel::cors_headers(response.headers_mut(), origin, options);
@@ -840,14 +1189,16 @@ async fn serve_public(
     response
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn serve_admitted(
     request: Request<Incoming>,
     state: Arc<State>,
     peer: IpAddr,
     marker: bool,
     proof: Option<[u8; 32]>,
+    #[cfg(target_os = "linux")] via_oauth_tunnel: bool,
     #[cfg(target_os = "linux")] call: &mut Option<activity::Call>,
-    #[cfg(target_os = "linux")] extend: &std::sync::atomic::AtomicBool,
+    #[cfg(target_os = "linux")] extend: &std::sync::atomic::AtomicU64,
 ) -> Reply {
     #[cfg(not(target_os = "linux"))]
     let _ = proof;
@@ -876,31 +1227,58 @@ async fn serve_admitted(
     let (settings, oauth_identity) = {
         let snapshot_state = state.clone();
         let auth = bearer.clone();
-        let load=move || {
-            let (_guard,settings)=snapshot_state.policy.read().map_err(|_|"Authorization state unavailable or restart required")?;
-            let identity=snapshot_state.oauth.as_ref().and_then(|oauth| {
-                oauth.admit(&settings,auth.as_ref().and_then(|h|h.to_str().ok()),unix_seconds())
-            });
-            if let Some((index, id))=&identity {
+        let load = move || {
+            let (_guard, settings) = snapshot_state
+                .policy
+                .read()
+                .map_err(|_| "Authorization state unavailable or restart required")?;
+            let identity = if via_oauth_tunnel {
+                snapshot_state.oauth.as_ref().and_then(|oauth| {
+                    oauth.admit(
+                        &settings,
+                        auth.as_ref().and_then(|h| h.to_str().ok()),
+                        unix_seconds(),
+                    )
+                })
+            } else {
+                None
+            };
+            if let Some((index, id)) = &identity {
                 let mode_label = if id.mode == ConnectionMode::Yolo {
                     "native_yolo"
                 } else {
                     "standard"
                 };
-                if ![AuditPhase::Intent,AuditPhase::Success].into_iter().all(|phase|
-                    snapshot_state.mutations.record_runtime_mode(&settings.clients[*index].id,"oauth_admission",mode_label,phase))
-                { return Err("Audit unavailable"); }
+                let principal = index
+                    .map(|idx| settings.clients[idx].id.as_str())
+                    .or_else(|| {
+                        snapshot_state
+                            .oauth
+                            .as_ref()
+                            .map(|oauth| oauth.server.local_client())
+                    })
+                    .unwrap_or("veyl-oauth");
+                if ![AuditPhase::Intent, AuditPhase::Success]
+                    .into_iter()
+                    .all(|phase| {
+                        snapshot_state
+                            .mutations
+                            .record_runtime_mode(principal, "oauth_admission", mode_label, phase)
+                    })
+                {
+                    return Err("Audit unavailable");
+                }
             }
-            Ok((settings,identity))
+            Ok((settings, identity))
         };
-        let loaded=if let Some(oauth)=&state.oauth {
-            oauth.server.admission_work(false,load).await.map_err(|_|())
+        let loaded = if let Some(oauth) = &state.oauth {
+            oauth.server.admission_work(false, load).await.map_err(|_| ())
         } else {
-            tokio::task::spawn_blocking(load).await.map_err(|_|())
+            tokio::task::spawn_blocking(load).await.map_err(|_| ())
         };
         match loaded {
             Ok(Ok(result)) => result,
-            Ok(Err(message))=>return simple(StatusCode::SERVICE_UNAVAILABLE,message),
+            Ok(Err(message)) => return simple(StatusCode::SERVICE_UNAVAILABLE, message),
             _ => {
                 return simple(
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -915,69 +1293,94 @@ async fn serve_admitted(
     let clients = &state.clients;
 
     #[cfg(target_os = "linux")]
-    let client_index = if state.oauth.is_some() {
-        oauth_identity.as_ref().map(|(index, _)| *index)
-    } else if marker {
-        funnel::authenticate(&settings, proof.as_ref(), now)
+    let (resolved_client, oauth_identity) = if via_oauth_tunnel {
+        let Some((client_index, identity)) = oauth_identity else {
+            return simple(StatusCode::UNAUTHORIZED, "Unauthorized");
+        };
+        let client = match (client_index, state.oauth.as_ref()) {
+            (Some(index), Some(oauth)) => {
+                match oauth.resolve_client_override(&settings, index, Some(&identity)) {
+                    Ok(Some(c)) => ResolvedClient::Owned(Box::new(c)),
+                    Ok(None) => ResolvedClient::Borrowed(&clients[index]),
+                    Err(msg) => return simple(StatusCode::SERVICE_UNAVAILABLE, msg),
+                }
+            }
+            (None, Some(oauth)) => {
+                match oauth.resolve_unified_client(&settings, &identity, now) {
+                    Ok(c) => ResolvedClient::Owned(Box::new(c)),
+                    Err(msg) => return simple(StatusCode::SERVICE_UNAVAILABLE, msg),
+                }
+            }
+            _ => return simple(StatusCode::UNAUTHORIZED, "Unauthorized"),
+        };
+        (client, Some(identity))
     } else {
-        authenticate(clients, bearer.as_ref(), now)
+        let client_index = if marker {
+            funnel::authenticate(&settings, proof.as_ref(), now)
+        } else {
+            authenticate(clients, bearer.as_ref(), now)
+        };
+        let Some(client_index) = client_index else {
+            if marker {
+                if let Some(admin) = &state.admin {
+                    admin
+                        .activity
+                        .funnel_admission(None, activity::Status::Failure);
+                }
+                let _ = audit("funnel.denied");
+                return simple(StatusCode::NOT_FOUND, "Not found");
+            }
+            let mut locks = state.failures.lock().await;
+            let failure = locks.entry(peer).or_insert(Failure {
+                count: 0,
+                until: Instant::now(),
+            });
+            if Instant::now() >= failure.until {
+                failure.count = 0;
+            }
+            failure.count = failure.count.saturating_add(1);
+            failure.until = Instant::now() + Duration::from_secs(60);
+            let _ = audit("auth.denied");
+            return simple(
+                if failure.count > 5 {
+                    StatusCode::TOO_MANY_REQUESTS
+                } else {
+                    StatusCode::UNAUTHORIZED
+                },
+                "Unauthorized",
+            );
+        };
+        (ResolvedClient::Borrowed(&clients[client_index]), None)
     };
     #[cfg(not(target_os = "linux"))]
-    let client_index = authenticate(clients, bearer.as_ref(), now);
-    let Some(client_index) = client_index else {
-        #[cfg(target_os = "linux")]
-        if state.oauth.is_some() {
-            return simple(StatusCode::UNAUTHORIZED, "Unauthorized");
-        }
-        if marker {
-            #[cfg(target_os = "linux")]
-            if let Some(admin) = &state.admin {
-                admin
-                    .activity
-                    .funnel_admission(None, activity::Status::Failure);
+    let client = {
+        let Some(client_index) = authenticate(clients, bearer.as_ref(), now) else {
+            let mut locks = state.failures.lock().await;
+            let failure = locks.entry(peer).or_insert(Failure {
+                count: 0,
+                until: Instant::now(),
+            });
+            if Instant::now() >= failure.until {
+                failure.count = 0;
             }
-            let _ = audit("funnel.denied");
-            return simple(StatusCode::NOT_FOUND, "Not found");
-        }
-        let mut locks = state.failures.lock().await;
-        let failure = locks.entry(peer).or_insert(Failure {
-            count: 0,
-            until: Instant::now(),
-        });
-        if Instant::now() >= failure.until {
-            failure.count = 0;
-        }
-        failure.count = failure.count.saturating_add(1);
-        failure.until = Instant::now() + Duration::from_secs(60);
-        let _ = audit("auth.denied");
-        return simple(
-            if failure.count > 5 {
-                StatusCode::TOO_MANY_REQUESTS
-            } else {
-                StatusCode::UNAUTHORIZED
-            },
-            "Unauthorized",
-        );
-    };
-    #[cfg(target_os = "linux")]
-    let oauth_identity = oauth_identity.map(|(_, identity)| identity);
-    #[cfg(target_os = "linux")]
-    let resolved_client = match (&state.oauth, oauth_identity.as_ref()) {
-        (Some(oauth), Some(identity)) => {
-            match oauth.resolve_client_override(&settings, client_index, Some(identity)) {
-                Ok(Some(client)) => ResolvedClient::Owned(Box::new(client)),
-                Ok(None) => ResolvedClient::Borrowed(&clients[client_index]),
-                Err(msg) => return simple(StatusCode::SERVICE_UNAVAILABLE, msg),
-            }
-        }
-        _ => ResolvedClient::Borrowed(&clients[client_index]),
+            failure.count = failure.count.saturating_add(1);
+            failure.until = Instant::now() + Duration::from_secs(60);
+            let _ = audit("auth.denied");
+            return simple(
+                if failure.count > 5 {
+                    StatusCode::TOO_MANY_REQUESTS
+                } else {
+                    StatusCode::UNAUTHORIZED
+                },
+                "Unauthorized",
+            );
+        };
+        &clients[client_index]
     };
     #[cfg(target_os = "linux")]
     let client: &Client = &resolved_client;
-    #[cfg(not(target_os = "linux"))]
-    let client = &clients[client_index];
     #[cfg(target_os = "linux")]
-    let session_scope = (marker, oauth_identity.as_ref().map(|identity| identity.family));
+    let session_scope = (marker, oauth_identity.as_ref().map(|identity| (identity.family, identity.oauth_client.clone())));
     #[cfg(not(target_os = "linux"))]
     let session_scope = (marker, None);
     #[cfg(target_os = "linux")]
@@ -1088,12 +1491,21 @@ async fn serve_admitted(
     session.touch();
 
     #[cfg(target_os = "linux")]
+    if method == Some("notifications/cancelled")
+        && payload.get("id").is_none()
+        && payload["jsonrpc"] == "2.0"
+    {
+        state.upstream_requests.cancel(&session_id, &payload["params"]["requestId"]);
+        return simple(StatusCode::ACCEPTED, "");
+    }
+
+    #[cfg(target_os = "linux")]
     if client
         .actions
         .contains(&mcp_gateway::security::policy::Action::CallUpstream)
-        && client.upstreams.scoped_call(&payload)
     {
-        extend.store(true, std::sync::atomic::Ordering::Relaxed);
+        extend.store(client.upstreams.extra_response_seconds(&settings.upstreams, &payload),
+            std::sync::atomic::Ordering::Relaxed);
     }
 
     #[cfg(target_os = "linux")]
@@ -1107,11 +1519,29 @@ async fn serve_admitted(
         let Ok(worker) = state.tool_workers.clone().try_acquire_owned() else {
             return simple(StatusCode::SERVICE_UNAVAILABLE, "Tool workers busy");
         };
+        let request = if method == Some("tools/call")
+            && client.actions.contains(&Action::CallUpstream)
+            && !client.upstreams.servers.is_empty()
+            && payload["params"]["name"].as_str().is_some_and(|name| {
+                matches!(Tool::parse(name), None | Some(Tool::UpstreamsCall))
+            }) {
+            match upstream_requests::request_key(&payload["id"])
+                .map(|id| state.upstream_requests.start(&session_id, id))
+                .transpose()
+            {
+                Ok(request) => request,
+                Err((code, reason)) => return simple(code, reason),
+            }
+        } else {
+            None
+        };
+        let upstream_cancellation = request.as_ref().map(upstream_requests::RequestGuard::token);
         *call = state
             .admin
             .as_ref()
             .and_then(|admin| admin.activity.start(&client.id, &payload));
         let trace_key = call.as_ref().map(activity::Call::trace_key);
+        let expected_client_id = client.id.clone();
         return match tokio::task::spawn_blocking(move || {
             let _worker = worker;
             let Ok((_admission, current)) = state.policy.read() else {
@@ -1121,42 +1551,49 @@ async fn serve_admitted(
                 );
             };
             let now = unix_seconds();
-            let (index, worker_identity) = if let Some(oauth) = &state.oauth {
+            let (worker_client, worker_identity) = if via_oauth_tunnel {
+                let Some(oauth) = &state.oauth else {
+                    return simple(StatusCode::UNAUTHORIZED, "Unauthorized");
+                };
                 match oauth
                     .admit(&current, bearer.as_ref().and_then(|h| h.to_str().ok()), now)
                     .filter(|(_, identity)| Some(identity) == oauth_identity.as_ref())
                 {
-                    Some((index, id)) => (index, Some(id)),
+                    Some((Some(index), id)) => {
+                        let c = match oauth.resolve_client_override(&current, index, Some(&id)) {
+                            Ok(Some(c)) => ResolvedClient::Owned(Box::new(c)),
+                            Ok(None) => ResolvedClient::Borrowed(&current.clients[index]),
+                            Err(msg) => return simple(StatusCode::SERVICE_UNAVAILABLE, msg),
+                        };
+                        (c, Some(id))
+                    }
+                    Some((None, id)) => {
+                        let c = match oauth.resolve_unified_client(&current, &id, now) {
+                            Ok(c) => ResolvedClient::Owned(Box::new(c)),
+                            Err(msg) => return simple(StatusCode::SERVICE_UNAVAILABLE, msg),
+                        };
+                        (c, Some(id))
+                    }
                     None => return simple(StatusCode::UNAUTHORIZED, "Unauthorized"),
                 }
             } else if marker {
                 match funnel::authenticate(&current, proof.as_ref(), now) {
-                    Some(index) => (index, None),
+                    Some(index) => (ResolvedClient::Borrowed(&current.clients[index]), None),
                     None => return simple(StatusCode::UNAUTHORIZED, "Unauthorized"),
                 }
             } else {
                 match authenticate(&current.clients, bearer.as_ref(), now) {
-                    Some(index) => (index, None),
+                    Some(index) => (ResolvedClient::Borrowed(&current.clients[index]), None),
                     None => return simple(StatusCode::UNAUTHORIZED, "Unauthorized"),
                 }
             };
-            if current.clients[index].id != settings.clients[client_index].id {
+            if worker_client.id != expected_client_id {
                 return simple(StatusCode::FORBIDDEN, "Session access denied");
             }
-            let worker_client = match (&state.oauth, worker_identity.as_ref()) {
-                (Some(oauth), Some(id)) => {
-                    match oauth.resolve_client_override(&current, index, Some(id)) {
-                        Ok(Some(c)) => ResolvedClient::Owned(Box::new(c)),
-                        Ok(None) => ResolvedClient::Borrowed(&current.clients[index]),
-                        Err(msg) => return simple(StatusCode::SERVICE_UNAVAILABLE, msg),
-                    }
-                }
-                _ => ResolvedClient::Borrowed(&current.clients[index]),
-            };
             if worker_identity.is_some()
                 && ![AuditPhase::Intent, AuditPhase::Success].into_iter().all(|phase| {
                     state.mutations.record_runtime_mode(
-                        &current.clients[index].id,
+                        &worker_client.id,
                         "oauth_worker_admission",
                         worker_client.mode.audit_mode().unwrap_or("standard"),
                         phase,
@@ -1172,6 +1609,7 @@ async fn serve_admitted(
                 &worker_client,
                 &current,
                 (trace_key, worker_identity.as_ref()),
+                upstream_cancellation.as_deref(),
             )
         })
         .await
@@ -1191,6 +1629,8 @@ async fn serve_admitted(
         &settings,
         #[cfg(target_os = "linux")]
         (None,None),
+        #[cfg(target_os = "linux")]
+        None,
     )
 }
 
@@ -1204,6 +1644,7 @@ fn dispatch_tools(
         Option<(String, Instant)>,
         Option<&mcp_gateway::http_common::oauth_http::Identity>,
     ),
+    #[cfg(target_os = "linux")] upstream_cancellation: Option<&crate::upstream::Cancellation>,
 ) -> Reply {
     #[cfg(target_os = "linux")]
     let oauth_owner = oauth_identity.map(oauth::job_owner);
@@ -1246,7 +1687,7 @@ fn dispatch_tools(
             let now = unix_seconds();
             let mut tools: Vec<_> = Tool::ALL
                 .into_iter()
-                .filter(|tool| permit_tool(*tool, client, state, settings, audited, now).is_ok())
+                .filter(|tool| permit_tool(*tool, client, state, settings, audited, now, oauth_identity.is_some()).is_ok())
                 .map(|tool| {
                     let mut schema = tool.schema();
                     #[cfg(target_os = "linux")]
@@ -1301,7 +1742,7 @@ fn dispatch_tools(
                 })
                 .collect();
             #[cfg(target_os = "linux")]
-            if permit_tool(Tool::UpstreamsCall, client, state, settings, audited, now).is_ok()
+            if permit_tool(Tool::UpstreamsCall, client, state, settings, audited, now, oauth_identity.is_some()).is_ok()
                 && !client.upstreams.servers.is_empty()
             {
                 let mode = client.mode.audit_mode().unwrap_or("standard");
@@ -1328,7 +1769,8 @@ fn dispatch_tools(
             let tool = Tool::parse(name);
             let now = unix_seconds();
             let audited = audit("policy.checked");
-            let permits = |tool| permit_tool(tool, client, state, settings, audited, now);
+            let is_oauth = oauth_identity.is_some();
+            let permits = |tool| permit_tool(tool, client, state, settings, audited, now, is_oauth);
             #[cfg(target_os = "linux")]
             if tool == Some(Tool::UpstreamsList) {
                 if permits(Tool::UpstreamsList).is_err()
@@ -1376,6 +1818,7 @@ fn dispatch_tools(
                             &client.upstreams,
                             name,
                             args,
+                            upstream_cancellation,
                             |tool, intent, successful| {
                                 let phase = if intent {
                                     AuditPhase::Intent
@@ -1539,6 +1982,12 @@ fn dispatch_tools(
                     |owner, job| settings.job_state_path()
                         .is_some_and(|path| crate::jobs::owns_job(path, owner, job)),
                 );
+                let result = result.and_then(|goal| {
+                    if let Some(jobs) = state.jobs.as_ref() {
+                        crate::goals::stop_active_runner(jobs, tool, &goal)?;
+                    }
+                    Ok(goal)
+                });
                 return Some(match result {
                     Ok(goal) => tool_text(false, &goal.to_string()),
                     Err(error) => tool_text(true, &error),
@@ -1578,7 +2027,7 @@ fn dispatch_tools(
             if tool.action().is_job() {
                 #[cfg(target_os = "linux")]
                 if let (Some(jobs), Some(root)) = (state.jobs.as_ref(), client.job_root.as_ref()) {
-                    if state.oauth.is_some() && oauth_owner.is_none() {
+                    if oauth_identity.is_some() && oauth_owner.is_none() {
                         return Some(tool_text(true,"OAuth job owner unavailable"));
                     }
                     if oauth_owner.is_some() && tool == Tool::JobWait
@@ -1679,7 +2128,7 @@ fn dispatch_tools(
             #[cfg(target_os = "linux")]
             if let Some(root) = client.mutation_root.as_ref() {
                 let strict;
-                let root=if state.oauth.is_some() {
+                let root=if oauth_identity.is_some() {
                     strict=match root.strict_alias_scope() {
                         Ok(root)=>root,
                         Err(_)=>return Some(tool_text(true,"OAuth workspace identity unavailable")),
@@ -1920,6 +2369,7 @@ fn permit_tool(
     settings: &Configuration,
     audited: bool,
     now: u64,
+    is_oauth: bool,
 ) -> Result<(), &'static str> {
     const DENIED: &str = "Not authorized or capability unavailable";
     if !client.tools.contains(&tool) || !authorized(client, tool.action(), state, audited, now) {
@@ -1937,14 +2387,15 @@ fn permit_tool(
         return Err(DENIED);
     }
     #[cfg(target_os = "linux")]
-    if state
-        .oauth
-        .as_ref()
-        .is_some_and(|oauth| tool.process_control() && client.mode != ExecutionMode::Yolo && !oauth.workspace_interactive)
+    if is_oauth
+        && state
+            .oauth
+            .as_ref()
+            .is_some_and(|oauth| tool.process_control() && client.mode != ExecutionMode::Yolo && !oauth.workspace_interactive)
     {
         return Err(DENIED);
     }
-    if tool_available(tool, client, state, settings) {
+    if tool_available(tool, client, state, settings, is_oauth) {
         return Ok(());
     }
     #[cfg(target_os = "linux")]
@@ -1965,7 +2416,7 @@ fn timeshift_limit(client: &Client, settings: &Configuration) -> Option<usize> {
     .then_some(client.timeshift_retention_count)
 }
 
-fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configuration) -> bool {
+fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configuration, is_oauth: bool) -> bool {
     if tool.is_goal() {
         #[cfg(target_os = "linux")]
         return settings.managed && state.mutations.available();
@@ -1986,10 +2437,12 @@ fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configu
             && client.job_root.is_some()
             && state.jobs.as_ref().is_some_and(|jobs| jobs.sessions_available(client.mode == ExecutionMode::Yolo))
             && state.mutations.available()
-            && state.oauth.as_ref().is_none_or(|oauth| {
-                client.mode == ExecutionMode::Yolo || oauth.workspace_interactive
-                    && state.jobs.as_ref().is_some_and(Jobs::oauth_launch_available)
-            });
+            && (!is_oauth
+                || state.oauth.as_ref().is_none_or(|oauth| {
+                    client.mode == ExecutionMode::Yolo
+                        || (oauth.workspace_interactive
+                            && state.jobs.as_ref().is_some_and(Jobs::oauth_launch_available))
+                }));
         #[cfg(not(target_os = "linux"))]
         return false;
     }
@@ -2034,7 +2487,7 @@ fn tool_available(tool: Tool, client: &Client, state: &State, settings: &Configu
     if tool.action().is_job() {
         #[cfg(target_os = "linux")]
         {
-            if state.oauth.is_some() && client.mode != ExecutionMode::Yolo && matches!(tool,Tool::RunCommand|Tool::JobStart|Tool::ExecCommand|Tool::TaskRun) {
+            if is_oauth && client.mode != ExecutionMode::Yolo && matches!(tool,Tool::RunCommand|Tool::JobStart|Tool::ExecCommand|Tool::TaskRun) {
                 return client.job_root.is_some() && state.jobs.as_ref().is_some_and(Jobs::oauth_launch_available);
             }
             return client.job_root.is_some() && state.jobs.as_ref().is_some_and(Jobs::available);

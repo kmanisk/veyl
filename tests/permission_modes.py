@@ -111,7 +111,7 @@ class PermissionModes(unittest.TestCase):
         gateway = f.start()
         session = f.connect()
         self.assertEqual(self.tools(session), {"read_file"})
-        self.assertIn("Multiple clients configured", self.cli("mode", "yolo", "--confirm-native", success=False))
+        self.assertIn("Multiple clients configured", self.cli("mode", "get", success=False))
         self.cli("mode", "full", "primary", success=False)
         # Validate that an unsafe state layout cannot be approved.
         alias = f.base / "state-alias"

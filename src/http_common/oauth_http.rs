@@ -109,13 +109,20 @@ fn unauthorized(state: &State) -> Reply {
     response
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IngressKind {
+    Direct,
+    TailscaleFunnel,
+    CloudflareTunnel,
+}
+
 #[derive(Clone)]
 pub struct Server {
     shared: Arc<Shared>,
     authority: String,
     local_client: String,
     operator_digest: [u8; 32],
-    funnel: bool,
+    ingress: IngressKind,
 }
 
 // Separate bounded slots for public and operator work. A timed-out HTTP
@@ -170,7 +177,12 @@ impl Server {
     /// Only the isolated native foreground provider may select this
     /// ingress shape. Proxy metadata never supplies authentication.
     pub fn with_funnel_ingress(mut self) -> Self {
-        self.funnel = true;
+        self.ingress = IngressKind::TailscaleFunnel;
+        self
+    }
+
+    pub fn with_cloudflare_ingress(mut self) -> Self {
+        self.ingress = IngressKind::CloudflareTunnel;
         self
     }
     /// Run native policy/admission work off the HTTP runtime, using the
@@ -186,7 +198,7 @@ impl Server {
     /// Called only by the authenticated local dashboard adapter, after
     /// its own session and CSRF checks. Never wire to the public listener.
     pub fn local_consent(&self, body: &[u8], eligible: bool, native_scope: Value) -> Reply {
-        self.local_consent_with_modes(body, eligible, native_scope, None)
+        self.local_consent_with_default(body, eligible, native_scope, None, ConnectionMode::Standard)
     }
 
     /// Local consent with optional Broad YOLO scope when explicitly supported
@@ -197,6 +209,25 @@ impl Server {
         eligible: bool,
         native_scope: Value,
         yolo_scope: Option<Value>,
+    ) -> Reply {
+        self.local_consent_with_default(
+            body,
+            eligible,
+            native_scope,
+            yolo_scope,
+            ConnectionMode::Standard,
+        )
+    }
+
+    /// Local consent with an explicit configured default mode for initial
+    /// unapproved DCR consent preselection. Never wire to the public listener.
+    pub fn local_consent_with_default(
+        &self,
+        body: &[u8],
+        eligible: bool,
+        native_scope: Value,
+        yolo_scope: Option<Value>,
+        default_mode: ConnectionMode,
     ) -> Reply {
         let Ok(mut state) = self.shared.lock() else {
             return oauth_error(Error::Unavailable);
@@ -213,10 +244,15 @@ impl Server {
             eligible,
             native_scope,
             yolo_scope.as_ref(),
+            default_mode,
         )
     }
     pub fn local_client(&self) -> &str {
         &self.local_client
+    }
+
+    pub fn authority(&self) -> &str {
+        &self.authority
     }
 
     pub fn authenticate(&self, bearer: Option<&str>) -> Option<Identity> {
@@ -246,7 +282,11 @@ impl Server {
             self.shared.clone(),
             admin_authority.unwrap_or(&self.authority),
             admin_authority.is_some(),
-            self.funnel && admin_authority.is_none(),
+            if admin_authority.is_some() {
+                IngressKind::Direct
+            } else {
+                self.ingress
+            },
             native,
         )
         .await
@@ -795,6 +835,7 @@ fn consent(
     eligible: bool,
     native_scope: Value,
     yolo_scope: Option<&Value>,
+    default_mode: ConnectionMode,
 ) -> Reply {
     let supports_yolo = yolo_scope.is_some();
     let Some(values) = object(body) else {
@@ -832,9 +873,69 @@ fn consent(
                 "local_client": state.local_client,
                 "eligible": eligible,
                 "supports_yolo": supports_yolo,
+                "default_mode": default_mode.as_str(),
                 "registrations": registrations,
             }),
         );
+    }
+    if action == "mode_all"
+        && values.len() == 3
+        && values.get("confirm") == Some(&json!(true))
+        && values
+            .keys()
+            .all(|k| matches!(k.as_str(), "action" | "mode" | "confirm"))
+    {
+        let Some(target_mode) = values
+            .get("mode")
+            .and_then(Value::as_str)
+            .and_then(ConnectionMode::parse)
+        else {
+            return oauth_error(Error::InvalidRequest);
+        };
+        if target_mode == ConnectionMode::Yolo && (!supports_yolo || !eligible) {
+            return error(StatusCode::FORBIDDEN, "yolo_authorization_unavailable");
+        }
+        return state.transaction("mode", None, |s, _now| {
+            let previous = s.registry.set_all_modes(target_mode);
+            let mut results = Vec::with_capacity(previous.len());
+            for (client, prev) in previous {
+                let mut reauth_required = false;
+                match target_mode {
+                    ConnectionMode::Yolo => {
+                        if prev != ConnectionMode::Yolo {
+                            s.grants.revoke_oauth_client(&client);
+                            s.deliveries.retain(|_, v| v.decision.client_id() != client);
+                            reauth_required = true;
+                        }
+                    }
+                    ConnectionMode::Standard => {
+                        s.grants.downgrade_oauth_client(&client);
+                    }
+                }
+                results.push(json!({
+                    "client_id": client,
+                    "previous_mode": prev.as_str(),
+                    "mode": target_mode.as_str(),
+                    "reauthorization_required": reauth_required,
+                }));
+            }
+            if let Err(e) = s.persist() {
+                return oauth_error(e);
+            }
+            audit(if target_mode == ConnectionMode::Yolo {
+                "mode_yolo"
+            } else {
+                "mode_standard"
+            });
+            json_reply(
+                StatusCode::OK,
+                json!({
+                    "ok": true,
+                    "mode": target_mode.as_str(),
+                    "updated": results,
+                }),
+            )
+        });
     }
     if action == "mode"
         && values.len() == 4
@@ -928,8 +1029,12 @@ fn consent(
     {
         let selected_mode = match values.get("mode") {
             None => {
-                if supports_yolo {
-                    registration.mode()
+                if supports_yolo && eligible {
+                    if registration.has_explicit_mode() {
+                        registration.mode()
+                    } else {
+                        default_mode
+                    }
                 } else {
                     ConnectionMode::Standard
                 }
@@ -957,6 +1062,7 @@ fn consent(
                 "local_client": state.local_client,
                 "scope": SCOPE,
                 "mode": selected_mode.as_str(),
+                "default_mode": default_mode.as_str(),
                 "registered_mode": registration.mode().as_str(),
                 "supports_yolo": supports_yolo,
                 "eligible": eligible,
@@ -1170,7 +1276,7 @@ async fn handle<F, Fut>(
     shared: Arc<Shared>,
     authority: &str,
     admin: bool,
-    funnel: bool,
+    ingress: IngressKind,
     native: F,
 ) -> Reply
 where
@@ -1178,28 +1284,42 @@ where
     Fut: std::future::Future<Output = Reply>,
 {
     let headers = req.headers();
-    // A dedicated Funnel backend accepts the known proxy envelope but
-    // never uses source IP or Tailscale identity as execution authority.
-    let forwarding = if funnel {
-        // A browser inside the tailnet may resolve this same HTTPS name
-        // privately. Neither kind of proxy envelope authenticates a user.
-        let marked = headers.contains_key("tailscale-funnel-request");
-        (!marked || one(headers, "tailscale-funnel-request") == Some("?1"))
-            && one(headers, "x-forwarded-host") == Some(authority)
-            && one(headers, "x-forwarded-proto") == Some("https")
-            && one(headers, "x-forwarded-for")
-                .is_some_and(|v| v.parse::<std::net::IpAddr>().is_ok())
-            && !headers.contains_key("forwarded")
-            && ![
-                "tailscale-user-login",
-                "tailscale-user-name",
-                "tailscale-user-profile-pic",
-                "tailscale-app-capabilities",
-            ]
-            .iter()
-            .any(|h| marked && headers.contains_key(*h) || headers.get_all(*h).iter().count() > 1)
-    } else {
-        ![
+    // A dedicated Funnel/Tunnel backend accepts the known proxy envelope but
+    // never uses source IP or tunnel identity as execution authority.
+    let forwarding = match ingress {
+        IngressKind::TailscaleFunnel => {
+            // A browser inside the tailnet may resolve this same HTTPS name
+            // privately. Neither kind of proxy envelope authenticates a user.
+            let marked = headers.contains_key("tailscale-funnel-request");
+            (!marked || one(headers, "tailscale-funnel-request") == Some("?1"))
+                && one(headers, "x-forwarded-host") == Some(authority)
+                && one(headers, "x-forwarded-proto") == Some("https")
+                && one(headers, "x-forwarded-for")
+                    .is_some_and(|v| v.parse::<std::net::IpAddr>().is_ok())
+                && !headers.contains_key("forwarded")
+                && ![
+                    "tailscale-user-login",
+                    "tailscale-user-name",
+                    "tailscale-user-profile-pic",
+                    "tailscale-app-capabilities",
+                ]
+                .iter()
+                .any(|h| {
+                    marked && headers.contains_key(*h) || headers.get_all(*h).iter().count() > 1
+                })
+        }
+        IngressKind::CloudflareTunnel => {
+            !headers.contains_key("tailscale-funnel-request")
+                && !headers.contains_key("forwarded")
+                && one(headers, "x-forwarded-host").is_none_or(|h| h == authority)
+                && one(headers, "x-forwarded-proto") == Some("https")
+                && (one(headers, "cf-connecting-ip")
+                    .is_some_and(|v| v.parse::<std::net::IpAddr>().is_ok())
+                    || one(headers, "x-forwarded-for")
+                        .and_then(|v| v.split(',').next())
+                        .is_some_and(|v| v.trim().parse::<std::net::IpAddr>().is_ok()))
+        }
+        IngressKind::Direct => ![
             "tailscale-funnel-request",
             "forwarded",
             "x-forwarded-host",
@@ -1207,7 +1327,7 @@ where
             "x-forwarded-for",
         ]
         .iter()
-        .any(|h| headers.contains_key(*h))
+        .any(|h| headers.contains_key(*h)),
     };
     if req.uri().authority().is_some()
         || one(headers, "host") != Some(authority)
@@ -1422,7 +1542,7 @@ async fn listener(
                 let host = host.clone();
                 async move {
                     Ok::<_, Infallible>(
-                        handle(req, shared, &host, admin, false, |_| async {
+                        handle(req, shared, &host, admin, IngressKind::Direct, |_| async {
                             error(
                                 StatusCode::SERVICE_UNAVAILABLE,
                                 "native_admission_not_enabled",
@@ -1500,6 +1620,24 @@ pub fn switch_stopped_client_mode(
     mode: ConnectionMode,
 ) -> Result<(ConnectionMode, bool), String> {
     durable::switch_stopped_client_mode(dir, local, client_id, mode)
+}
+
+pub fn switch_all_stopped_clients_mode(
+    dir: &Path,
+    local: &str,
+    mode: ConnectionMode,
+) -> Result<Vec<(String, ConnectionMode, bool)>, String> {
+    durable::switch_all_stopped_clients_mode(dir, local, mode)
+}
+
+pub fn rebind_migrated_state(
+    source_dir: &Path,
+    dest_dir: &Path,
+    local: &str,
+    expected_old_bindings: &[&str],
+    new_binding: &str,
+) -> Result<String, String> {
+    durable::rebind_migrated_state(source_dir, dest_dir, local, expected_old_bindings, new_binding)
 }
 
 pub fn persisted_origin(dir: &Path) -> Result<String, String> {
@@ -1585,7 +1723,7 @@ fn open_inner(
         authority,
         local_client,
         operator_digest: operator,
-        funnel: false,
+        ingress: IngressKind::Direct,
     })
 }
 

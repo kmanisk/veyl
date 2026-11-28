@@ -128,6 +128,14 @@ fn is_live(dir: &OwnedFd) -> Result<bool, String> {
     }
 }
 
+pub(crate) fn is_live_dir(base: &Path) -> Result<bool, String> {
+    if !exists(base)? {
+        return Ok(false);
+    }
+    let dir = open_base(base, false)?;
+    is_live(&dir)
+}
+
 fn fetch_registrations(base: &Path, profile: &Path, dir: &OwnedFd) -> Result<(bool, Vec<Value>, bool), String> {
     let control_path = base.join("control.sock");
     if is_live(dir)? {

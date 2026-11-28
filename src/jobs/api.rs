@@ -700,3 +700,28 @@ fn resolve_cwd(
     }
     Ok(canonical)
 }
+
+impl Jobs {
+    /// Recover a committed signed receipt without retrying uncertain delivery.
+    pub(crate) fn find_request(&self, owner: &str, request_id: &str) -> Result<Option<String>, String> {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(owner.as_bytes());
+        hash.update([0]);
+        hash.update(request_id.as_bytes());
+        let key = format!("{:x}", hash.finalize());
+        let read = || -> io::Result<Option<String>> {
+            let _transaction = self.store.lock(false)?;
+            for id in self.store.jobs()? {
+                let job = self.store.job(&id)?;
+                if self.read_if_published(&job)?.is_some_and(|receipt| {
+                    receipt.client_id == owner && receipt.request_key.as_deref() == Some(key.as_str())
+                }) {
+                    return Ok(Some(id));
+                }
+            }
+            Ok(None)
+        };
+        read().map_err(|_| "Cannot safely reconcile the iteration's job receipt".into())
+    }
+}

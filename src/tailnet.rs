@@ -448,6 +448,23 @@ fn shared_transition(
     Ok(next)
 }
 
+/// Retire the old shared public bearer route and owned dedicated listeners
+/// in one conditional update. Keep the marker and non-proxy tombstone: stale
+/// credential-bearing URLs must never fall through to the unrelated root.
+fn retire_legacy_shared(state: &Value, routes: &Routes) -> Result<Value, String> {
+    let authority = shared_authority(routes);
+    if !state["Web"][&authority]["Handlers"]["/"]["Proxy"].is_string()
+        || !matches!(shared_state(state, routes)?, SharedState::Enabled | SharedState::Disabled)
+    {
+        return Err("Legacy retirement requires an owned shared mount and an independent root proxy".into());
+    }
+    let mut next = shared_transition(state, routes, false, false)?;
+    if next["AllowFunnel"][routes.authority(0)] == true {
+        next = funnel_transition(&next, routes, false)?;
+    }
+    transition(&next, routes, false)
+}
+
 fn node_allows_funnel(status: &Value, port: u16) -> bool {
     let Some(caps) = status["Self"]["CapMap"].as_object() else {
         return false;
@@ -537,7 +554,7 @@ fn state_object(value: Value) -> Result<Value, String> {
     Ok(value)
 }
 
-const HELP: &str = "usage: veyl serve <plan|validate|inspect|apply|remove|rollback|funnel-plan|funnel-apply|funnel-rollback|funnel-retire-dedicated> --config PATH [--listen 127.0.0.1:PORT] [--state-file PATH | --live] [--socket PATH] [--adapter] [--confirm]";
+const HELP: &str = "usage: veyl serve <plan|validate|inspect|apply|remove|rollback|funnel-plan|funnel-apply|funnel-rollback|funnel-retire-dedicated|funnel-retire-legacy> --config PATH [--listen 127.0.0.1:PORT] [--state-file PATH | --live] [--socket PATH] [--adapter] [--confirm]";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args.iter().any(|a| a == "--help") {
@@ -557,6 +574,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             | "funnel-apply"
             | "funnel-rollback"
             | "funnel-retire-dedicated"
+            | "funnel-retire-legacy"
     ) {
         return Err(HELP.into());
     }
@@ -568,9 +586,11 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             | "funnel-apply"
             | "funnel-rollback"
             | "funnel-retire-dedicated"
+            | "funnel-retire-legacy"
     );
     let funnel_only = action.starts_with("funnel-");
-    let disable_funnel = action == "funnel-rollback";
+    let retire_legacy = action == "funnel-retire-legacy";
+    let disable_funnel = action == "funnel-rollback" || retire_legacy;
     let retire_dedicated = action == "funnel-retire-dedicated";
     let mut config = None;
     let mut fixture = None;
@@ -611,7 +631,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             }
             Some("--confirm") if !confirm => confirm = true,
             Some("--live") if !live => live = true,
-            Some("--adapter") if !adapter && funnel_only && !retire_dedicated => adapter = true,
+            Some("--adapter") if !adapter && funnel_only && !retire_dedicated && !retire_legacy => adapter = true,
             _ => return Err(HELP.into()),
         }
     }
@@ -649,7 +669,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if standalone && adapter {
         return Err("Standalone Funnel cannot adopt an adapter".into());
     }
-    if !shared && (adapter || retire_dedicated) {
+    if !shared && (adapter || retire_dedicated || retire_legacy) {
         return Err("This command requires tailscale_serve.shared_funnel".into());
     }
     if funnel_only && !disable_funnel && public.is_none() {
@@ -777,7 +797,9 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         if receipt.is_none() {
             return Err("Apply private Serve before changing Funnel".into());
         }
-        if retire_dedicated {
+        if retire_legacy {
+            retire_legacy_shared(&state, &routes)?
+        } else if retire_dedicated {
             if shared_state(&state, &routes)? != SharedState::Enabled || !owned[1] {
                 return Err(
                     "Activate native shared Funnel and verify the private dashboard first".into(),
@@ -826,6 +848,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
             "funnel-apply" => "funnel_apply",
             "funnel-rollback" => "funnel_rollback",
             "funnel-retire-dedicated" => "funnel_retire_dedicated",
+            "funnel-retire-legacy" => "funnel_retire_legacy",
             _ if add => "serve_apply",
             _ => "serve_remove",
         };
@@ -881,6 +904,8 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
         record(AuditPhase::Success)
             .map_err(|_| "Serve outcome could not be audited. Inspect current routes.")?;
     }
+    // The retired shared marker still references this receipt. Retain it for
+    // ownership verification and explicit pre-migration recovery.
     if let Some(config) = &policy
         && !add
     {

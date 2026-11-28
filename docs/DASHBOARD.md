@@ -136,3 +136,19 @@ it. The daemon never weakens audit checks to admit operations in that state.
 The local Goals tab shows persistent progress, associated job logs and lifecycle
 controls. The dashboard’s status check reports live audit availability. Use
 the audit view or `veyl audit verify` for ledger verification. See [Goals](GOALS.md).
+
+The Clients view shows bearer and OAuth connections in the same list. Use
+the Grants action to open and search individual categories. YOLO, revocation
+and the default for future approvals require local confirmation. The default
+preselects the consent mode and does not change existing grants. OAuth
+registrations that have been approved but have no recent MCP session show as
+Authorized.
+
+In the TUI use Tab or 1–8 to select a view, j/k and g/G to move, / to filter
+applicable lists, s to reverse the order, and Enter for full details. The Jobs
+view reserves room for the command and duration, with a short ID and the full
+value in details. Press l for logs, x to confirm cancellation, and p to change
+the selected job client. In Clients, Y/S/X select native YOLO, Standard or
+revocation. In Upstreams, p probes the selected provider and opens its
+capability details. Goals shows the roadmap, evidence, runner iterations and
+job links with P/R/C for pause, resume and cancellation.

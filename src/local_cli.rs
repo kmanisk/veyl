@@ -55,10 +55,8 @@ pub(crate) fn normalize(mut args: Vec<OsString>) -> Result<Vec<OsString>, String
     } else if !matches!(
         args.first().and_then(|arg| arg.to_str()),
         Some(
-            "mode"
-                | "yolo"
+            "yolo"
                 | "dashboard"
-                | "serve"
                 | "skills"
                 | "mcp-servers"
                 | "marketplace"
@@ -70,11 +68,8 @@ pub(crate) fn normalize(mut args: Vec<OsString>) -> Result<Vec<OsString>, String
         return Ok(args);
     }
     if args.iter().any(|arg| arg == "--config" || arg == "--help")
-        || (args[0] == "mode"
-            && (args.iter().any(|arg| arg == "--managed")
-                || crate::oauth_cli::managed::managed_exists().unwrap_or(false)))
+        || args[0] == "service"
         || (args.len() < 2 && args[0] != "connect")
-        || (args[0] == "service" && matches!(args[1].to_str(), Some("status" | "diagnostics")))
     {
         return Ok(args);
     }

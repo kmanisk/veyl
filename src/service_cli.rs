@@ -19,17 +19,22 @@ use rustix::io::Errno;
 use crate::http::operator::{PolicyFile, verify_approvals};
 
 const UNIT: &str = "mcp-gateway.service";
-const HELP: &str = "usage: veyl service on [--config PATH] [--listen IP:PORT]\n\
-                   veyl service print-unit [--config PATH] [--listen IP:PORT]\n\
-                   veyl service install (--dry-run | --confirm) [--config PATH] [--listen IP:PORT]\n\
-                   veyl service uninstall --confirm [--dry-run] [--config PATH] [--listen IP:PORT]\n\
-                   veyl service <enable|disable|start|stop|restart> (--dry-run | --confirm) [--config PATH] [--listen IP:PORT]\n\
-                   veyl service <status|diagnostics|validate>";
+const UNIT_VEYL: &str = "veyl.service";
+const HELP: &str = "usage: veyl service install [--enable-now] [--dry-run] [--confirm | --yes] [--listen IP:PORT] [--funnel-socket PATH]\n\
+                   veyl service uninstall [--confirm | --yes] [--dry-run]\n\
+                   veyl service <enable|disable|start|stop|restart> [--now] [--dry-run] [--confirm | --yes]\n\
+                   veyl service <status|diagnostics|print-unit|validate>\n\
+                   Legacy unit compatibility: veyl service on|install|... --config PATH [--listen IP:PORT]";
 
 pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
     if args.iter().any(|arg| arg == "--help") {
         println!("{HELP}");
         return Ok(());
+    }
+    let use_legacy = args.iter().any(|arg| arg == "--config")
+        || args.first().is_some_and(|arg| arg == "on");
+    if !use_legacy {
+        return run_unified(args);
     }
     let action = args.first().and_then(|arg| arg.to_str()).ok_or(HELP)?;
     if action == "on" {
@@ -189,6 +194,23 @@ pub(crate) fn run(args: &[OsString]) -> Result<(), String> {
 /// Explicitly switch the matching installed unit to foreground operation.
 /// Never stop an unrelated or overridden service.
 pub(crate) fn portable(args: &[OsString]) -> Result<(), String> {
+    let has_legacy_flags = args.iter().any(|a| a == "--config" || a == "--listen");
+    if !has_legacy_flags {
+        let home = env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|p| valid_path(p))
+            .ok_or("HOME must be absolute")?;
+        let target = home.join(".config/systemd/user").join(UNIT_VEYL);
+        if target.symlink_metadata().is_ok()
+            && let Ok(exe) = verified_current_exe()
+            && unit_is_owned_veyl(&target, &exe).unwrap_or(false)
+        {
+            let _ = manager(&["stop", UNIT_VEYL]);
+            let _ = manager(&["disable", UNIT_VEYL]);
+            println!("Veyl user service stopped and disabled.");
+        }
+        return crate::serve_cmd::serve(args);
+    }
     let (mut config, mut listen) = (None, None);
     let mut options = args.iter();
     while let Some(arg) = options.next() {
@@ -345,6 +367,10 @@ fn uninstall(path: &Path, expected: &[u8]) -> Result<(), String> {
 }
 
 fn owned_unit(path: &Path, expected: &[u8], remove: bool) -> io::Result<bool> {
+    owned_unit_named(path, UNIT, expected, remove)
+}
+
+fn owned_unit_named(path: &Path, unit_name: &str, expected: &[u8], remove: bool) -> io::Result<bool> {
     let refuse = || io::Error::other("unit does not match the generated configuration");
     let directory = match open_operator_dir(path.parent().ok_or_else(refuse)?) {
         Ok(directory) => directory,
@@ -354,7 +380,7 @@ fn owned_unit(path: &Path, expected: &[u8], remove: bool) -> io::Result<bool> {
     checked(&directory)?;
     let handle = match fs::openat(
         &directory,
-        UNIT,
+        unit_name,
         OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     ) {
@@ -375,7 +401,7 @@ fn owned_unit(path: &Path, expected: &[u8], remove: bool) -> io::Result<bool> {
     File::from(reopen_regular(handle, OFlags::RDONLY)?)
         .take(expected.len() as u64 + 1)
         .read_to_end(&mut content)?;
-    let current = fs::statat(&directory, UNIT, AtFlags::SYMLINK_NOFOLLOW)?;
+    let current = fs::statat(&directory, unit_name, AtFlags::SYMLINK_NOFOLLOW)?;
     let identity = |meta: &fs::Stat| {
         (
             meta.st_dev,
@@ -394,7 +420,7 @@ fn owned_unit(path: &Path, expected: &[u8], remove: bool) -> io::Result<bool> {
         return Err(refuse());
     }
     if remove {
-        fs::unlinkat(&directory, UNIT, AtFlags::empty())?;
+        fs::unlinkat(&directory, unit_name, AtFlags::empty())?;
         fs::fsync(&directory)?;
     }
     Ok(true)
@@ -421,8 +447,12 @@ fn manager(args: &[&str]) -> Result<String, String> {
 }
 
 fn query_unit() -> Result<Value, String> {
+    query_unit_named(UNIT)
+}
+
+fn query_unit_named(unit_name: &str) -> Result<Value, String> {
     let properties = "LoadState,ActiveState,SubState,UnitFileState,FragmentPath,DropInPaths,MainPID,Result,NRestarts,MemoryCurrent,TasksCurrent";
-    let output = manager(&["show", "--property", properties, UNIT])?;
+    let output = manager(&["show", "--property", properties, unit_name])?;
     let properties: Vec<_> = properties.split(',').collect();
     let fields = output
         .lines()
@@ -431,6 +461,348 @@ fn query_unit() -> Result<Value, String> {
         .map(|(key, value)| (key.to_owned(), json!(value)))
         .collect();
     Ok(Value::Object(fields))
+}
+
+pub(crate) fn legacy_unit_is_active(home: &Path) -> Result<bool, String> {
+    let legacy_unit = home.join(".config/systemd/user").join(UNIT);
+    match legacy_unit.symlink_metadata() {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err("Cannot inspect legacy service unit".into()),
+    }
+    match query_unit_named(UNIT) {
+        Ok(state) => Ok(matches!(
+            state["ActiveState"].as_str(),
+            Some("active" | "activating" | "reloading")
+        )),
+        Err(_) => Ok(false),
+    }
+}
+
+pub(crate) fn veyl_unit_is_active(home: &Path) -> Result<bool, String> {
+    let unit = home.join(".config/systemd/user").join(UNIT_VEYL);
+    match unit.symlink_metadata() {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err("Cannot inspect veyl.service unit".into()),
+    }
+    match query_unit_named(UNIT_VEYL) {
+        Ok(state) => Ok(matches!(
+            state["ActiveState"].as_str(),
+            Some("active" | "activating" | "reloading")
+        )),
+        Err(_) => Ok(false),
+    }
+}
+
+fn verified_current_exe() -> Result<PathBuf, String> {
+    let exe = env::current_exe().map_err(|_| "Gateway executable unavailable")?;
+    let canonical = exe
+        .canonicalize()
+        .map_err(|_| "Gateway executable path unavailable")?;
+    let meta = std::fs::symlink_metadata(&canonical)
+        .map_err(|_| "Cannot inspect gateway executable")?;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    if !meta.file_type().is_file() || meta.permissions().mode() & 0o111 == 0 || meta.mode() & 0o022 != 0 {
+        return Err("Gateway executable permissions are unsafe for systemd service use".into());
+    }
+    Ok(canonical)
+}
+
+fn render_veyl(
+    executable: &Path,
+    listen: Option<SocketAddrV4>,
+    funnel_socket: Option<&Path>,
+) -> Result<String, String> {
+    let exe_quoted = quote(executable)?;
+    let mut exec = format!("{exe_quoted} serve");
+    if let Some(addr) = listen {
+        if *addr.ip() != Ipv4Addr::LOCALHOST {
+            return Err("Service listener must bind to 127.0.0.1".into());
+        }
+        exec.push_str(&format!(" --listen {addr}"));
+    }
+    if let Some(sock) = funnel_socket {
+        let sock_quoted = quote(sock)?;
+        exec.push_str(&format!(" --funnel-socket {sock_quoted}"));
+    }
+    Ok(format!(
+        "[Unit]\nDescription=Veyl unified MCP gateway\nStartLimitIntervalSec=60\nStartLimitBurst=3\n\n\
+         [Service]\nType=simple\nExecStart={exec}\n\
+         Restart=on-failure\nRestartSec=2s\nTimeoutStopSec=20s\nKillMode=process\n\
+         MemoryMax=512M\nTasksMax=128\nUMask=0077\nNoNewPrivileges=yes\nProtectSystem=full\n\
+         UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH RUST_LOG\nStandardOutput=journal\nStandardError=journal\n\n\
+         [Install]\nWantedBy=default.target\n"
+    ))
+}
+
+fn unit_is_owned_veyl(path: &Path, executable: &Path) -> io::Result<bool> {
+    let directory = match open_operator_dir(path.parent().ok_or_else(|| io::Error::other("bad unit parent"))?) {
+        Ok(d) => d,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    checked(&directory)?;
+    let handle = match fs::openat(
+        &directory,
+        UNIT_VEYL,
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(h) => h,
+        Err(Errno::NOENT) => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    let meta = fs::fstat(&handle)?;
+    if FileType::from_raw_mode(meta.st_mode) != FileType::RegularFile
+        || meta.st_uid != rustix::process::geteuid().as_raw()
+        || meta.st_mode & 0o7777 != 0o600
+        || meta.st_nlink != 1
+    {
+        return Err(io::Error::other("unit permissions/ownership invalid"));
+    }
+    let mut content = String::new();
+    File::from(reopen_regular(handle, OFlags::RDONLY)?)
+        .take(4097)
+        .read_to_string(&mut content)?;
+    let exe_q = quote(executable).map_err(io::Error::other)?;
+    let Some(exec_line) = content.lines().find(|l| l.starts_with("ExecStart=")) else {
+        return Err(io::Error::other("unit does not match generated veyl.service"));
+    };
+    let cmd = exec_line.trim_start_matches("ExecStart=");
+    if !cmd.starts_with(&format!("{exe_q} serve")) {
+        return Err(io::Error::other("unit ExecStart does not match verified veyl serve"));
+    }
+    // Check optional --listen / --funnel-socket args and match exact template.
+    let tail = cmd[format!("{exe_q} serve").len()..].trim();
+    let mut listen = None;
+    let mut socket = None;
+    let parts: Vec<&str> = if tail.is_empty() {
+        Vec::new()
+    } else {
+        tail.split_whitespace().collect()
+    };
+    let mut i = 0;
+    while i < parts.len() {
+        match parts[i] {
+            "--listen" if i + 1 < parts.len() && listen.is_none() => {
+                listen = parts[i + 1].parse::<SocketAddrV4>().ok();
+                if listen.is_none() {
+                    return Err(io::Error::other("unit ExecStart has invalid listener"));
+                }
+                i += 2;
+            }
+            "--funnel-socket" if i + 1 < parts.len() && socket.is_none() => {
+                let raw = parts[i + 1].trim_matches('"');
+                socket = Some(PathBuf::from(raw));
+                i += 2;
+            }
+            _ => return Err(io::Error::other("unit ExecStart contains unexpected arguments")),
+        }
+    }
+    let expected = render_veyl(executable, listen, socket.as_deref()).map_err(io::Error::other)?;
+    if content != expected {
+        return Err(io::Error::other("unit does not match generated veyl.service"));
+    }
+    Ok(true)
+}
+
+pub(crate) fn install_and_start_unified(
+    home: &Path,
+    enable_now: bool,
+    listen: Option<SocketAddrV4>,
+    funnel_socket: Option<&Path>,
+) -> Result<(), String> {
+    if rustix::process::geteuid().is_root() {
+        return Err("Service installation requires the unprivileged gateway owner".into());
+    }
+    if legacy_unit_is_active(home)? {
+        return Err(
+            "Legacy mcp-gateway.service is active; stop and disable it before starting veyl.service (preserved until you transition)"
+                .into(),
+        );
+    }
+    crate::unified::ensure_reconciled(home)?;
+    let cfg = crate::unified::config_path(home);
+    if !cfg.exists() {
+        return Err("No unified policy found (~/.local/state/veyl/clients.json); run 'veyl up' first".into());
+    }
+    let policy = PolicyFile::lock(&cfg, false)?;
+    verify_approvals(&policy.snapshot()?)?;
+    drop(policy);
+
+    let executable = verified_current_exe()?;
+    let unit = render_veyl(&executable, listen, funnel_socket)?;
+    let target = home.join(".config/systemd/user").join(UNIT_VEYL);
+    let dir = unit_directory(home).map_err(|e| format!("User unit directory unavailable: {e}"))?;
+    if !owned_unit_named(&target, UNIT_VEYL, unit.as_bytes(), false).is_ok_and(|f| f) {
+        if target.symlink_metadata().is_ok() {
+            return Err("Existing veyl.service does not match generated configuration; refusing overwrite".into());
+        }
+        publish_new(&dir, OsStr::new(UNIT_VEYL), unit.as_bytes())
+            .map_err(|e| format!("User unit was not installed: {e}"))?;
+        println!("SERVICE_UNIT=WRITTEN destination={}", target.display());
+    } else {
+        println!("SERVICE_UNIT=UNCHANGED destination={}", target.display());
+    }
+    manager(&["daemon-reload"])?;
+    if enable_now {
+        if crate::unified::is_serve_live(home).unwrap_or(false) && !veyl_unit_is_active(home)? {
+            return Err("Foreground veyl serve is already running; stop it before starting veyl.service".into());
+        }
+        manager(&["enable", "--now", UNIT_VEYL])?;
+        let state = query_unit_named(UNIT_VEYL)?;
+        println!(
+            "ActiveState={} UnitFileState={}",
+            state["ActiveState"].as_str().unwrap_or_default(),
+            state["UnitFileState"].as_str().unwrap_or_default()
+        );
+    } else {
+        println!("Installed {}. Opt-in activation: run 'veyl service enable --now' or 'systemctl --user enable --now {}'.", UNIT_VEYL, UNIT_VEYL);
+        println!("Optional: run 'loginctl enable-linger' separately if you want {} to stay active after logout.", UNIT_VEYL);
+    }
+    Ok(())
+}
+
+fn run_unified(args: &[OsString]) -> Result<(), String> {
+    let action = args.first().and_then(|a| a.to_str()).ok_or(HELP)?;
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| valid_path(path))
+        .ok_or("HOME must be an absolute directory")?;
+    let target = home.join(".config/systemd/user").join(UNIT_VEYL);
+
+    let mut dry_run = false;
+    let mut enable_now = false;
+    let mut now_flag = false;
+    let mut enable_flag = false;
+    let mut listen: Option<SocketAddrV4> = None;
+    let mut funnel_socket: Option<PathBuf> = None;
+    let mut rest = args[1..].iter();
+    while let Some(arg) = rest.next() {
+        match arg.to_str() {
+            Some("--dry-run") => dry_run = true,
+            Some("--confirm" | "--yes") => {}
+            Some("--enable-now") => enable_now = true,
+            Some("--enable") => enable_flag = true,
+            Some("--now") => now_flag = true,
+            Some("--listen") if listen.is_none() => {
+                let raw = rest.next().and_then(|v| v.to_str()).ok_or(HELP)?;
+                listen = Some(raw.parse::<SocketAddrV4>().map_err(|_| "Expected 127.0.0.1:PORT")?);
+            }
+            Some("--funnel-socket") if funnel_socket.is_none() => {
+                funnel_socket = Some(PathBuf::from(rest.next().ok_or(HELP)?));
+            }
+            _ => return Err(HELP.into()),
+        }
+    }
+    if enable_flag && now_flag {
+        enable_now = true;
+    }
+
+    match action {
+        "status" | "diagnostics" => {
+            let present = match target.symlink_metadata() {
+                Ok(m) if m.is_file() => "present",
+                Ok(_) => "unexpected-file-type",
+                Err(e) if e.kind() == io::ErrorKind::NotFound => "missing",
+                Err(_) => return Err("Cannot inspect user unit path".into()),
+            };
+            println!("unit={} unit_file={present} destination={}", UNIT_VEYL, target.display());
+            if present != "missing" {
+                let fields = query_unit_named(UNIT_VEYL)?;
+                for key in ["LoadState", "ActiveState", "SubState", "UnitFileState"] {
+                    println!("{key}={}", fields[key].as_str().unwrap_or_default());
+                }
+            }
+            if action == "diagnostics" {
+                let veyl_health = query_unit_named(UNIT_VEYL).unwrap_or_else(|_| json!({"LoadState":"unavailable"}));
+                let legacy_health = query_unit_named(UNIT).unwrap_or_else(|_| json!({"LoadState":"unavailable"}));
+                println!("{}", serde_json::to_string_pretty(&json!({"veyl": veyl_health, "legacy": legacy_health})).unwrap());
+            }
+            Ok(())
+        }
+        "print-unit" => {
+            let exe = verified_current_exe()?;
+            let unit = render_veyl(&exe, listen, funnel_socket.as_deref())?;
+            print!("{unit}");
+            Ok(())
+        }
+        "validate" => {
+            crate::unified::ensure_reconciled(&home)?;
+            let cfg = crate::unified::config_path(&home);
+            verify_approvals(&PolicyFile::preview(&cfg)?)?;
+            println!("Configuration valid for unified state ({})", cfg.display());
+            Ok(())
+        }
+        "install" => {
+            if dry_run {
+                println!(
+                    "SERVICE_PLAN unit={} destination={} enable_now={}",
+                    UNIT_VEYL,
+                    target.display(),
+                    enable_now
+                );
+                return Ok(());
+            }
+            install_and_start_unified(&home, enable_now, listen, funnel_socket.as_deref())
+        }
+        "uninstall" => {
+            if dry_run {
+                println!(
+                    "SERVICE_PLAN action=uninstall unit={} destination={} data=preserved",
+                    UNIT_VEYL,
+                    target.display()
+                );
+                return Ok(());
+            }
+            if rustix::process::geteuid().is_root() {
+                return Err("Service uninstallation requires the unprivileged gateway owner".into());
+            }
+            let exe = verified_current_exe()?;
+            match unit_is_owned_veyl(&target, &exe) {
+                Ok(false) => {
+                    println!("SERVICE_UNIT=ABSENT destination={} data=preserved", target.display());
+                    return Ok(());
+                }
+                Ok(true) => {}
+                Err(e) => return Err(format!("User unit was not removed: {e}")),
+            }
+            let _ = manager(&["stop", UNIT_VEYL]);
+            let _ = manager(&["disable", UNIT_VEYL]);
+            let dir = open_operator_dir(target.parent().ok_or("Missing systemd unit dir")?)
+                .map_err(|_| "User unit directory unavailable")?;
+            fs::unlinkat(&dir, UNIT_VEYL, AtFlags::empty())
+                .and_then(|()| fs::fsync(&dir))
+                .map_err(|_| "Failed removing veyl.service")?;
+            let _ = manager(&["daemon-reload"]);
+            println!("SERVICE_UNIT=REMOVED destination={} data=preserved", target.display());
+            Ok(())
+        }
+        "enable" | "disable" | "start" | "stop" | "restart" => {
+            let exe = verified_current_exe()?;
+            if !unit_is_owned_veyl(&target, &exe).unwrap_or(false) {
+                return Err("Install owned veyl.service first (run 'veyl service install')".into());
+            }
+            if matches!(action, "enable" | "start" | "restart") && legacy_unit_is_active(&home)? {
+                return Err(
+                    "Legacy mcp-gateway.service is active; stop and disable it before starting veyl.service"
+                        .into(),
+                );
+            }
+            if action == "enable" && (now_flag || enable_now) {
+                manager(&["enable", "--now", UNIT_VEYL])?;
+            } else {
+                manager(&[action, UNIT_VEYL])?;
+            }
+            let fields = query_unit_named(UNIT_VEYL)?;
+            for key in ["LoadState", "ActiveState", "SubState", "UnitFileState"] {
+                println!("{key}={}", fields[key].as_str().unwrap_or_default());
+            }
+            Ok(())
+        }
+        _ => Err(HELP.into()),
+    }
 }
 
 pub(crate) fn health() -> Value {

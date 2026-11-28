@@ -152,6 +152,7 @@ pub struct Registration {
     client_name: String,
     redirects: Vec<String>,
     mode: ConnectionMode,
+    explicit_mode: bool,
 }
 
 impl Registration {
@@ -166,6 +167,9 @@ impl Registration {
     }
     pub fn mode(&self) -> ConnectionMode {
         self.mode
+    }
+    pub fn has_explicit_mode(&self) -> bool {
+        self.explicit_mode
     }
 
     pub fn response(&self) -> Value {
@@ -253,6 +257,7 @@ impl ClientRegistry {
             client_name: name.into(),
             redirects: redirects.iter().map(|r| (*r).into()).collect(),
             mode: ConnectionMode::Standard,
+            explicit_mode: false,
         });
         Ok(self.clients.last().expect("registration inserted"))
     }
@@ -269,16 +274,38 @@ impl ClientRegistry {
         let client = self.clients.iter_mut().find(|c| c.client_id == client_id)?;
         let prev = client.mode;
         client.mode = mode;
+        client.explicit_mode = true;
         Some(prev)
+    }
+
+    pub fn set_all_modes(&mut self, mode: ConnectionMode) -> Vec<(String, ConnectionMode)> {
+        self.clients
+            .iter_mut()
+            .map(|client| {
+                let prev = client.mode;
+                client.mode = mode;
+                client.explicit_mode = true;
+                (client.client_id.clone(), prev)
+            })
+            .collect()
     }
 
     /// Registration-only durable snapshot. No consent handles, codes or
     /// token verifiers are included; a restart still invalidates all grants.
     pub fn snapshot(&self) -> Value {
         json!({"version":1,"resource":self.resource.resource(),"clients":
-            self.clients.iter().map(|c| json!({"client_id":c.client_id,
-                "client_name":c.client_name,"redirect_uris":c.redirects,
-                "mode":c.mode.as_str()})).collect::<Vec<_>>()})
+            self.clients.iter().map(|c| {
+                let mut item = json!({
+                    "client_id": c.client_id,
+                    "client_name": c.client_name,
+                    "redirect_uris": c.redirects,
+                    "mode": c.mode.as_str(),
+                });
+                if c.explicit_mode {
+                    item["explicit_mode"] = json!(true);
+                }
+                item
+            }).collect::<Vec<_>>()})
     }
 
     pub fn restore(resource: Resource, snapshot: &Value) -> Result<Self, Error> {
@@ -302,7 +329,7 @@ impl ClientRegistry {
             if !obj.keys().all(|k| {
                 matches!(
                     k.as_str(),
-                    "client_id" | "client_name" | "redirect_uris" | "mode"
+                    "client_id" | "client_name" | "redirect_uris" | "mode" | "explicit_mode"
                 )
             }) || !obj.contains_key("client_id")
                 || !obj.contains_key("client_name")
@@ -316,6 +343,10 @@ impl ClientRegistry {
                     .as_str()
                     .and_then(ConnectionMode::parse)
                     .ok_or(Error::InvalidRequest)?,
+            };
+            let explicit_mode = match obj.get("explicit_mode") {
+                None => mode == ConnectionMode::Yolo,
+                Some(raw) => raw.as_bool().ok_or(Error::InvalidRequest)?,
             };
             let id = client["client_id"]
                 .as_str()
@@ -339,6 +370,7 @@ impl ClientRegistry {
                 client_name: name.into(),
                 redirects: redirects.into_iter().map(str::to_owned).collect(),
                 mode,
+                explicit_mode,
             });
         }
         Ok(registry)

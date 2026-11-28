@@ -1,6 +1,6 @@
 //! Linux CLI and native execution entry points.
 use crate::{
-    FileAccess, HELP, Protocol, http, io, jobs, local_cli, mode_cli, protected_cli, serve_plan,
+    FileAccess, HELP, Protocol, http, io, jobs, local_cli, mode_cli, protected_cli,
     service_cli, skills_cli, state_cli, transport, update_cli, upstream,
 };
 use std::path::PathBuf;
@@ -97,7 +97,23 @@ pub(super) fn run(args: Vec<std::ffi::OsString>) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     if args.first().is_some_and(|arg| arg == "serve") {
-        return serve_plan::run(&args[1..]);
+        return crate::serve_cmd::serve(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "up") {
+        return crate::serve_cmd::up(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "down") {
+        return crate::serve_cmd::down(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "status") {
+        return crate::serve_cmd::status(&args[1..]);
+    }
+    #[cfg(target_os = "linux")]
+    if args.first().is_some_and(|arg| arg == "clients") {
+        return crate::serve_cmd::clients(&args[1..]);
     }
     #[cfg(target_os = "linux")]
     if args

@@ -1,6 +1,9 @@
+use std::future::{Future, poll_fn};
 use std::io;
+use std::pin::pin;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -19,7 +22,7 @@ use tokio_rustls::rustls::{
     pki_types::{CertificateDer, ServerName, pem::PemObject},
 };
 
-use super::{MAX_FRAME, VERSION};
+use super::{Cancellation, MAX_FRAME, VERSION};
 
 pub(super) struct Http {
     runtime: tokio::runtime::Runtime,
@@ -126,13 +129,14 @@ impl Http {
         message: &Value,
         id: Option<u32>,
         deadline: Instant,
+        cancellation: Option<&Cancellation>,
     ) -> io::Result<Option<Value>> {
-        self.request(Method::POST, serde_json::to_vec(message)?, id, deadline)
+        self.request(Method::POST, serde_json::to_vec(message)?, id, deadline, cancellation)
     }
 
     pub fn close(&mut self, deadline: Instant) {
         if self.session.is_some() {
-            let _ = self.request(Method::DELETE, Vec::new(), None, deadline);
+            let _ = self.request(Method::DELETE, Vec::new(), None, deadline, None);
             self.session = None;
         }
     }
@@ -143,6 +147,7 @@ impl Http {
         bytes: Vec<u8>,
         id: Option<u32>,
         deadline: Instant,
+        cancellation: Option<&Cancellation>,
     ) -> io::Result<Option<Value>> {
         if bytes.len() > MAX_FRAME {
             return Err(invalid());
@@ -170,13 +175,14 @@ impl Http {
             .body(Full::new(Bytes::from(bytes)))
             .map_err(io::Error::other)?;
         let result = self.runtime.block_on(async {
-            tokio::time::timeout(deadline.saturating_duration_since(Instant::now()), async {
+            let exchange = tokio::time::timeout(deadline.saturating_duration_since(Instant::now()), async {
                 let stream = TcpStream::connect(self.route).await?;
                 let (mut sender, connection) = if let Some((tls, host)) = &self.tls {
                     connect(tls.connect(host.clone(), stream).await?).await?
                 } else {
                     connect(stream).await?
                 };
+                let connection = AbortOnDrop(connection.abort_handle());
                 let answer = async {
                     let mut response = sender
                         .send_request(request)
@@ -241,11 +247,23 @@ impl Http {
                     Ok((Some(value), session))
                 }
                 .await;
-                connection.abort();
+                drop(connection);
                 answer
-            })
-            .await
-            .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
+            });
+            let outcome = if let Some(token) = cancellation {
+                let mut cancelled = pin!(token.wait());
+                let mut exchange = pin!(exchange);
+                poll_fn(|cx| {
+                    if cancelled.as_mut().poll(cx).is_ready() {
+                        return Poll::Ready(Ok(Err(io::ErrorKind::Interrupted.into())));
+                    }
+                    exchange.as_mut().poll(cx)
+                })
+                .await
+            } else {
+                exchange.await
+            };
+            outcome.map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
         });
         let (response, session) = result?;
         if id == Some(1) {
@@ -263,6 +281,14 @@ impl Http {
             return Err(io::Error::other("Upstream reflected its credential"));
         }
         Ok(())
+    }
+}
+
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 

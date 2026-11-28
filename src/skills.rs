@@ -100,6 +100,15 @@ impl Skills {
         Ok(catalog)
     }
 
+    pub(crate) fn enabled_names(&self) -> BTreeSet<String> {
+        self.catalog()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|v| v["enabled"] == true && v["validation_error"].is_null())
+            .filter_map(|v| v["name"].as_str().map(str::to_owned))
+            .collect()
+    }
+
     pub(crate) fn present(&self, name: &str) -> std::io::Result<bool> {
         match rustix::fs::statat(
             self.root.directory(),

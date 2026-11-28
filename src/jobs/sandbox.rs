@@ -441,6 +441,19 @@ pub(crate) fn upstream_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
     } else {
         (None, args)
     };
+    let (scratch, args) = if args.first().is_some_and(|v| v == "--crate-scratch") {
+        let path = args.get(1).map(Path::new).ok_or_else(unsupported)?;
+        let relative = path.strip_prefix("/upstream/bundle").map_err(|_| unsupported())?;
+        if bundle.is_none() || relative.as_os_str().is_empty()
+            || relative.components().any(|part| !matches!(part, std::path::Component::Normal(name)
+                if !name.to_string_lossy().starts_with('.')))
+        {
+            return Err(unsupported());
+        }
+        (Some(path), &args[2..])
+    } else {
+        (None, args)
+    };
     let (program, args) = args.split_first().ok_or_else(unsupported)?;
     let program = Path::new(program);
     let canonical = program.canonicalize()?;
@@ -487,7 +500,18 @@ pub(crate) fn upstream_worker(args: &[std::ffi::OsString]) -> io::Result<()> {
         sandbox.command.arg("/upstream/server.py");
         *script = "/upstream/server.py".into();
     }
-    sandbox.command.arg("--").arg(executable).args(args);
+    if let Some(crate_path) = scratch {
+        // The upstream may write comparisons beside its crate. Copy it only
+        // inside a bounded private mount and keep the real bundle read-only.
+        sandbox.command.args(["--size", "134217728", "--tmpfs", "/tmp",
+            "--setenv", "CARGO_NET_OFFLINE", "true", "--setenv", "CARGO_BUILD_JOBS", "1",
+            "--setenv", "CARGO_INCREMENTAL", "0", "--", "/usr/bin/sh", "-c",
+            r#"set -e; test -d "$1"; /usr/bin/cp -R -- "$1" /tmp/veyl-crate; shift; exec "$@""#, "veyl-crate"])
+            .arg(crate_path);
+    } else {
+        sandbox.command.arg("--");
+    }
+    sandbox.command.arg(executable).args(args);
     Err(sandbox.command.exec())
 }
 

@@ -43,6 +43,7 @@ def main():
         admin_port = port()
         mcp_port = port()
         document["admin_listen"] = f"127.0.0.1:{admin_port}"
+        document["default_mode"] = "standard"
         config.write_text(json.dumps(document))
         origin = f"http://127.0.0.1:{admin_port}"
         gateway = subprocess.Popen([binary, "run", "--listen", f"127.0.0.1:{mcp_port}"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -100,11 +101,11 @@ def main():
             verifier = config.with_name(".clients.json.dashboard-pair").read_text()
             assert code not in verifier and hashlib.sha256(code.encode()).hexdigest() in verifier
             tabs = subprocess.run(["node", str(Path(__file__).with_name("dashboard_tabs.mjs")), browser],
-                                  input=url, text=True, capture_output=True, timeout=35)
+                                  input=url, text=True, capture_output=True, timeout=55)
             assert tabs.returncode == 0, "Real browser tab-navigation test failed: " + tabs.stderr[-1000:]
             assert "DASHBOARD_TABS_AND_KEYBOARD_PASS" in tabs.stdout
             print("FIRST_RUN_BROWSER_PAIRING_PASS")
-            print("DASHBOARD_TABS_AND_KEYBOARD_PASS")
+            print(tabs.stdout.strip())
             request = urllib.request.Request(origin + "/dashboard/api/pair",
                 data=json.dumps({"pairing_token": code}).encode(),
                 headers={"Origin": origin, "Content-Type": "application/json"})

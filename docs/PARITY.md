@@ -1,5 +1,15 @@
 # BridgeDev capability comparison
 
+## Unified candidate goal workflow
+
+Veyl supports client-driven checkpoints and an opt-in foreground controller for
+development goals. Adapter runs have bounded turns, elapsed time and retries,
+signed job receipts, resumable iteration history and operator pause/cancel.
+Compatible Codex or AGY access must be provisioned explicitly by the operator.
+This is a candidate implementation. See [GOALS.md](GOALS.md) and the
+[verification status](development/STATUS.md) for exact evidence.
+
+
 ## 0.4.0-beta candidate scope
 
 TimeShift adds three separately granted native tools (71 total; 84 including the previously reviewed upstream tools if all grants are enabled), signed per-client pre-edit history, changed-line preview, guarded restore/redo and operator retention controls. Coverage is limited to native UTF-8 file mutations; new-file removal, arbitrary shell/Git mutations and autonomous Nightshift are not implemented. The combined Nightshift/checkpoint domain remains partial; do not claim full parity. See [TimeShift](development/TIMESHIFT.md).

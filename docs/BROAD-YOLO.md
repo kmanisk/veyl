@@ -66,7 +66,7 @@ See [durable goals](GOALS.md) and the [replacement acceptance contract](developm
 
 ## Recovery and rollback
 
-Keep the verified 0.7.0-beta bundle and the updater's private backup. The
+Keep the verified 0.8.0-beta (or prior recovery) bundle and the updater's private backup. The
 updater preserves policy bytes during executable replacement. Compatibility
 is checked before restoring backup executables, and the updater refuses
 rollback after policy bytes change since staging. After a compatible

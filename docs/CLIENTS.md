@@ -1,17 +1,22 @@
 # Connect MCP clients
 
-## Direct OAuth MCP — next-release candidate
+## Direct OAuth MCP and unified gateway
 
 Use the same public HTTPS `/mcp` endpoint and OAuth discovery contract in
-any compatible client. Start quickly with `veyl login` (or low-level
-`veyl oauth setup/run` for isolated scoped previews). See
+any compatible client. Start with `veyl up --root "$PWD"` to initialize or
+reconcile unified state under `~/.local/state/veyl/` and run the single
+gateway process serving both loopback static bearers and public OAuth
+connections (legacy `veyl login` and `veyl oauth setup/run` compatibility
+paths remain supported). See
 [direct remote plan](development/DIRECT_REMOTE_PLAN.md) for onboarding,
 per-connection Standard/YOLO selection, exact scope, sandbox constraints,
 and acceptance. Choose Streamable HTTP, OAuth DCR, PKCE S256 and scope `mcp`.
-Every newly registered OAuth connection defaults to Standard; the local
-operator can select YOLO during dashboard approval or switch modes via
-`veyl mode yolo <CLIENT_ID> --confirm-native` or `veyl mode standard <CLIENT_ID>` (or `veyl logout --client <ID>` /
-`veyl logout --all`). Escalation revokes prior Standard grants and requires
+Every newly registered OAuth connection uses the persisted `default_mode`
+(`standard` by default, or `yolo` if switched globally via interactive
+`veyl mode yolo` confirmation) as its dashboard consent preselection without
+auto-authorizing access. Local operators can also switch individual clients
+via `veyl mode yolo <CLIENT_ID> --confirm-native`, `veyl mode standard <CLIENT_ID>`,
+`veyl clients revoke <ID|NAME>`, or legacy `veyl logout --client <ID>` / `--all`. Escalation revokes prior Standard grants and requires
 fresh OAuth authorization; downgrade or revocation immediately denies
 elevated admissions and job launches. No separate ChatGPT plugin, cloud relay
 or Veyl account is required. Client-specific authentication and tool support

@@ -517,7 +517,12 @@ pub(crate) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         "skills_disabled",
         "admin_listen",
         "tailscale_serve",
+        "cloudflare_tunnel",
         "mcp_servers",
+        "default_mode",
+        "workspace",
+        "oauth",
+        "migrated_from",
     ];
     const CLIENT: &[&str] = &[
         "id",
@@ -563,6 +568,20 @@ pub(crate) fn parse_document(bytes: &[u8]) -> Result<Value, String> {
         return Err("Unsupported authorization policy schema".into());
     }
     let version = document["policy_version"].as_u64();
+    if let Some(default_mode) = document.get("default_mode")
+        && (version != Some(4) || !matches!(default_mode.as_str(), Some("standard" | "yolo")))
+    {
+        return Err("default_mode requires policy_version 4 and must be 'standard' or 'yolo'".into());
+    }
+    if document.get("workspace").is_some_and(|v| version != Some(4) || !v.is_string()) {
+        return Err("workspace requires policy_version 4 and an absolute path".into());
+    }
+    if document.get("oauth").is_some_and(|v| version != Some(4) || !v.is_object()) {
+        return Err("oauth requires policy_version 4 and a settings object".into());
+    }
+    if document.get("cloudflare_tunnel").is_some_and(|v| version != Some(4) || !v.is_object()) {
+        return Err("cloudflare_tunnel requires policy_version 4 and a settings object".into());
+    }
     let entries = document["clients"].as_array().ok_or("Invalid clients")?;
     for entry in entries {
         for (key, min, max) in [

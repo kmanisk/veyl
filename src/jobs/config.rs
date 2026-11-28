@@ -129,8 +129,18 @@ struct JobDocument {
     _admin_listen: Option<String>,
     #[serde(default, rename = "tailscale_serve")]
     _tailscale_serve: Option<serde_json::Value>,
+    #[serde(default, rename = "cloudflare_tunnel")]
+    _cloudflare_tunnel: Option<serde_json::Value>,
     #[serde(default, rename = "mcp_servers")]
     _mcp_servers: Option<serde_json::Value>,
+    #[serde(default, rename = "default_mode")]
+    _default_mode: Option<String>,
+    #[serde(default, rename = "workspace")]
+    _workspace: Option<PathBuf>,
+    #[serde(default, rename = "oauth")]
+    _oauth: Option<serde_json::Value>,
+    #[serde(default, rename = "migrated_from")]
+    _migrated_from: Option<serde_json::Value>,
     job_state_dir: PathBuf,
     #[serde(deserialize_with = "unique_profiles")]
     job_profiles: BTreeMap<String, Profile>,

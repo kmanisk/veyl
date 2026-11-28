@@ -1,8 +1,7 @@
-#[cfg(target_os = "android")]
-#[path = "platform/android/http.rs"]
-mod android_http;
 #[cfg(target_os = "linux")]
 mod audit_cli;
+#[cfg(target_os = "linux")]
+mod cloudflare;
 mod connector;
 #[cfg(target_os = "linux")]
 mod file_access;
@@ -32,6 +31,8 @@ mod protected_cli;
 mod protected_paths;
 mod protocol;
 #[cfg(target_os = "linux")]
+mod serve_cmd;
+#[cfg(target_os = "linux")]
 mod serve_plan;
 #[cfg(target_os = "linux")]
 mod service_cli;
@@ -47,6 +48,8 @@ mod tailnet;
 mod tools;
 mod transport;
 #[cfg(target_os = "linux")]
+mod unified;
+#[cfg(target_os = "linux")]
 mod update_cli;
 #[cfg(target_os = "linux")]
 mod upstream;
@@ -61,33 +64,31 @@ const HELP: &str = "Veyl — local-first MCP gateway
 Usage: veyl <command> [options]
 
 Getting started
-  login [--root DIR]                              Connect via direct Standard OAuth
-  logout                                         Stop and revoke managed OAuth login
-  setup --root DIR [--tailscale | --yolo]          Set up Veyl
-  init --root DIR                                Initialize local configuration
-  connect                                        Copy the connector URL
+  up [--root DIR] [--yolo] [--yes] [--service]   Start unified Veyl gateway and tunnel
+  down                                           Stop running Veyl gateway cleanly
+  status [--json]                                Show unified runtime, tunnel, and client status
 
 Daily use
   ui [--remote]                                  Open and pair the dashboard
   dashboard                                      Alias for ui
   goal                                           Manage durable development goals
   tui | monitor                                  Open the terminal monitor
-  service on | status                            Manage the user service
-  run                                            Run in the foreground
-  portable                                       Switch to foreground operation
-  update [--check | --reinstall | --from-dir DIR] Update installed user binaries
-  mode                                           List client modes
-  mode get [CLIENT]                              Show a client mode and state
-  mode standard|yolo [CLIENT]                    Change a client mode
-  mode enable|disable [CLIENT]                   Enable or disable a client
+  service install | uninstall | status           Manage opt-in veyl.service user unit
+  mode                                           List client modes and default_mode
+  mode standard|yolo [CLIENT | --all]            Change default_mode and/or client mode(s)
+  clients [list | revoke <CLIENT>]               List or revoke static and OAuth clients
+  serve [options]                                Run unified foreground gateway runtime
 
-Administration
-  diagnostics, skills, mcp-servers, marketplace, audit, state, serve, protected-paths
-  oauth                                          Local OAuth preview consent
+Administration & compatibility
+  diagnostics, skills, mcp-servers, marketplace, audit, state, protected-paths, update
+  serve plan                                     Legacy Tailscale Serve planner
+  login | logout | oauth | setup | init | connect | run | portable
   connector                                      Experimental loopback connector
 
 Advanced transport
-  platform                                       Show compiled platform capabilities\n  platform-probe [--root DIR]                    Experimental foreground MCP probe\n  --root DIR                                     MCP over stdio (Linux legacy)
+  platform                                       Show compiled platform capabilities
+  platform-probe [--root DIR]                    Experimental foreground MCP probe
+  --root DIR                                     MCP over stdio (Linux legacy)
   http --listen 127.0.0.1:PORT --config PATH      MCP over HTTP
 
 Use veyl help <command> or veyl <command> --help for options.
@@ -126,7 +127,11 @@ fn main() {
         matches!(
             arg.to_str(),
             Some(
-                "init"
+                "up"
+                    | "down"
+                    | "status"
+                    | "clients"
+                    | "init"
                     | "login"
                     | "logout"
                     | "setup"

@@ -34,8 +34,25 @@ access see [Tailscale Serve](TAILSCALE.md).
 
 ## Optional user service
 
+For unified deployments under `~/.local/state/veyl/`, install and control the
+opt-in `veyl.service` user unit (`ExecStart="<abs-veyl>" serve`, `Restart=on-failure`,
+inactive and disabled until explicitly started):
+
+```sh
+veyl service install               # writes ~/.config/systemd/user/veyl.service (remains disabled)
+veyl service enable --now          # explicitly enables and starts veyl.service
+veyl service status                # inspect veyl.service runtime state
+veyl down                          # stops active veyl.service cleanly
+veyl service uninstall             # verifies exact unit ownership and removes unit (data preserved)
+```
+
+If you want `veyl.service` to remain active after logout, run `loginctl enable-linger`
+explicitly as your own operator action; Veyl never modifies linger state automatically.
+If legacy `mcp-gateway.service` is active, stop and disable it before starting `veyl.service`.
+
+Legacy `--config PATH` service management remains supported for isolated config paths:
 Use the installed executable and repeat the same configuration path and
-MCP listener on all lifecycle commands. Previewing the unit or validating
+MCP listener on all legacy lifecycle commands. Previewing the unit or validating
 the configuration leaves the service off. You can run
 `systemd-analyze verify` on a saved copy of the rendered unit.
 

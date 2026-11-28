@@ -145,11 +145,266 @@ impl Client {
             denied_actions: self.denied_actions.clone(),
         })
     }
+
+    pub(super) fn from_unified_oauth(
+        id: String,
+        root: PathBuf,
+        actions: Vec<Action>,
+        tools: HashSet<Tool>,
+        yolo: bool,
+        expires_at: u64,
+        settings: &Configuration,
+    ) -> Result<Self, &'static str> {
+        let jobs = settings.jobs.is_some();
+        if yolo && (!settings.managed || !jobs) {
+            return Err("YOLO override unavailable for this policy");
+        }
+        let mutation_root = if yolo
+            || actions.iter().any(|action| {
+                matches!(
+                    action,
+                    Action::ReadFile
+                        | Action::WriteFile
+                        | Action::ApplyPatch
+                        | Action::SearchFiles
+                        | Action::GitInspect
+                        | Action::GitStatus
+                        | Action::GitDiff
+                        | Action::GitLog
+                        | Action::GitAdd
+                        | Action::GitCommit
+                        | Action::GitBranch
+                        | Action::GitCheckout
+                        | Action::GitRestore
+                        | Action::GitStash
+                        | Action::GitReset
+                        | Action::GitPull
+                        | Action::GitPush
+                        | Action::SystemInfo
+                        | Action::SystemInspect
+                        | Action::ProjectContext
+                        | Action::SystemContext
+                        | Action::LoadPathRules
+                        | Action::Remember
+                        | Action::ChezmoiInspect
+                        | Action::ListProjectSkills
+                        | Action::LoadProjectSkill
+                        | Action::SkillsValidate
+                        | Action::ExtensionsInspect
+                )
+            }) {
+            Some(
+                MutationRoot::open(&root)
+                    .map_err(|_| "Client root must be an existing symlink-free directory")?,
+            )
+        } else {
+            None
+        };
+        let has_job_grant = actions.iter().any(|action| action.is_job());
+        let job_root = if has_job_grant || yolo {
+            Some(JobRoot::open(&root).map_err(|_| "Job root unavailable")?)
+        } else {
+            None
+        };
+        let upstreams = if yolo {
+            settings.upstreams.native_grants()
+        } else if actions.iter().any(|a| matches!(a, Action::ListUpstreams | Action::CallUpstream)) {
+            let raw = settings.oauth.as_ref().and_then(|oauth| oauth.allowed_server_tools.as_ref())
+                .ok_or("Unified OAuth requires exact upstream grants")?;
+            settings.upstreams.unified_oauth_grants(raw).map_err(|_| "Unified OAuth upstream grants unavailable")?
+        } else {
+            crate::upstream::Grants::default()
+        };
+        Ok(Self {
+            id,
+            digest: [0u8; 32],
+            expires_at,
+            root,
+            actions,
+            tools,
+            native_tool_preset: yolo,
+            mode: if yolo {
+                ExecutionMode::Yolo
+            } else {
+                ExecutionMode::Standard
+            },
+            disabled: false,
+            explicit_extra_roots: false,
+            skills: settings
+                .skills
+                .as_ref()
+                .map(|s| s.enabled_names())
+                .unwrap_or_default(),
+            upstreams,
+            yolo_revision: None,
+            approval_mode: None,
+            extra_roots: Vec::new(),
+            mutation_root,
+            job_runtime_limit_seconds: if yolo {
+                crate::jobs::EXTENDED_RUNTIME_MAX
+            } else {
+                crate::jobs::SHORT_RUNTIME_MAX
+            },
+            native_default_timeout: yolo.then_some(crate::jobs::EXTENDED_RUNTIME_MAX),
+            job_cpu_percent_limit: if yolo { 0 } else { 100 },
+            job_memory_bytes_limit: if yolo { 0 } else { 256 * 1024 * 1024 },
+            job_output_limit_bytes: 65_536,
+            job_retention_count: Some(32),
+            timeshift_retention_count: 64,
+            job_extra_roots: Vec::new(),
+            job_root,
+            denied_actions: Vec::new(),
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnifiedOAuthSettings {
+    pub enabled: bool,
+    pub state_dir: PathBuf,
+    pub local_client: String,
+    pub workspace_edit: bool,
+    pub workspace_tools: bool,
+    pub workspace_jobs: bool,
+    pub workspace_commands: bool,
+    pub workspace_interactive: bool,
+    pub workspace_upstreams: bool,
+    pub allowed_server_tools: Option<Value>,
+    pub funnel_advanced: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl UnifiedOAuthSettings {
+    fn parse(value: &Value, policy_path: &Path, workspace: Option<&Path>, audit_log: Option<&Path>, job_state: Option<&Path>) -> Result<Self, String> {
+        let obj = value
+            .as_object()
+            .ok_or("oauth configuration must be a JSON object")?;
+        const KEYS: &[&str] = &[
+            "enabled",
+            "state_dir",
+            "local_client",
+            "workspace_edit",
+            "workspace_tools",
+            "workspace_jobs",
+            "workspace_commands",
+            "workspace_interactive",
+            "workspace_upstreams",
+            "allowed_server_tools",
+            "funnel_advanced",
+        ];
+        if !obj.keys().all(|k| KEYS.contains(&k.as_str())) {
+            return Err("Unknown field in oauth configuration".into());
+        }
+        let bool_field = |k: &str| -> Result<bool, String> {
+            match obj.get(k) {
+                None => Ok(false),
+                Some(v) => v.as_bool().ok_or_else(|| format!("Invalid oauth.{k} flag")),
+            }
+        };
+        let enabled = match obj.get("enabled") {
+            None => true,
+            Some(v) => v.as_bool().ok_or("Invalid oauth.enabled flag")?,
+        };
+        let raw_dir = obj
+            .get("state_dir")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .ok_or("oauth.state_dir must be an absolute path")?;
+        let state_dir = if raw_dir.exists() {
+            raw_dir
+                .canonicalize()
+                .map_err(|_| "oauth.state_dir unavailable".to_owned())?
+        } else {
+            raw_dir
+        };
+        let overlaps = |a: &Path, b: &Path| a.starts_with(b) || b.starts_with(a);
+        if workspace.is_some_and(|w| overlaps(&state_dir, w))
+            || policy_path
+                .canonicalize()
+                .ok()
+                .is_some_and(|cfg| overlaps(&state_dir, &cfg))
+            || audit_log
+                .and_then(Path::parent)
+                .is_some_and(|a| overlaps(&state_dir, a))
+            || job_state.is_some_and(|j| overlaps(&state_dir, j))
+        {
+            return Err("oauth.state_dir must remain separate from workspace, policy, audit, and jobs".into());
+        }
+        let local_client = match obj.get("local_client") {
+            None => "veyl-oauth".to_owned(),
+            Some(v) => v
+                .as_str()
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.len() <= 64
+                        && s.bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+                })
+                .ok_or("Invalid oauth.local_client")?
+                .to_owned(),
+        };
+        let workspace_edit = bool_field("workspace_edit")?;
+        let workspace_tools = bool_field("workspace_tools")?;
+        let workspace_jobs = bool_field("workspace_jobs")?;
+        let workspace_commands = bool_field("workspace_commands")?;
+        let workspace_interactive = bool_field("workspace_interactive")?;
+        let workspace_upstreams = bool_field("workspace_upstreams")?;
+        let allowed_server_tools = obj.get("allowed_server_tools").cloned();
+        if !workspace_upstreams && allowed_server_tools.is_some() {
+            return Err("OAuth tool grants require oauth.workspace_upstreams".into());
+        }
+        let funnel_advanced = bool_field("funnel_advanced")?;
+        if workspace_tools && !workspace_edit {
+            return Err("oauth.workspace_tools requires oauth.workspace_edit".into());
+        }
+        if (workspace_commands || workspace_interactive) && !workspace_jobs {
+            return Err("oauth interactive/command options require oauth.workspace_jobs".into());
+        }
+        Ok(Self {
+            enabled,
+            state_dir,
+            local_client,
+            workspace_edit,
+            workspace_tools,
+            workspace_jobs,
+            workspace_commands,
+            workspace_interactive,
+            workspace_upstreams,
+            allowed_server_tools,
+            funnel_advanced,
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn canonical_credential_path(path: &Path) -> Result<PathBuf, &'static str> {
+    match path.canonicalize() {
+        Ok(canonical) => Ok(canonical),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if !matches!(
+                std::fs::symlink_metadata(path),
+                Err(meta_err) if meta_err.kind() == std::io::ErrorKind::NotFound
+            ) {
+                return Err("Credential path unavailable");
+            }
+            let parent = path.parent().ok_or("Credential path unavailable")?;
+            let name = path.file_name().ok_or("Credential path unavailable")?;
+            Ok(parent
+                .canonicalize()
+                .map_err(|_| "Credential path unavailable")?
+                .join(name))
+        }
+        Err(_) => Err("Credential path unavailable"),
+    }
 }
 
 pub struct Configuration {
     #[cfg(target_os = "linux")]
     pub(crate) digest: [u8; 32],
+    #[cfg(target_os = "linux")]
+    pub(crate) oauth_binding_digest: [u8; 32],
     #[cfg(target_os = "linux")]
     pub audit_limits: mcp_gateway::security::audit::AuditLimits,
     pub clients: Vec<Client>,
@@ -158,6 +413,8 @@ pub struct Configuration {
     pub(crate) admin_listen: Option<std::net::SocketAddr>,
     #[cfg(target_os = "linux")]
     pub(crate) tailnet: Option<crate::tailnet::Settings>,
+    #[cfg(target_os = "linux")]
+    pub(crate) cloudflare: Option<crate::cloudflare::Settings>,
     #[cfg(target_os = "linux")]
     pub runtime_settings: Value,
     #[cfg(target_os = "linux")]
@@ -170,6 +427,14 @@ pub struct Configuration {
     pub managed: bool,
     #[cfg(target_os = "linux")]
     pub policy_version: Option<u64>,
+    #[cfg(target_os = "linux")]
+    pub default_mode: mcp_gateway::core::oauth::ConnectionMode,
+    #[cfg(target_os = "linux")]
+    pub default_mode_configured: bool,
+    #[cfg(target_os = "linux")]
+    pub workspace: Option<PathBuf>,
+    #[cfg(target_os = "linux")]
+    pub oauth: Option<UnifiedOAuthSettings>,
     #[cfg(target_os = "linux")]
     pub jobs: Option<(PathBuf, Profiles)>,
     #[cfg(target_os = "linux")]
@@ -231,9 +496,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         let audit = audit_log
             .as_ref()
             .ok_or("Job configuration requires audit_log")?;
-        let credentials = path
-            .canonicalize()
-            .map_err(|_| "Credential path unavailable")?;
+        let credentials = canonical_credential_path(path)?;
         if state == *audit || audit.starts_with(&state) || credentials.starts_with(&state) {
             return Err("Job state must be separate from credentials and audit log".into());
         }
@@ -254,7 +517,11 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         .get("clients")
         .and_then(Value::as_array)
         .ok_or("credential config must contain a clients array")?;
-    if entries.is_empty() || entries.len() > 256 {
+    let unified_empty_allowed = document["policy_version"].as_u64() == Some(4)
+        && (document.get("default_mode").is_some()
+            || document.get("workspace").is_some()
+            || document.get("oauth").is_some());
+    if (entries.is_empty() && !unified_empty_allowed) || entries.len() > 256 {
         return Err("credential config client count is invalid".into());
     }
 
@@ -382,9 +649,7 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         };
         #[cfg(target_os = "linux")]
         if let Some((state, profiles)) = &jobs {
-            let credentials = path
-                .canonicalize()
-                .map_err(|_| "Credential path unavailable")?;
+            let credentials = canonical_credential_path(path)?;
             let audit = audit_log.as_ref().expect("job settings require audit log");
             if state.starts_with(&root)
                 || root.starts_with(state)
@@ -504,6 +769,68 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         });
     }
     #[cfg(target_os = "linux")]
+    let (default_mode, default_mode_configured) = match document.get("default_mode") {
+        None => (mcp_gateway::core::oauth::ConnectionMode::Standard, false),
+        Some(raw) => (
+            raw.as_str()
+                .and_then(mcp_gateway::core::oauth::ConnectionMode::parse)
+                .ok_or("Invalid default_mode")?,
+            true,
+        ),
+    };
+    #[cfg(target_os = "linux")]
+    let workspace = document
+        .get("workspace")
+        .map(|value| {
+            let raw = value
+                .as_str()
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .ok_or("workspace must be an absolute path")?;
+            let canonical = raw
+                .canonicalize()
+                .map_err(|_| "workspace directory is unavailable".to_owned())?;
+            if !canonical.is_dir() {
+                return Err("workspace must be an existing directory".to_owned());
+            }
+            if protected(path, audit_log.as_deref(), job_state, &canonical) {
+                return Err("workspace overlaps protected gateway state".into());
+            }
+            Ok::<_, String>(canonical)
+        })
+        .transpose()?;
+    #[cfg(target_os = "linux")]
+    let oauth_settings = document
+        .get("oauth")
+        .map(|value| {
+            UnifiedOAuthSettings::parse(
+                value,
+                path,
+                workspace.as_deref(),
+                audit_log.as_deref(),
+                job_state,
+            )
+        })
+        .transpose()?;
+    #[cfg(target_os = "linux")]
+    if let Some(map) = oauth_settings.as_ref().and_then(|oauth| oauth.allowed_server_tools.as_ref()) {
+        upstreams.unified_oauth_grants(map)?;
+    }
+    #[cfg(target_os = "linux")]
+    let cloudflare = document
+        .get("cloudflare_tunnel")
+        .map(crate::cloudflare::Settings::parse)
+        .transpose()?;
+    #[cfg(target_os = "linux")]
+    let tailnet = document
+        .get("tailscale_serve")
+        .map(crate::tailnet::Settings::parse)
+        .transpose()?;
+    #[cfg(target_os = "linux")]
+    if cloudflare.is_some() && tailnet.is_some() {
+        return Err("Configure either tailscale_serve or cloudflare_tunnel, not both".into());
+    }
+    #[cfg(target_os = "linux")]
     let mut runtime_settings = document.clone();
     #[cfg(target_os = "linux")]
     {
@@ -515,6 +842,8 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         static_fields.remove("protected_paths");
         static_fields.remove("skills_disabled");
         static_fields.remove("mcp_servers");
+        static_fields.remove("default_mode");
+        static_fields.remove("migrated_from");
         // Credential rotation is visible at the next admission.
         if let Some(funnel) = static_fields
             .get_mut("tailscale_serve")
@@ -525,21 +854,35 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         }
     }
     #[cfg(target_os = "linux")]
+    let oauth_binding_digest: [u8; 32] = {
+        let mut stable = runtime_settings.clone();
+        if let Some(obj) = stable.as_object_mut() {
+            if let Some(protected_rules) = document.get("protected_paths") {
+                obj.insert("protected_paths".into(), protected_rules.clone());
+            }
+            if let Some(servers) = document.get("mcp_servers") {
+                obj.insert("mcp_servers".into(), servers.clone());
+            }
+        }
+        Sha256::digest(stable.to_string().as_bytes()).into()
+    };
+    #[cfg(target_os = "linux")]
     let protected_paths = crate::protected_paths::Rules::parse(&document)?;
     #[allow(unused_mut)]
     let mut settings = Configuration {
         #[cfg(target_os = "linux")]
         digest: Sha256::digest(bytes).into(),
         #[cfg(target_os = "linux")]
+        oauth_binding_digest,
+        #[cfg(target_os = "linux")]
         audit_limits: mcp_gateway::security::audit::AuditLimits::from_config(&document)
             .map_err(|error| error.to_string())?,
         clients,
         audit_log,
         #[cfg(target_os = "linux")]
-        tailnet: document
-            .get("tailscale_serve")
-            .map(crate::tailnet::Settings::parse)
-            .transpose()?,
+        tailnet,
+        #[cfg(target_os = "linux")]
+        cloudflare,
         #[cfg(target_os = "linux")]
         admin_listen: document
             .get("admin_listen")
@@ -551,6 +894,14 @@ pub(crate) fn parse_clients(path: &Path, bytes: &[u8]) -> Result<Configuration, 
         managed: document.get("policy_version").is_some(),
         #[cfg(target_os = "linux")]
         policy_version: document["policy_version"].as_u64(),
+        #[cfg(target_os = "linux")]
+        default_mode,
+        #[cfg(target_os = "linux")]
+        default_mode_configured,
+        #[cfg(target_os = "linux")]
+        workspace,
+        #[cfg(target_os = "linux")]
+        oauth: oauth_settings,
         #[cfg(target_os = "linux")]
         jobs,
         #[cfg(target_os = "linux")]

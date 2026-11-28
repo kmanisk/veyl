@@ -227,7 +227,10 @@ pub(super) fn apply(path: &Path, id: &str, operation: Operation) -> Result<(), S
     commit(&policy, &document, &settings, id, false, state_event, &changes)
 }
 
-pub(super) fn apply_all(path: &Path, mode: Mode) -> Result<(), String> {
+/// Persistently update `default_mode` and apply `mode` to every enabled static
+/// client in `path`. Disabled clients never regain access or become YOLO. Zero
+/// static clients succeeds cleanly while recording the audited default transition.
+pub(crate) fn set_default_and_apply_all(path: &Path, mode: Mode) -> Result<(), String> {
     require_operator()?;
     let policy = PolicyFile::lock(path, true)?;
     let bytes = policy.bytes()?;
@@ -250,12 +253,56 @@ pub(super) fn apply_all(path: &Path, mode: Mode) -> Result<(), String> {
     } else {
         Vec::new()
     };
+    let mode_str = if mode == Mode::NativeYolo {
+        "yolo"
+    } else {
+        "standard"
+    };
+    document["default_mode"] = mode_str.into();
     for (entry, client) in document["clients"]
-        .as_array_mut().ok_or("Invalid clients")?.iter_mut().zip(&settings.clients)
+        .as_array_mut()
+        .ok_or("Invalid clients")?
+        .iter_mut()
+        .zip(&settings.clients)
     {
         if mode == Mode::Standard || !client.is_disabled() {
             changes.push(select(entry, client, mode)?);
         }
     }
-    commit(&policy, &document, &settings, pending.as_deref().unwrap_or(BULK), migrated, None, &changes)
+    commit(
+        &policy,
+        &document,
+        &settings,
+        pending.as_deref().unwrap_or(BULK),
+        migrated,
+        Some(("local_operator", "default_mode", mode_str)),
+        &changes,
+    )
+}
+
+/// Set the local preference for future OAuth approvals without changing grants.
+pub(crate) fn set_default(path: &Path, mode: Mode) -> Result<(), String> {
+    require_operator()?;
+    let policy = PolicyFile::lock(path, true)?;
+    let bytes = policy.bytes()?;
+    let mut document = parse_document(&bytes)?;
+    if document["policy_version"] != 4 || policy.pending_client()?.is_some() {
+        return Err("Finish local policy migration or recovery first".into());
+    }
+    let settings = parse_clients(path, &bytes)?;
+    verify_approvals(&settings)?;
+    let mode = if mode == Mode::NativeYolo { "yolo" } else { "standard" };
+    document["default_mode"] = mode.into();
+    commit(&policy, &document, &settings, BULK, false,
+        Some(("local_operator", "default_mode", mode)), &[])
+}
+
+pub(crate) fn set_static_mode(path: &Path, id: &str, mode: Mode) -> Result<(), String> {
+    apply(path, id, Operation::Select(mode))
+}
+
+/// Immediately disable a static client and demote any native YOLO grant while
+/// preserving its audit history and verifier record.
+pub(crate) fn revoke_static_client(path: &Path, id: &str) -> Result<(), String> {
+    apply(path, id, Operation::SetDisabled(true))
 }

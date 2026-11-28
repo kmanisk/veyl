@@ -330,10 +330,14 @@ fn start_runner(launch: Launch, lease: std::fs::File, scopes: Option<&Scopes>) -
         .take()
         .ok_or_else(invalid)
         .and_then(|pipe| send_launch(pipe, &message));
-    // Each waiter is tied to one direct, detached runner and ends with it.
-    tokio::task::spawn_blocking(move || {
-        let _ = child.wait();
-    });
+    // HTTP dispatch already has an executor. A foreground goal controller
+    // supplies its own short-lived waiter so it can detach cleanly on exit.
+    let reap = move || { let _ = child.wait(); };
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        runtime.spawn_blocking(reap);
+    } else {
+        thread::Builder::new().name("veyl-job-reaper".into()).spawn(reap)?;
+    }
     message_sent
 }
 

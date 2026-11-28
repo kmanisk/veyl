@@ -193,6 +193,15 @@ pub(crate) fn manage(path: &Path, params: &[&str]) -> Result<Value, String> {
                     grants.remove(*id);
                 }
             }
+            if let Some(oauth) = document.get_mut("oauth").and_then(Value::as_object_mut)
+                && let Some(grants) = oauth.get_mut("allowed_server_tools").and_then(Value::as_object_mut)
+            {
+                grants.remove(*id);
+                if grants.is_empty() {
+                    oauth.remove("allowed_server_tools");
+                    oauth.insert("workspace_upstreams".into(), json!(false));
+                }
+            }
             ("remove", *id, None, None)
         }
         [op @ ("grant" | "revoke"), principal, id, tool] => {

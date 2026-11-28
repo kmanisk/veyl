@@ -342,6 +342,117 @@ pub(super) fn switch_stopped_client_mode(
     Ok((previous, reauth_required))
 }
 
+/// Persistently switch every stopped OAuth registration between Standard and
+/// YOLO in a single durable transaction.
+pub(super) fn switch_all_stopped_clients_mode(
+    dir: &Path,
+    local: &str,
+    target_mode: ConnectionMode,
+) -> Result<Vec<(String, ConnectionMode, bool)>, String> {
+    let store = Store::open_oauth_state(dir)?;
+    let snapshot = unseal(&store.read()?).map_err(|_| "Invalid OAuth state")?;
+    let origin = snapshot.registry["resource"]
+        .as_str()
+        .and_then(|s| s.strip_suffix("/mcp"))
+        .ok_or("Invalid saved OAuth origin")?;
+    let resource = Resource::new(origin).map_err(|_| "Invalid saved OAuth origin")?;
+    let (mut durable, mut registry, mut grants) = Durable::open_locked(
+        store,
+        resource,
+        local,
+        &snapshot.binding,
+        None,
+        false,
+        false,
+    )?;
+    let previous = registry.set_all_modes(target_mode);
+    let mut results = Vec::with_capacity(previous.len());
+    for (id, prev) in previous {
+        let mut reauth_required = false;
+        match target_mode {
+            ConnectionMode::Yolo => {
+                if prev != ConnectionMode::Yolo {
+                    grants.revoke_oauth_client(&id);
+                    reauth_required = true;
+                }
+            }
+            ConnectionMode::Standard => {
+                grants.downgrade_oauth_client(&id);
+            }
+        }
+        results.push((id, prev, reauth_required));
+    }
+    let now = Instant::now();
+    let epoch = durable
+        .begin("mode", now)
+        .map_err(|_| "Cannot publish bulk mode switch intent")?;
+    durable
+        .finish(
+            Transition {
+                operation: "mode",
+                status: 200,
+                client: None,
+                now,
+                epoch,
+            },
+            &registry,
+            &grants,
+        )
+        .map_err(|_| "Cannot confirm durable bulk mode switch".to_owned())?;
+    Ok(results)
+}
+
+/// Copy and re-bind a verified stopped OAuth durable state directory into a
+/// unified destination directory without modifying the original files or
+/// weakening issuer/family/revocation integrity.
+pub(super) fn rebind_migrated_state(
+    source_dir: &Path,
+    dest_dir: &Path,
+    local: &str,
+    expected_old_bindings: &[&str],
+    new_binding: &str,
+) -> Result<String, String> {
+    let source_store = Store::open_oauth_state_readonly(source_dir)?;
+    let raw_sealed = source_store.read()?;
+    let snapshot = unseal(&raw_sealed).map_err(|_| "Invalid OAuth state checksum or schema")?;
+    if snapshot.version != 1 || snapshot.interrupted.is_some() {
+        return Err("Interrupted or unsupported OAuth state cannot be migrated".into());
+    }
+    if !expected_old_bindings
+        .iter()
+        .any(|expected| snapshot.binding == *expected)
+    {
+        return Err("OAuth durable binding mismatch on source profile".into());
+    }
+    let now_ms = wall_ms().map_err(|_| "OAuth clock unavailable")?;
+    if snapshot.saved_ms > now_ms {
+        return Err("OAuth clock rollback detected on source state".into());
+    }
+    let origin = snapshot.registry["resource"]
+        .as_str()
+        .and_then(|s| s.strip_suffix("/mcp"))
+        .ok_or("Invalid saved OAuth resource")?;
+    let resource = Resource::new(origin).map_err(|_| "Invalid saved OAuth origin")?;
+    let registry = ClientRegistry::restore(resource, &snapshot.registry)
+        .map_err(|_| "Invalid OAuth registrations in source state")?;
+    let _grants = GrantStore::restore(
+        snapshot.families,
+        snapshot.saved_ms,
+        now_ms,
+        Instant::now(),
+        local,
+        |c, d, r| registry.binding(c, d, r).is_ok(),
+    )
+    .map_err(|_| "Invalid OAuth grant families in source state")?;
+
+    let mut rebound = unseal(&raw_sealed).map_err(|_| "Invalid OAuth state checksum or schema")?;
+    rebound.binding = new_binding.to_owned();
+    let sealed = seal(&rebound).map_err(|_| "Cannot seal migrated OAuth state")?;
+    let dest_store = Store::open_oauth_state(dest_dir)?;
+    dest_store.write(&sealed, true)?;
+    Ok(origin.to_owned())
+}
+
 /// Revoke a stopped managed profile while holding its exclusive lifetime
 /// lock. Uses the normal audited durable intent/finish protocol.
 pub(super) fn revoke_stopped_profile(dir: &Path, local: &str) -> Result<(), String> {

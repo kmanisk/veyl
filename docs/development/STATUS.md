@@ -1,5 +1,187 @@
 # Gate 3d status
 
+## 2026-11-28 — 0.8.0-beta accepted, deployed cleanly to production, and prepared for publication
+
+AGY completed final independent acceptance and live production cutover of Veyl `0.8.0-beta` from `/home/onyx/.local/share/veyl-development/candidates/unified-registry.WCXZ777P/source`:
+
+- **Verified fixes prior to deployment**:
+  - `src/unified.rs` (`empty_legacy_job_store` + `merge_oauth_jobs`): empty legacy `~/.veyl-login/profile/jobs` containing only `.lock` and `.receipt-key` cleanly reconciles alongside populated primary `~/.local/state/veyl/jobs/` without clobbering `.receipt-key` or existing receipts, while failing closed on collisions, malformed keys, non-zero locks, and symlinks (`job_store_migration_sec.py` 3/3 PASS).
+  - `src/tailnet.rs` & `src/serve_cmd.rs` (`veyl serve funnel-retire-legacy`): atomically converts `:443 /veyl/` to static disabled text and removes legacy `:8443` and `:9443` routes while preserving unrelated `:443 / -> 127.0.0.1:3000` and `AllowFunnel[443]`.
+  - `src/http/dashboard.rs` & `src/http/dashboard/app.js`: caught during live cutover verification (`veyl monitor --view jobs --client chatgpt` returned `0` jobs because `snapshot.oauth.workspace_jobs` overrode static client lookups in unified mode). Scoped OAuth job aggregation strictly to `oauth-preview` (isolated) or `oauth` (unified OAuth jobs), restoring full dashboard and TUI job history for unified static clients (`chatgpt`, `codex`, `agy`), covered by new `test_06_unified_dashboard_static_and_oauth_jobs`.
+- **Verification on rebuilt release ELF (`4af1a48993666e1ee4bbdb6b1c20c3a6c0e1fc629be6285a03c60932e00843c4`)**:
+  - `guarded_cargo.py clippy --all-targets -- -D warnings`: PASS (`0` warnings).
+  - `guarded_cargo.py test -- --test-threads=1`: **150/150 PASS**.
+  - Prior full serial 51-script matrix on pre-dashboard-fix `0.8.0-beta` ELF (`aaa79ace7d7807024ca2ce2b71ea049d68dd9704db6e42463e921738a523982c`): **51/51** exit 0 (`181` passed, `1` skipped host-tmpfs in `oauth_funnel.py`; `28/28` historical pins, `19/28` locked suites / `228/287` subcases matching `LEGACY_FAILURES.md`).
+  - Post-fix rerun of all 12 affected suites on exact final ELF `4af1a489...`: `unified_lifecycle_e2e` (6/6), `oauth_jobs` (3/3), `oauth_commands` (2/2), `oauth_interactive` (4/4), `product_features` (9/9), `workspace_dashboard` (2/2), `onboarding_browser` (PASS), `tui_operator` (1/1), `unified_service` (PASS), `installed_upstreams` (PASS), `independent_r5_security` (8/8), `job_store_migration_sec` (3/3).
+- **Production cutover & live checks**:
+  - Private rollback backup saved (`0700`) under `~/.local/share/veyl-development/artifacts/pre-0.8.0-beta-backup/` (`veyl.0.7.0-beta`, `mcp-gateway.service`, `clients.json`, `.clients.json.serve-receipt`).
+  - Legacy `mcp-gateway.service` stopped/disabled/uninstalled; obsolete Tailscale routes retired cleanly via `funnel-retire-legacy` with BridgeDev `:443 / -> 127.0.0.1:3000` (`AllowFunnel[443]`) preserved.
+  - Installed `4af1a489...` to `~/.local/bin/veyl` and `~/.cargo/bin/veyl` (with `mcp-gateway`, `veyl-monitor`, `veyl-connector` symlinks); ran `veyl up --adopt-oauth-issuer --service --no-ui`.
+  - Verified live `veyl.service` active (`default_mode=standard`, `chatgpt`/`codex`/`agy` `yolo` preserved, `clients.pre-unified.json` mode `0600` byte-identical, `29` jobs visible in `veyl monitor --view jobs --client chatgpt` and MCP `list_jobs`, primary `.receipt-key` intact, `veyl audit verify` VALID, public HTTPS PRM/AS `200`, unauth `/mcp` `401`, `/veyl/mcp` static disabled, `:8443` closed, live `node-utils`/`rea`/`rust-anything` stdio discovery ready).
+  - Notes: `chatgpt`'s pre-existing `upstream_workspace_roots` retains `dev=58` while `/home/onyx/Projects` rebooted to `dev=56` (refresh via `veyl mcp-servers workspace-folder chatgpt ...` if needed); live external browser ChatGPT OAuth consent remains an interactive operator verification step.
+
+## 2026-11-28 — 0.8.0-beta version approved; exact release candidate staged
+
+Operator approved the next release version `0.8.0-beta`. Versioned
+`Cargo.toml`, `Cargo.lock` and current README headings only; all other
+r8 source/test files matched the 235-entry reviewed manifest before
+this documentation update. Guarded release build process
+`mx03abvh-jig2ft` exited 0. Executable:
+`../release-0.8.0-beta/veyl`, SHA-256
+`e065521fb41562c80c4b17e326498ff3134e12aa9df4712b4efdce4e37f494f6`.
+
+Exact versioned executable regression process `mx03cg12-km9xlm` exited 0:
+lifecycle 5, TUI 1, workspace 4, product 9, goal runner 5, durable goals 3,
+independent AGY-authored security cases 7 (34/34 total). Installed-provider
+suite `mx03cjp8-pl3xwx` exited 0, including actual REA archive inspection,
+Rust Anything and exact OAuth grants. Historical r8 full matrix and Rust
+suite remain separate evidence, not a fresh full run on the versioned ELF.
+
+Read-only preflight: canonical main clean at
+`85f72fdd4505077f28e3f5e42772840674a9db3f`, remote main matches, no
+v0.8.0-beta Git tag or GitHub release found; production still 0.7.0-beta,
+audit valid (2830 records), 29 existing job receipts all terminal
+(25 completed, 4 canceled), 3 enabled native YOLO clients unchanged.
+Legacy user unit active, unified unit inactive. Static Tailscale port
+8443 differs from the saved OAuth issuer port 10000; the unified runtime
+explicitly refuses an active legacy unit, so an in-place updater restart
+is not a safe cutover plan. No migration marker or pre-unified backup
+present. Existing routes and state untouched.
+
+The approved version is ready for exact-candidate review. Production
+migration involves retiring the Veyl-owned legacy routes/unit, preserving
+the unrelated root route, and adopting the saved issuer. This requires
+explicit cutover approval and a fresh rollback/preflight check.
+No commit, push, GitHub release, crates publication, local install or
+route change has been performed in this checkpoint.
+
+## 2026-11-28 — BridgeDev r8 takeover: local regression PASS; production approval HOLD
+
+Staged isolated executable `../release-unified-final-r8/veyl`, version
+`0.7.0-beta`, SHA-256
+`5807d958fd291e7f25b8ea668c2218442a9e3c4e574b0e1ab9294bb8a456b1c6`.
+AGY r5 artifact and locked lab preserved. No production state or release changes.
+
+- Bounded REA cold-start budget (10s for explicit bundle inputs, separate
+  bounded discovery); ordinary host-path and workspace limits preserved.
+  REA tool-list frames may be 128 KiB, ordinary tool-call frames remain 64 KiB.
+- REA keyed archives accept an explicit `bundle_path` under
+  `/upstream/bundle` and relative archive `path`. Both
+  `open_bundle_resources` and `inspect_keyed_archive` must be granted and
+  discovered. The audited preliminary open and archive inspection share one
+  ephemeral connection. No persistent provider process or cross-call state.
+  The actual installed REA bundle was copied into disposable fixtures with
+  artifact,session families enabled; production provider settings/grants unchanged.
+- Compact TUI hints at narrow widths; operator probe failures report a bounded
+  reason. Corrected lifecycle harness to use the binary resolved by oauth_http_preview
+  rather than falling back to the shared debug executable after argv consumption.
+- Exact r8 installed-provider test (BridgeDev process mx02z5ix-9bdqi7) exit 0:
+  real REA archive graph and canary, traversal/missing-grant rejection,
+  REA pyc/NuGet/ELF, Rust Anything analysis/profiling/cancellation, 14/14 diff,
+  report and OAuth exact grants. Exact r8 lifecycle 5/5; focused regression
+  mx030027-vuiu1r: TUI 1, workspace 4, product 9, goal runner 5, durable goals 3,
+  all passing. Independent AGY-authored security suite repeated by BridgeDev
+  against r5 and r8, 7/7 each; r8 mx030h0t-pqg1e1 also verified 28/28 locked pins.
+  Full r8 matrix process mx03228v-4uffl2: initial 47/50 scripts passed;
+  three environmental/harness failures (missing TUI capture directory, process
+  creation EAGAIN under concurrency, browser condition timeout) resolved on
+  serial rerun mx033yr6-96mw24, exit 0 with all five lifecycle tests, TUI and
+  browser pairing/responsive controls/tab-keyboard checks passing. Installed
+  providers passed separately, bringing 51 distinct scripts to passing runs
+  (one host-tmpfs case skipped). Initial failure logs retained under
+  final-evidence/r8. No claim of a clean initial concurrent matrix.
+- Clippy all targets warning-denied passed. Transient systemd test job
+  3a130072534c41c4 hit two Unsafe state directory errors; the same complete
+  guarded Rust suite passed under the ordinary user process mx031l8s-1ya1om
+  (150/150, exit 0). No security checks weakened. Historical r5 59 legacy
+  failing locked subcases are not a new r8 acceptance run.
+- AGY r5 real model-backed goal and 306-second restart-surviving job receipts
+  remain valid r5 evidence; no new real-model spend was initiated. The runner
+  adapter remains explicitly supplied by the operator. Arbitrary stateful
+  multi-request upstream sessions remain outside this narrowly scoped fix.
+- Production/version/publication gates remain: explicit exact-candidate and
+  version approval, bounded host tmpfs test, live Cloudflare where configured,
+  and live ChatGPT OAuth cutover. Do not overwrite published 0.7.0-beta.
+  See existing migration runbook, subject to a fresh preflight.
+
+## 2026-11-28 — AGY independent final acceptance of r5 PASS WITH LIMITATIONS (HOLD for operator approval)
+
+AGY independently audited candidate `unified-registry.WCXZ777P/source` and
+staged ELF `../release-unified-final-r5/veyl` (`veyl 0.7.0-beta`, SHA-256
+`b568b70c5e2a172459211eafa236cc07d48484b6687460c5019ce5b54e0f4f56`, 235/235
+pre-doc source files matching `../SOURCE_SHA256SUMS-r5-bridge-review`).
+
+Verified independently (all logs under `~/.gemini/antigravity-cli/brain/dccf4a3e-1235-47ad-b36b-6285659d2393/scratch/agy-r5-logs/`):
+- **Cargo & Rust identity**: `guarded_cargo.py clippy --all-targets -- -D warnings` exit 0 (`0` warnings); `guarded_cargo.py build --release --bin veyl` reproduced byte-identical SHA-256 `b568b70c5e2a172459211eafa236cc07d48484b6687460c5019ce5b54e0f4f56` (`target/release/veyl.d` bound to candidate source); `guarded_cargo.py test -- --test-threads=1` passed **150/150** (`mcp_gateway` 44, `veyl` 84, `bridgedev_parity_and_nightshift` 3, `gate3_operator` 9, `onboarding` 6, `pass2_mutation` 4).
+- **Acceptance matrix**: 50/51 matrix scripts passed on initial run (`matrix/`: **179 passed, 1 skipped, 0 failed** across unittest suites — `oauth_funnel.py` skipped 1 host-tmpfs case — plus `durable_identity_loopback`, `onboarding_browser`, `tui_operator`, `unified_service`, `systemd_lifecycle`, `single_updater`, `policy_recovery`, `no_bubblewrap_native` all exit 0). Initial concurrent `installed_upstreams.py` failed on missing positional arg, first direct positional run hit a cold-start `4s` timeout on `rea__inspect_python_pyc` (Node.js cold-start under `Duration::from_secs(4)` in `src/upstream/mod.rs:471`), and warm-cache rerun (`installed_upstreams_rerun.log`) passed **1/1** cleanly (`rea__inspect_{python_pyc,nuget_nupkg,rust_binary}`, `rust-anything__{analyze,profile,diff,report}`, `notifications/cancelled` child cleanup, exact OAuth grants). Confirmed `rea__inspect_keyed_archive` fails closed with `target_unavailable` because REA requires `session` / `open_binary` / `open_bundle_resources` state across calls while Veyl spawns a fresh ephemeral stdio process per `tools/call`.
+- **Historical locked lab (`~/.local/share/veyl-development/rust-mcp-gateway-lab/`)**: **28/28** pin hashes verified intact (`LOCKED_ARTIFACTS_PREPARED 28 7`); **19/28** locked suites passed cleanly (**228/287** subcases), and all 9 failing suites (`59` subcases) match the `0.7.0-beta` Standard/retired-selector differences documented in `docs/development/LEGACY_FAILURES.md`.
+- **Long-running >300s job & real model-backed goal**: Detached native `task_run` job (`b69b825fc2067613fc6d7dea8e5ef827`, `sleep 306`, `timeout_seconds=360`) survived gateway stop at `3.0s`, reported `state="uncertain"` (`recovery="detached runner may still be active; awaiting final receipt"`) across restart, and finished cleanly with `state="completed"`, `exit_code=0`, `execution_duration_ms=306168` (`long_306s_job.log`; harness assertion expected `"succeeded"` instead of Veyl's `"completed"` terminal string). Real model-backed `veyl goal run` passed end-to-end using an explicitly authorized wrapper around `/home/onyx/.local/bin/agy` (`goal=f73be019f714cd38c9419168a05806a8`, `job=8ddeb90d40b4f8d221dab67f7424afe6`, `state="completed"`, real `calc.py` fix + `test_calc.py` verification); `codex exec` hit account quota until 3:55 PM; out-of-the-box Veyl still requires an operator-supplied adapter wrapper script emitting `veyl-goal-turn-v1` JSON.
+- **UI & TUI verification**: Inspected captured browser PNGs (`health/clients/goals/jobs` at `1280x900` & `390x844` dark + `clients-light-1280.png` light) and TUI PTY frames (`124x32` & `54x21`). Measured idle overhead: `veyl serve` `10.09 MiB` RSS / `0.0000s` CPU over 3s; `veyl tui` `4.48 MiB` RSS / `0.0000s` CPU over 3s. Minor non-security cosmetic observation: 54-column TUI wraps/clips the last item of footer hint line 1 at col 54 (`[/] Filter [`).
+- **Independent security & negative controls (`independent_r5_security.py`)**: **7/7 PASS** (`test_01..test_05` plus `test_sec_01` goal auth/relative & 0777 runner refusal/mid-run SHA-256 tamper refusal/roadmap regression & evidence-strip refusal/cross-client isolation and `test_sec_02` cross-session `notifications/cancelled` rejection + same-session child reaping + path traversal refusal).
+- **Remaining limitations / release gate**: (1) Dedicated bounded host tmpfs positive test in `oauth_funnel.py` skipped without mount fixture; (2) real host `cloudflared` daemon and live external ChatGPT HTTPS DCR connection remain operator gates; (3) `4s` cold-start upstream timeout can trip on cold Node.js `rea` invocations; (4) `rea__inspect_keyed_archive` requires future session-scoped stdio integration; (5) version in `Cargo.toml` is `0.7.0-beta` — must be bumped (e.g., `0.8.0-beta` / `0.7.1-beta`) before GitHub/crates.io release so published `0.7.0-beta` artifacts are not overwritten.
+
+## 2026-11-28 — Goals and operator UX checkpoint
+
+The unified-registry worktree adds a foreground, explicitly authorized
+goal controller. Each turn uses a signed native job and persisted attempt
+number. The controller reconciles recovered active receipts before it
+admits another attempt. Manual MCP goal continuation remains available.
+
+The terminal monitor adds responsive job columns, short IDs with full
+IDs in details, Unicode-aware clipping, provider probes and confirmed
+client controls. The embedded browser dashboard adds compact unified
+client rows, categorized grant search, local default-mode management,
+live jobs and persisted goal iteration history.
+
+Installed REA returned ELF, NuGet and Python artifact evidence in the
+isolated unified runtime. Installed Rust Anything ran analysis and real
+profiling. The unified OAuth consent path uses an exact operator-defined
+provider map rather than an implicit catalog-wide Standard grant. Report
+and diff use private bounded crate scratch for operations that need to
+write beside the crate. See the exact staged artifact and raw logs in the
+candidate parent after the final verification run. Production remains
+under the existing operator release gate.
+
+## 2026-11-28 — Issuer cutover candidate built and focused tests PASS
+
+Operator approved reducing Cargo admission from 40 to 38 GiB; updated candidate AGENTS.md and tests/guarded_cargo.py. Emergency cutoff 15 GiB, shared lock, one Cargo job, offline/locked and debug/incremental restrictions unchanged. Guard tests 6/6. Guarded optimized build d1c5a8bc9ac3410b exited 0 (59.57 seconds), artifact ../release-issuer-cutover/veyl SHA-256 6cfb0d95b3437c8d453cb0572abf04cdcf6025890ead8872c95e3fe67b77c3fd. Process mwzyor3s-6fwvit exit 0: 5/5 unified lifecycle cases including explicit saved issuer adoption, byte-identical backup, static local read, public bearer denial, route preservation. Process mwzyowv0-vtc7bf exit 0: registry 2/2, YOLO 8/8 with 0.6.1-beta baseline, OAuth YOLO 1/1, nested systemd PASS. Total 16/16 focused Python cases plus nested systemd and guard 6/6. Full Rust/Clippy and real external client tests not rerun for this exact artifact; operator inspection/approval and owned route cutover remain required. No production deployment, version bump or remote changes. Prior build-blocked entry is superseded.
+
+## 2026-11-28 — Explicit issuer cutover implementation / BUILD BLOCKED
+
+Added opt-in `veyl up --adopt-oauth-issuer` in src/serve_cmd.rs and src/unified.rs for same-host split-port legacy migration. The normal conflict refusal remains. Explicit adoption selects the saved OAuth port (8443/10000), removes obsolete static public bearer settings, preserves the previous canonical policy as private clients.pre-unified.json without overwriting any backup, checks original policy bytes before committing, and does not change real Tailscale routes. The default local listener remains 127.0.0.1:7331 when static clients exist; the up URL preview uses the selected stored port. Hostname conflicts and explicit conflicting port/provider overrides remain refused. Added test_05_explicit_saved_issuer_cutover in tests/unified_lifecycle_e2e.py for refusal without consent, preserved source bytes, backup mode, new origin, static local authentication, public bearer rejection and unrelated route preservation. Updated docs/TAILSCALE.md.
+
+NOT VERIFIED: guarded build job 6eac92e0c7cf4cf5 exited 75 before compilation: 39.54 GiB free, required 40 GiB; subsequent storage inspection showed 42410881024 bytes free (~39.50 GiB). No new binary; previous release-bridge-review/veyl and manifest remain historical evidence, not a match for the updated source. Do not bypass guard or delete unreviewed caches. Once safe space is available, build serially, verify artifact digest, run all five lifecycle cases plus registry, baseline YOLO, OAuth, nested systemd and guarded Rust/Clippy tests. Generate new source manifest only after verification. Live route retirement, external MCP and exact candidate approval remain outstanding. No production writes or route/service changes.
+
+## 2026-11-28 — BridgeDev independent review / HOLD
+
+Original AGY executable 5904ce369fe07bdb75de3ab06b2b2ae8ee22be56155cfb42e4f1dc94883d0e3d: 229/229 manifest files, 28/28 historical pins, and 15/15 focused cases (including all three formerly skipped legacy baseline tests) verified; nested systemd passed. AGY full Rust/integration counts were not independently rerun.
+
+Independent negative control mwzxv7wf-72bb17 demonstrated that mode-0644 synthetic Cloudflare credentials were accepted and the tunnel child launched. Fixed src/cloudflare.rs to require mode 0600 for credential/config files; added a negative control to tests/unified_lifecycle_e2e.py. Original versions retained in ../bridge-review-original; original executable and manifest retained. Guarded release rebuild job a8ad63a8b13f49e0 exited 0; log ~/.local/state/chatgpt-local-coder/jobs/a8ad63a8b13f49e0.log. Corrected executable ../release-bridge-review/veyl SHA-256 0108813199120ef22454f8057d74c1c589ff1d008d007e353dca8f0d2e119198. Focused rerun mwzxz6ie-m5f1ao exited 0: 16/16 including independent port-conflict fixture ../bridge_production_shape.py, plus nested systemd PASS. Full Rust/Clippy/integration matrix on corrected binary not repeated.
+
+Production preflight mwzxuww4-71mgya: native policy schema 4, three clients, static Funnel configured port 8443, saved OAuth issuer port 10000 on same hostname, zero legacy registered OAuth clients and grant families, 29 terminal job receipts. Independent synthetic fixture reproduced exact port-conflict refusal before either original policy or OAuth bytes were modified. Existing static public bearer routes will not authenticate via the unified OAuth-only public ingress; clients need an explicit cutover/reconnection plan. Do not stop current service or edit live policy to bypass this conflict. Recommend retaining the saved OAuth issuer on 10000 and explicitly retiring only the old Veyl route after operator approval and verified local client endpoint continuity. Real Cloudflare tunnel, external authenticated MCP and bounded host tmpfs positive remain unverified. No live state, grants, service, routes, installed binaries or repository remotes changed. Exact corrected candidate and route cutover approval required; no version bump or publication.
+
+## 2026-11-28 — Unified registry, single veyl serve runtime, and opt-in service PASS (HOLD / not deployed)
+
+Completed the full unified Veyl registry, transactional legacy migration,
+persistent `default_mode`, single-process `veyl serve` + tunnel supervision,
+opt-in `veyl.service` lifecycle, unified CLI/dashboard surface, and end-to-end
+test suites in `~/.local/share/veyl-development/candidates/unified-registry.WCXZ777P/source`
+(base `85f72fdd4505077f28e3f5e42772840674a9db3f`):
+
+- Transactional single registry & verified migration (`src/unified.rs`, `src/security/audit/ledger.rs`, `src/security/audit.rs`): reconciles legacy `~/.config/mcp-gateway` and/or `~/.veyl-login/profile` into `~/.local/state/veyl/` preserving originals, static bearers, disabled states, roots, `.head`/segment audit history (`AuditSink::migrate_verified`), jobs, `.clients.json.goals/`, and sealed OAuth `oauth-state.json` rebound to unified config digest + workspace durable ID. Fails closed on `.migration-pending` interrupted markers, live legacy services/processes, symlinks, issuer mismatches, ID collisions, and dual static configs. Also skips empty untouched 0-byte `audit_log` placeholders without `.head`/`.lock` cleanly while rejecting symlinks or non-zero unsealed audit files, and avoids nested lock deadlocks in `Ledger::migrate_verified` by verifying `current_snapshot` under the active destination transaction.
+- Dynamic `default_mode` & unified OAuth/static admission (`src/http_common/{oauth.rs,oauth_http.rs,oauth_http/durable.rs}`, `src/http/{operator.rs,admission.rs,oauth.rs,dashboard.rs,dashboard/app.js}`, `src/jobs/config.rs`, `src/skills.rs`): schema 4 supports `default_mode`, `workspace`, `oauth`, `cloudflare_tunnel`, `migrated_from`, and empty `clients: []`. Dashboard inspect preselects `default_mode` for fresh unapproved OAuth registrations (`!explicit_mode && supports_yolo && eligible`) without auto-authorizing. `run_unified` serves both local loopback static bearers (`127.0.0.1`) and public tunnel OAuth tokens in one `veyl serve` process, rejecting static bearers on public tunnel ingress and honoring `control.sock` `shutdown`, `mode_all`, `mode`, `revoke`, and `list` commands.
+- Unified CLI, Cloudflare validation, and opt-in `veyl.service` (`src/serve_cmd.rs`, `src/cloudflare.rs`, `src/mode_cli.rs`, `src/mode_cli/transition.rs`, `src/service_cli.rs`, `src/local_cli.rs`, `src/platform/linux/cli.rs`, `src/gateway_main.rs`, `src/oauth_cli/managed.rs`): implements `veyl up`, `veyl down`, `veyl status`, `veyl mode [standard|yolo]` (typed `Type YOLO to confirm:` or `--yes`), `veyl clients [list|mode|revoke]`, `veyl service install|enable --now|uninstall|...`, and `veyl serve` (preserving legacy compatibility commands). `src/cloudflare.rs` enforces explicit FQDN + owner-only `0600` credentials + operator-provided `cloudflared` (refusing `.trycloudflare.com` and never auto-installing). Fixed `unit_is_owned_veyl` in `src/service_cli.rs` so `veyl service uninstall` refuses tampered `veyl.service` units instead of reporting absent.
+- Documentation (`README.md`, `docs/{CLIENTS,CHATGPT,LINUX,TAILSCALE}.md`): updated user CLI, tunnel, and opt-in `veyl.service` instructions while preserving legacy compatibility/rollback notes (zero emojis).
+
+Verified against staged release ELF `../release-unified-registry/veyl` (SHA-256 `5904ce369fe07bdb75de3ab06b2b2ae8ee22be56155cfb42e4f1dc94883d0e3d`):
+- `python3 -B tests/guarded_cargo.py clippy --all-targets -- -D warnings`: PASS (0 warnings, 0 errors).
+- `python3 -B tests/guarded_cargo.py build --release --bin veyl`: PASS (single ELF executable).
+- `python3 -B tests/guarded_cargo.py test -- --test-threads=1`: **149/149 PASS, 0 failed, 0 ignored** (`mcp_gateway` 44, `veyl` 83, `bridgedev_parity_and_nightshift` 3, `gate3_operator` 9, `onboarding` 6, `pass2_mutation` 4).
+- `node --check src/http/dashboard/app.js`: PASS.
+- Release ELF integration suites across 31 Python unittest scripts: **146 passed, 6 skipped, 0 failed** (including `registry_cli.py` 2/2, `unified_lifecycle_e2e.py` 4/4, `permission_modes.py` 3/5 [2 skipped legacy `full`], `unified_yolo.py` 5/8 [3 skipped no `VEYL_BASELINE_BIN`], `oauth_funnel.py` 4/5 [1 skipped no bounded host tmpfs], `linux_features.py` 16/16, `oauth_native.py` 17/17, `oauth_managed_login.py` 2/2, `unified_oauth_yolo.py` 1/1, `oauth_jobs.py` 3/3, `oauth_commands.py` 2/2, `oauth_interactive.py` 4/4, `oauth_upstreams.py` 3/3, `oauth_http_preview.py` 6/6, `direct_remote_boundary.py` 2/2, `product_features.py` 9/9, `dynamic_jobs.py` 5/5, `extended_jobs.py` 3/3, `process_sessions.py` 10/10, `durable_goals.py` 3/3, `durable_identity.py` 3/3, `timeshift.py` 9/9, `git_tools.py` 3/3, `context_and_system.py` 3/3, `workspace_dashboard.py` 2/2, `upstream_workspace.py` 4/4, `upstream_workspace_jobs.py` 3/3, `runtime_bundles.py` 2/2, `platform_probe.py` 2/2, `test_guarded_cargo.py` 6/6, `test_dashboard_preview.py` 1/1), PLUS `onboarding_browser.py` (`FIRST_RUN_BROWSER_PAIRING_PASS`, `DASHBOARD_TABS_AND_KEYBOARD_PASS`), `systemd_lifecycle.sh`, and `unified_service.sh` (`UNIFIED_SYSTEMD_SERVICE_PASS`).
+- Locked acceptance (`prepare_locked_artifacts.py`): **28/28 SHA-256 pins verified intact**; **19/28 locked suites passed cleanly (`228/287` subcases passed)**; all 9 failing locked suites (`59` subcases: `locked_durable_jobs` `test_08` + 8 legacy-selector/FULL suites) match the retired `0.6.x` behaviors already documented in `docs/development/LEGACY_FAILURES.md`.
+- Untested / HOLD: no deployment to `~/.local/bin`, `~/.local/state/veyl`, `~/.veyl-login`, `~/.config/systemd/user`, or `~/Projects/veyl`; no git commit/push/crates.io publish; dedicated bounded host tmpfs negative/positive test in `oauth_funnel.py`, real host `cloudflared` daemon, and external ChatGPT/remote MCP client connections await explicit operator authorization/execution.
+
 ## 2026-11-27 — 0.7.0-beta deployed and published
 
 Operator approved the exact staged 0.7.0-beta release. Accepted commit
