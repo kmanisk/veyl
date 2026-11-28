@@ -1,8 +1,8 @@
 # Gateway Milestone 1 — Working Handoff
 
-## 2026-11-28 — 0.8.0-beta accepted and deployed live
+## 2026-11-28 — 0.8.0-beta deployed live and published
 
-Accepted release ELF (`../release-0.8.0-beta-verified/veyl`, `veyl 0.8.0-beta`, SHA-256 `4af1a48993666e1ee4bbdb6b1c20c3a6c0e1fc629be6285a03c60932e00843c4`) is installed at `~/.local/bin/veyl` and `~/.cargo/bin/veyl`, with `veyl.service` running unified ingress (`https://onyx.tail646579.ts.net:10000/mcp` public OAuth + `127.0.0.1:7331` local MCP + `127.0.0.1:7332` dashboard).
+Canonical release commit `d86e166760fcdb2b69114d6f852247a700768f7f` (`tag: v0.8.0-beta`), GitHub release `https://github.com/kmanisk/veyl/releases/tag/v0.8.0-beta`, and `crates.io` crate `veyl 0.8.0-beta` (`checksum: b82aebae4b3025623159246c05982dda2e4da3e4973ef7c1fefcb4933dfeb05f`) are live. Accepted release ELF (`../release-0.8.0-beta-verified/veyl`, `veyl 0.8.0-beta`, SHA-256 `4af1a48993666e1ee4bbdb6b1c20c3a6c0e1fc629be6285a03c60932e00843c4`, archived under `~/.local/share/veyl-development/artifacts/d86e166760fcdb2b69114d6f852247a700768f7f/`) is installed at `~/.local/bin/veyl` and `~/.cargo/bin/veyl`, with `veyl.service` running unified ingress (`https://onyx.tail646579.ts.net:10000/mcp` public OAuth + `127.0.0.1:7331` local MCP + `127.0.0.1:7332` dashboard).
 
 - Rollback bundle from `0.7.0-beta` is retained in `~/.local/share/veyl-development/artifacts/pre-0.8.0-beta-backup/` (`clients.pre-unified.json` also retained at `0600` inside `~/.local/state/veyl/`).
 - All 3 static clients (`chatgpt`, `codex`, `agy` in `yolo`), 29 job receipts (visible in both MCP `list_jobs` and `veyl monitor --view jobs --client chatgpt`), `.receipt-key`, and valid audit history are preserved cleanly.

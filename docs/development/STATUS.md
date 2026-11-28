@@ -1,6 +1,11 @@
 # Gate 3d status
 
-## 2026-11-28 — 0.8.0-beta accepted, deployed cleanly to production, and prepared for publication
+## 2026-11-28 — 0.8.0-beta accepted, deployed cleanly to production, and published
+
+- **Canonical release commit & tag**: `d86e166760fcdb2b69114d6f852247a700768f7f` on `kmanisk/veyl` (`main`), annotated tag `v0.8.0-beta`.
+- **GitHub release**: `https://github.com/kmanisk/veyl/releases/tag/v0.8.0-beta` (`veyl` single ELF `12608800` bytes, SHA-256 `4af1a48993666e1ee4bbdb6b1c20c3a6c0e1fc629be6285a03c60932e00843c4`, plus `SHA256SUMS`; `v0.7.0-beta` untouched).
+- **crates.io**: `veyl 0.8.0-beta` published (`yanked: false`, crate tarball SHA-256 `b82aebae4b3025623159246c05982dda2e4da3e4973ef7c1fefcb4933dfeb05f`).
+- **Retained release & rollback artifacts**: `~/.local/share/veyl-development/artifacts/d86e166760fcdb2b69114d6f852247a700768f7f/` (`veyl`, `SHA256SUMS`, 235-file `SOURCE_SHA256SUMS`) and `~/.local/share/veyl-development/artifacts/pre-0.8.0-beta-backup/`.
 
 AGY completed final independent acceptance and live production cutover of Veyl `0.8.0-beta` from `/home/onyx/.local/share/veyl-development/candidates/unified-registry.WCXZ777P/source`:
 
